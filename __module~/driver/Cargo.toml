@@ -1,6 +1,6 @@
 [package]
 name = "ar-drivers"
-description = "Opensource driver for Rokid, Nreal and some other AR glasses"
+description = "Opensource driver for Rokid, Xreal and some other AR glasses"
 version = "0.4.3"
 edition = "2021"
 
@@ -18,10 +18,10 @@ license = "MIT"
 #]
 
 [features]
-default = ["mad_gaze", "rokid", "nreal", "grawoow"]
+default = ["mad_gaze", "rokid", "xreal", "grawoow"]
 grawoow = ["rusb", "tinyjson", "bytemuck"]
 mad_gaze = ["serialport"]
-nreal = ["hidapi", "tinyjson", "bytemuck"]
+xreal = ["hidapi", "tinyjson", "bytemuck"]
 rokid = ["rusb"]
 
 [dependencies]

@@ -4,9 +4,9 @@
 
     - **Summary:** A constant three-component angular-rate vector still rotates about one fixed axis, so the simulated
       magnetometer samples do not cover a three-dimensional ellipsoid.
-    - **Affected module:** `src/sim/dummy.rs`
+    - **Affected module:** `src/sim/sim_motion.rs`
     - **Severity:** High
-    - **Description:** The dummy samples one angular-rate vector during construction and reuses it forever:
+    - **Description:** SimMotion samples one angular-rate vector during construction and reuses it forever:
 
       ```rust
       let angular_rate_rub = sample_angular_rate(&mut rng, config.max_body_rate_rpm);
@@ -25,9 +25,9 @@
 
 - [x] Balance default angular motion against magnetometer noise
 
-    - **Summary:** The default dummy changes the noiseless magnetic vector much more slowly than it perturbs each
+    - **Summary:** The default SimMotion changes the noiseless magnetic vector much more slowly than it perturbs each
       measurement, so early apparent diversity is dominated by noise rather than orientation.
-    - **Affected module:** `src/sim/dummy.rs`
+    - **Affected module:** `src/sim/sim_motion.rs`
     - **Severity:** Medium
     - **Description:** Defaults combine a maximum of 1 RPM per body axis, 20 ms between magnetometer samples, a 50
       microtesla field, and 1.5 microtesla per-component noise:
@@ -49,7 +49,7 @@
 
     - **Summary:** The default simulator continuously changes its hard-iron offset, so it does not provide a stationary
       ellipsoid for validating a static calibration solve.
-    - **Affected module:** `src/sim/dummy.rs`
+    - **Affected module:** `src/sim/sim_motion.rs`
     - **Severity:** Medium
     - **Description:** The default has a five-minute drift cycle that changes each bias component with a different phase
       and frequency multiplier:
@@ -62,7 +62,7 @@
           + self.config.hard_iron_drift.component_mul(&drift_shape)
       ```
 
-      A static ellipsoid solver and an adaptive-bias stress simulation test different behaviors, but the default dummy
+      A static ellipsoid solver and an adaptive-bias stress simulation test different behaviors, but the default SimMotion
       currently combines them in the same deterministic stream.
     - **Recommended fix:** Make the baseline default use zero hard-iron drift and retain the current drift
       as a separately selected adaptive-calibration stress profile.
@@ -71,7 +71,7 @@
 
     - **Summary:** The simulator adds unbounded Gaussian noise without applying a sensor range, so a sufficiently long
       immediate stream can emit arbitrarily extreme but finite readings.
-    - **Affected module:** `src/sim/dummy.rs`
+    - **Affected module:** `src/sim/sim_motion.rs`
     - **Severity:** Medium
     - **Description:** Noise is sampled independently and added directly to the distorted magnetic field:
 

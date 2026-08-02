@@ -1,13 +1,13 @@
-# Dummy AR Glasses Integration Fixture
+# SimMotion AR Glasses Integration Fixture
 
-The dummy AR glasses fixture is a deterministic, public, configurable simulator that remains the fallback used by
-`any_glasses_or_dummy()`. It is implemented in @dummy.rs
+The SimMotion AR glasses fixture is a deterministic, public, configurable simulator that remains the fallback used by
+`any_glasses_or_sim_motion()`. It is implemented in @sim_motion.rs
 
 ## Public API
 
-- Expose the fixture through `pub mod sim` and re-export `Dummy`, `DummyConfig`, and `DummySnapshot`.
-- Provide `Dummy::new()`, `Dummy::with_seed(u64)`, `Dummy::with_config(DummyConfig)`, `Default`, `snapshot()`, and
-    `accelerometer_reading()`.
+- Expose the fixture through `pub mod sim` and re-export `SimMotion`.
+- Provide `SimMotion::new()`, `SimMotion::with_seed(u64)`, `SimMotion::with_config(sim_motion::Config)`, `Default`,
+    `snapshot()`, and `accelerometer_reading()`.
 - Keep default operation deterministic and virtual-time based, with the first emitted event being `AccGyro`.
 - Pace `read_event` to the configured event period in wall time: sleep for the period minus the wall time elapsed since
   the previous event, clamped to zero. Virtual periods longer than 20 ms cannot be represented this way, so those
@@ -32,13 +32,13 @@ The dummy AR glasses fixture is a deterministic, public, configurable simulator 
 - Mag emits magnetic north in RUB with magnetic dip clamped to +/-30 degrees.
 - Clamp each distorted and noisy magnetometer component to a configurable symmetric physical range in microtesla.
 - Inject hard-iron and soft-iron distortion into magnetometer readings. Keep the default hard-iron offset stationary for
-  static calibration, and provide `DummyConfig::adaptive_calibration_stress()` as the explicit deterministic profile
-  with `(2.0, 1.5, 2.5)` microtesla drift amplitudes over a five-minute cycle.
+  static calibration, and provide `sim_motion::Config::adaptive_calibration_stress()` as the explicit deterministic
+  profile with `(2.0, 1.5, 2.5)` microtesla drift amplitudes over a five-minute cycle.
 - Keep the randomly generated soft-iron matrix fixed for the lifetime of the fixture.
 - Keep the default hard-iron bias below 50 microtesla while still giving integration tests a realistic calibration
   challenge.
-- Expose lower and upper bounds for each soft-iron eigenvalue through `DummyConfig` as `soft_iron_min_eigenvalue` and
-  `soft_iron_max_eigenvalue`.
+- Expose lower and upper bounds for each soft-iron eigenvalue through `sim_motion::Config` as `soft_iron_min_eigenvalue`
+  and `soft_iron_max_eigenvalue`.
 - Compute the permanent vector-norm bounds `sqrt(soft_iron_min_eigenvalue)` and `sqrt(soft_iron_max_eigenvalue)` once
   during fixture initialization.
 - Generate three seeded random vectors and apply Gram-Schmidt orthogonalization without normalizing them. After
@@ -53,5 +53,5 @@ The dummy AR glasses fixture is a deterministic, public, configurable simulator 
 ## Non-Sensor Behavior
 
 - Persist display mode through `set_display_mode` / `get_display_mode`.
-- Keep the existing dummy FOV and display delay.
+- Keep the existing SimMotion FOV and display delay.
 - Return an identity IMU-to-display transform instead of panicking.

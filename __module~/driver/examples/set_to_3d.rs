@@ -35,7 +35,7 @@ enum CliDisplayMode {
     /// Set display to high refresh rate mode (120Hz in most cases)
     #[value(name("high-refresh-rate-2d"), alias("120hz"))]
     HighRefreshRate,
-    /// Set display to high refresh rate SBS (90Hz on the Nreal Air)
+    /// Set display to high refresh rate SBS (90Hz on the XREAL Air)
     #[value(name("high-refresh-rate-3d"))]
     HighRefreshRateSBS,
 }

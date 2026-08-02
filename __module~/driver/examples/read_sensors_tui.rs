@@ -8,13 +8,25 @@ use std::io::stdout;
 use std::time::{Duration, Instant};
 
 use ar_drivers::any_glasses_or_dummy;
-use ar_drivers::fusion::{rub_to_frd, FusionState};
+use ar_drivers::fusion::{rub_to_frd, CalibrationQuality, FusionState, MagCalibrationResult};
 use ar_drivers::GlassesEvent;
+use nalgebra::Vector3;
 use ratatui::backend::CrosstermBackend;
 use ratatui::widgets::{Block, Clear, Paragraph, Widget};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
 const FOOTER_HEIGHT: u16 = 8;
+
+fn format_quality(quality: &CalibrationQuality) -> String {
+    format!(
+        "confidence={:.3}, coverage={:.3}, fitness={:.3}, radial_fitness={:.3}, gravity_fitness={:.3}",
+        quality.confidence(),
+        quality.coverage,
+        quality.fitness(),
+        quality.radial_fitness,
+        quality.gravity_fitness
+    )
+}
 
 struct LatestReadings {
     acc_gyro: String,
@@ -55,6 +67,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let serial = glasses.serial()?;
     let mut latest = LatestReadings::new();
     let mut fusion = FusionState::new(glasses);
+    let mut gravity: Option<Vector3<f32>> = None;
 
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::with_options(
@@ -87,7 +100,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         let event = fusion.glasses.read_event()?;
-        let lines = format_event(&mut fusion, event, &mut latest);
+        let lines = format_event(&mut fusion, event, &mut latest, &mut gravity);
         insert_log(&mut terminal, lines)?;
         terminal.draw(|frame| {
             render_footer(frame, &latest);
@@ -101,6 +114,7 @@ fn format_event(
     fusion: &mut FusionState,
     event: GlassesEvent,
     latest: &mut LatestReadings,
+    gravity: &mut Option<Vector3<f32>>,
 ) -> Vec<String> {
     match event {
         GlassesEvent::AccGyro {
@@ -110,6 +124,10 @@ fn format_event(
         } => {
             let acc_frd = rub_to_frd(&accelerometer);
             let gyr_frd = rub_to_frd(&gyroscope);
+            // felt acceleration is the body-frame gravity reference direction
+            if let Some(direction) = acc_frd.try_normalize(0.0) {
+                *gravity = Some(direction);
+            }
             let reading = format!(
                 "AccGyro FRD: accelerometer=[x={:+10.4}, y={:+10.4}, z={:+10.4}] gyroscope=[x={:+10.4}, y={:+10.4}, z={:+10.4}] timestamp={:>12}",
                 acc_frd.x,
@@ -134,11 +152,26 @@ fn format_event(
                 "Magnetometer FRD: mag=[x={:+10.4}, y={:+10.4}, z={:+10.4}] timestamp={:>12}",
                 mag_frd.x, mag_frd.y, mag_frd.z, timestamp
             );
-            let calibration = match fusion.mag.evaluate_correct(mag_frd, None, timestamp) {
-                Ok(calibrated) => format!(
-                    "Magnetometer FRD (Calibrated): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
-                    calibrated.x, calibrated.y, calibrated.z
+            let calibration = match fusion
+                .magCalibrator
+                .evaluate_correct(mag_frd, *gravity, timestamp)
+            {
+                Ok(MagCalibrationResult {
+                    quality,
+                    direction: Some(direction),
+                }) => format!(
+                    "Magnetometer FRD (Calibrated, {}): [x={:+10.4}, y={:+10.4}, z={:+10.4}]",
+                    format_quality(&quality),
+                    direction.x,
+                    direction.y,
+                    direction.z
                 ),
+                Ok(MagCalibrationResult { quality, .. }) => {
+                    format!(
+                        "Magnetometer calibration pending: {}",
+                        format_quality(&quality)
+                    )
+                }
                 Err(cause) => format!("Magnetometer calibration unavailable: {:?}", cause),
             };
             let source = format!("  - converted from raw {:?}", event);

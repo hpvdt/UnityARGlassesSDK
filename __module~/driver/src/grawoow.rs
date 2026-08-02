@@ -131,8 +131,8 @@ impl GrawoowG530 {
     }
 
     fn new_common(
-        mut mcu_handle: DeviceHandle<GlobalContext>,
-        mut ov580_handle: DeviceHandle<GlobalContext>,
+        mcu_handle: DeviceHandle<GlobalContext>,
+        ov580_handle: DeviceHandle<GlobalContext>,
     ) -> Result<Self> {
         mcu_handle.set_auto_detach_kernel_driver(true)?;
         ov580_handle.set_auto_detach_kernel_driver(true)?;

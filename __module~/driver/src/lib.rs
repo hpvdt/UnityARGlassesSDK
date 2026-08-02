@@ -28,39 +28,41 @@
 //! Support for individual AR glasses types ca be enabled with the following features:
 //!
 //! * `mad_gaze`: Mad Gaze Glow
-//! * `nreal`: Nreal Light
+//! * `xreal`: XREAL Light
 //! * `rokid`: Rokid Air
 //!
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
 //! only want to support a specific type.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector2, Vector3};
 
 /// Sensor fusion implementations and AHRS reference-frame helpers.
 pub mod fusion;
-// pub use fusion::{Fusion, AHRS};
 
 #[cfg(feature = "grawoow")]
 pub mod grawoow;
 #[cfg(feature = "mad_gaze")]
 pub mod mad_gaze;
-#[cfg(feature = "nreal")]
-pub mod nreal_air;
-#[cfg(feature = "nreal")]
-pub mod nreal_light;
 #[cfg(feature = "rokid")]
 pub mod rokid;
+#[cfg(feature = "xreal")]
+pub mod xreal_air;
+#[cfg(feature = "xreal")]
+pub mod xreal_light;
 
+/// Singleton connection that runs sensor fusion in a background thread.
 pub mod connection;
 
+/// C ABI entry points for the Unity integration.
 pub mod ffi;
 
 pub mod sim;
 mod util;
 
-pub use sim::{Dummy, DummyConfig, DummySnapshot};
+pub use sim::SimMotion;
 
 /// Possible errors resulting from `ar-drivers` API calls
 #[derive(Debug)]
@@ -99,7 +101,7 @@ fn rw<T>(v: T) -> Rw<T> {
     Arc::new(Mutex::new(v))
 }
 
-fn rw_write<T>(v: &Rw<T>) -> std::sync::MutexGuard<T> {
+fn rw_write<T>(v: &Rw<T>) -> std::sync::MutexGuard<'_, T> {
     v.lock().unwrap()
 }
 
@@ -234,6 +236,18 @@ pub trait ARGlasses: Send {
     fn serial(&mut self) -> Result<String>;
     /// Get a single sensor event. Blocks.
     fn read_event(&mut self) -> Result<GlassesEvent>;
+    /// Start writing implementation-defined raw input packets to `path`.
+    ///
+    /// Drivers without packet-logging support treat this as a no-op.
+    fn start_packet_logging(&mut self, _path: &Path) -> Result<()> {
+        Ok(())
+    }
+    /// Stop packet logging and flush all buffered data.
+    ///
+    /// Drivers without packet-logging support treat this as a no-op.
+    fn stop_packet_logging(&mut self) -> Result<()> {
+        Ok(())
+    }
     /// Get the display mode of the glasses. See [`DisplayMode`]
     fn get_display_mode(&mut self) -> Result<DisplayMode>;
     /// Set the display mode of the glasses. See [`DisplayMode`]
@@ -291,11 +305,13 @@ pub struct DisplayMatrices {
     pub isometry: Isometry3<f64>,
 }
 
+/// Detect and connect to any supported glasses, falling back to the simulated
+/// [`Dummy`] device when no hardware is found.
 pub fn any_glasses_or_dummy() -> Result<Box<dyn ARGlasses>> {
     any_glasses().or_else(|e| {
         println!("{} fall back to dummy glasses", e);
 
-        Ok(Box::new(sim::Dummy::new()))
+        Ok(Box::new(sim::Dummy {}))
     })
 }
 
@@ -309,10 +325,10 @@ pub fn any_glasses() -> Result<Box<dyn ARGlasses>> {
     let glasses_factories: Vec<(&str, fn() -> Result<Box<dyn ARGlasses>>)> = vec![
         #[cfg(feature = "rokid")]
         ("RokidAir", || upcast(rokid::RokidAir::new())),
-        #[cfg(feature = "nreal")]
-        ("NrealAir", || upcast(nreal_air::NrealAir::new())),
-        #[cfg(feature = "nreal")]
-        ("NrealLight", || upcast(nreal_light::NrealLight::new())),
+        #[cfg(feature = "xreal")]
+        ("XrealAir", || upcast(xreal_air::XrealAir::new())),
+        #[cfg(feature = "xreal")]
+        ("XrealLight", || upcast(xreal_light::XrealLight::new())),
         #[cfg(feature = "grawoow")]
         ("GrawoowG530", || upcast(grawoow::GrawoowG530::new())),
         #[cfg(feature = "mad_gaze")]

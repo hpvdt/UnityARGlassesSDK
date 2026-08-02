@@ -290,7 +290,7 @@ impl RokidAir {
         Self::new_common(get_device_vid_pid(Self::VID, Self::PID)?.open()?)
     }
 
-    fn new_common(mut device_handle: DeviceHandle<GlobalContext>) -> Result<Self> {
+    fn new_common(device_handle: DeviceHandle<GlobalContext>) -> Result<Self> {
         device_handle.set_auto_detach_kernel_driver(true)?;
 
         device_handle.claim_interface(

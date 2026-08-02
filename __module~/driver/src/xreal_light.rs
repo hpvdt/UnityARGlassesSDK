@@ -2,12 +2,12 @@
 // This file is part of ar-drivers-rs
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
-//! Nreal Light AR glasses support. See [`NrealLight`]
+//! XREAL Light AR glasses support. See [`XrealLight`]
 //! It only uses [`hidapi`] for communication.
 //!
-//! **Important note**: The NReal Light requires constant heartbeats in 3D SBS mode,
+//! **Important note**: The XREAL Light requires constant heartbeats in 3D SBS mode,
 //! or else it switches the screen off. This heartbeat is sent periodically when
-//! [`NrealLight::read_event`] is called, so be sure to constantly call that function (at least once
+//! [`XrealLight::read_event`] is called, so be sure to constantly call that function (at least once
 //! every half a second or so)
 
 use std::{
@@ -27,8 +27,8 @@ use crate::{
     util::crc32_adler, ARGlasses, CameraDescriptor, DisplayMode, Error, GlassesEvent, Result, Side,
 };
 
-/// The main structure representing a connected Nreal Light glasses
-pub struct NrealLight {
+/// The main structure representing a connected XREAL Light glasses
+pub struct XrealLight {
     device: HidDevice,
     pending_packets: VecDeque<Packet>,
     last_heartbeat: std::time::Instant,
@@ -38,7 +38,7 @@ pub struct NrealLight {
 const COMMAND_TIMEOUT: i32 = 250;
 const OV_580_TIMEOUT: i32 = 250;
 
-impl ARGlasses for NrealLight {
+impl ARGlasses for XrealLight {
     fn serial(&mut self) -> Result<String> {
         let result = self.run_command(Packet {
             category: b'3',
@@ -117,7 +117,7 @@ impl ARGlasses for NrealLight {
     }
 
     fn name(&self) -> &'static str {
-        "Nreal Light"
+        "XREAL Light"
     }
 
     fn cameras(&self) -> Result<Vec<crate::CameraDescriptor>> {
@@ -141,21 +141,21 @@ impl ARGlasses for NrealLight {
     }
 }
 
-impl NrealLight {
-    /// Vendor ID of the NReal Light's MCU
+impl XrealLight {
+    /// Vendor ID of the XREAL Light's MCU
     pub const MCU_VID: u16 = 0x0486;
-    /// Product ID of the NReal Light's MCU
+    /// Product ID of the XREAL Light's MCU
     pub const MCU_PID: u16 = 0x573c;
 
-    /// Vendor ID of the NReal Light's OV580 camera (and IMU)
+    /// Vendor ID of the XREAL Light's OV580 camera (and IMU)
     pub const OV580_VID: u16 = 0x05a9;
-    /// Product ID of the NReal Light's OV580 camera (and IMU)
+    /// Product ID of the XREAL Light's OV580 camera (and IMU)
     pub const OV580_PID: u16 = 0x0680;
 
     /// Unique camera type name for the left SLAM camera
-    pub const LEFT_SLAM_CAM: &'static str = "Nreal Light SLAM left";
+    pub const LEFT_SLAM_CAM: &'static str = "XREAL Light SLAM left";
     /// Unique camera type name for the right SLAM camera
-    pub const RIGHT_SLAM_CAM: &'static str = "Nreal Light SLAM right";
+    pub const RIGHT_SLAM_CAM: &'static str = "XREAL Light SLAM right";
 
     const DISPLAY_TILT: f64 = -0.265;
     const DISPLAY_DIVERGENCE: f64 = 0.02;
@@ -169,7 +169,7 @@ impl NrealLight {
         )
     }
 
-    /// Find a connected Nreal Light device and connect to it. (And claim the USB interface)
+    /// Find a connected XREAL Light device and connect to it. (And claim the USB interface)
     /// Only one instance can be alive at a time
     #[cfg(not(target_os = "android"))]
     pub fn new() -> Result<Self> {
@@ -396,7 +396,7 @@ impl Ov580 {
 
     #[cfg(not(target_os = "android"))]
     pub fn new() -> Result<Self> {
-        Self::new_device(HidApi::new()?.open(NrealLight::OV580_VID, NrealLight::OV580_PID)?)
+        Self::new_device(HidApi::new()?.open(XrealLight::OV580_VID, XrealLight::OV580_PID)?)
     }
     fn new_device(device: HidDevice) -> Result<Self> {
         let mut result = Self {
@@ -580,14 +580,14 @@ impl Packet {
     }
 }
 
-/// Structure representing the Nreal Light's OV580 DSP chip's video interface
-pub struct NrealLightSlamCamera {
+/// Structure representing the XREAL Light's OV580 DSP chip's video interface
+pub struct XrealLightSlamCamera {
     device_handle: rusb::DeviceHandle<rusb::GlobalContext>,
 }
 
 /// One captured Slam camera frame
 #[derive(Debug, Clone)]
-pub struct NrealLightSlamCameraFrame {
+pub struct XrealLightSlamCameraFrame {
     /// Left frame data (640x480 grayscale pixels)
     pub left: Vec<u8>,
     /// Right frame data (640x480 grayscale pixels)
@@ -596,7 +596,7 @@ pub struct NrealLightSlamCameraFrame {
     pub timestamp: u64,
 }
 
-impl NrealLightSlamCamera {
+impl XrealLightSlamCamera {
     const VIDEO_INTERFACE: u8 = 1;
 
     // This was dumped using libuvc. It comes from enumerating the actual, reported
@@ -633,13 +633,13 @@ impl NrealLightSlamCamera {
         Self::new_common(device_handle)
     }
 
-    /// Find a connected Nreal Light device and connect to its slam camera interface, and start
+    /// Find a connected XREAL Light device and connect to its slam camera interface, and start
     /// streaming video.
     /// Only one instance can be alive at a time
     #[cfg(not(target_os = "android"))]
     pub fn new() -> Result<Self> {
         use crate::util::get_device_vid_pid;
-        Self::new_common(get_device_vid_pid(NrealLight::OV580_VID, NrealLight::OV580_PID)?.open()?)
+        Self::new_common(get_device_vid_pid(XrealLight::OV580_VID, XrealLight::OV580_PID)?.open()?)
     }
 
     fn new_common(device_handle: rusb::DeviceHandle<rusb::GlobalContext>) -> Result<Self> {
@@ -660,7 +660,7 @@ impl NrealLightSlamCamera {
     }
 
     /// Get a single frame from the device. timeout == ZERO means "infinite" timeout.
-    pub fn get_frame(&mut self, timeout: Duration) -> Result<NrealLightSlamCameraFrame> {
+    pub fn get_frame(&mut self, timeout: Duration) -> Result<XrealLightSlamCameraFrame> {
         let mut bulk_data = vec![0; 615908 * 2];
         let started = std::time::Instant::now();
         loop {
@@ -699,9 +699,9 @@ impl NrealLightSlamCamera {
             right.extend_from_slice(&bulk_data[(i * 2 + 1) * 640..(i * 2 + 2) * 640]);
         }
         let timestamp = u64::from_le_bytes(bulk_data[640 * 480 * 2..640 * 480 * 2 + 8].try_into().unwrap()) / 1000
-            // As seen in the nreal protocol json
+            // As seen in the xreal protocol json
             + 37600;
-        Ok(NrealLightSlamCameraFrame {
+        Ok(XrealLightSlamCameraFrame {
             left,
             right,
             timestamp,

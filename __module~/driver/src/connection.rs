@@ -5,10 +5,15 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::thread::JoinHandle;
 
+/// Singleton connection owning the background fusion thread and its shared state.
 pub struct Connection {
+    /// Latest corrected attitude estimate, shared between the fusion thread and readers.
     pub fusion: Rw<AhrsCorrection>,
+    /// Set to stop the background fusion thread.
     pub terminating: Arc<AtomicBool>,
+    /// While set, the fusion thread pauses updates to unblock readers of `fusion`.
     pub interrupting: Arc<AtomicBool>, // when interrupting, update is paused, opening the fusion mutex for reading
+    /// Handle of the background fusion thread, if started.
     pub thread: Option<JoinHandle<()>>,
 }
 
@@ -42,6 +47,7 @@ impl Connection {
             .map_err(|_| crate::Error::ConcurrencyError)
     }
 
+    /// Clear the terminating and interrupting flags on this connection.
     pub fn _init(&self) -> crate::Result<()> {
         self.terminating.store(false, Self::ORDERING);
         self.interrupting.store(false, Self::ORDERING);
@@ -80,6 +86,7 @@ impl Connection {
         Ok(())
     }
 
+    /// Lazily create the singleton connection and start its background fusion thread.
     pub fn start() -> crate::Result<()> {
         let mut existing = Self::get()?;
         let conn = existing.as_mut().ok_or(crate::Error::ConcurrencyError)?;
@@ -99,6 +106,7 @@ impl Connection {
         Ok(())
     }
 
+    /// Stop and remove the singleton connection, joining its fusion thread.
     pub fn stop() -> crate::Result<()> {
         let mut existing = Self::get_locked()?;
 
@@ -109,6 +117,7 @@ impl Connection {
         Ok(())
     }
 
+    /// Pause the fusion thread, run `f` on the latest [`AhrsCorrection`], and resume updates.
     pub fn read_fusion<T>(f: &dyn Fn(&mut AhrsCorrection) -> T) -> crate::Result<T> {
         let (_fusion, _interrupting) = {
             let existing = Self::get()?;

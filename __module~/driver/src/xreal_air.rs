@@ -5,12 +5,15 @@
 // Based on code by thejackimonster
 // See https://gitlab.com/TheJackiMonster/nrealAirLinuxDriver
 
-//! Nreal Air AR glasses support. See [`NrealAir`]
+//! XREAL Air AR glasses support. See [`XrealAir`]
 //! It only uses [`hidapi`] for communication.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::fs::{self, File};
+use std::io::{BufWriter, Write};
+use std::path::Path;
 
-use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
+use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use hidapi::{HidApi, HidDevice};
 use nalgebra::{Isometry3, Matrix3, Quaternion, Translation3, UnitQuaternion, Vector3};
 use tinyjson::JsonValue;
@@ -19,8 +22,8 @@ use crate::{
     util::crc32_adler, ARGlasses, DisplayMatrices, DisplayMode, Error, GlassesEvent, Result, Side,
 };
 
-/// The main structure representing a connected Nreal Air glasses
-pub struct NrealAir {
+/// The main structure representing a connected XREAL Air glasses
+pub struct XrealAir {
     model: AirModel,
     device: HidDevice,
     pending_packets: VecDeque<McuPacket>,
@@ -29,8 +32,9 @@ pub struct NrealAir {
 
 const COMMAND_TIMEOUT: i32 = 1000;
 const IMU_TIMEOUT: i32 = 250;
+const PACKET_LOG_MAGIC: &str = "ar-drivers-xreal-air-packets-v1";
 
-const NREAL_VID: u16 = 0x3318;
+const XREAL_VID: u16 = 0x3318;
 const AIR_PID: u16 = 0x0424;
 const AIR_2_PID: u16 = 0x0428;
 const AIR_2_PRO_PID: u16 = 0x0432;
@@ -64,6 +68,34 @@ impl TryFrom<u16> for AirModel {
 }
 
 impl AirModel {
+    fn from_packet_log_name(name: &str) -> Result<Self> {
+        match name {
+            "air" => Ok(AirModel::Air),
+            "air2" => Ok(AirModel::Air2),
+            "air2-pro" => Ok(AirModel::Air2Pro),
+            "air2-ultra" => Ok(AirModel::Air2Ultra),
+            _ => Err(Error::Other("Unknown model in packet log")),
+        }
+    }
+
+    fn packet_log_name(&self) -> &'static str {
+        match self {
+            AirModel::Air => "air",
+            AirModel::Air2 => "air2",
+            AirModel::Air2Pro => "air2-pro",
+            AirModel::Air2Ultra => "air2-ultra",
+        }
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self {
+            AirModel::Air => "XREAL Air",
+            AirModel::Air2 => "XREAL Air 2",
+            AirModel::Air2Pro => "XREAL Air 2 Pro",
+            AirModel::Air2Ultra => "XREAL Air 2 Ultra",
+        }
+    }
+
     /// Returns the MCU/command interface number for this model
     fn mcu_interface(&self) -> i32 {
         match self {
@@ -89,7 +121,7 @@ impl AirModel {
     }
 }
 
-impl ARGlasses for NrealAir {
+impl ARGlasses for XrealAir {
     fn serial(&mut self) -> Result<String> {
         let mut result = self.run_command(McuPacket {
             cmd_id: 0x15,
@@ -105,6 +137,14 @@ impl ARGlasses for NrealAir {
         } else {
             self.imu_device.read_packet()
         }
+    }
+
+    fn start_packet_logging(&mut self, path: &Path) -> Result<()> {
+        self.imu_device.start_packet_logging(path)
+    }
+
+    fn stop_packet_logging(&mut self) -> Result<()> {
+        self.imu_device.stop_packet_logging()
     }
 
     fn get_display_mode(&mut self) -> Result<DisplayMode> {
@@ -183,19 +223,213 @@ impl ARGlasses for NrealAir {
     }
 
     fn name(&self) -> &'static str {
-        match self.model {
-            AirModel::Air => "XREAL Air",
-            AirModel::Air2 => "XREAL Air 2",
-            AirModel::Air2Pro => "XREAL Air 2 Pro",
-            AirModel::Air2Ultra => "XREAL Air 2 Ultra",
-        }
+        self.model.display_name()
     }
 }
 
-impl NrealAir {
-    /// Vendor ID of the NReal Air's components
-    pub const VID: u16 = NREAL_VID;
-    /// Product ID of the NReal Air 1's components
+/// A deterministic replay of raw packets captured from XREAL Air glasses.
+pub struct XrealAirReplay {
+    model: AirModel,
+    packets: Vec<Vec<u8>>,
+    next_packet: usize,
+    base: XrealAirBase,
+}
+
+impl XrealAirReplay {
+    /// Open and validate a versioned XREAL Air packet log.
+    pub fn open(path: &Path) -> Result<Self> {
+        Self::from_packet_log(&fs::read_to_string(path)?)
+    }
+
+    fn from_packet_log(packet_log: &str) -> Result<Self> {
+        let mut lines = packet_log.lines();
+        let header = lines
+            .next()
+            .ok_or(Error::Other("Packet log is missing its header"))?;
+        let mut header_parts = header.split('\t');
+        if header_parts.next() != Some(&format!("# {PACKET_LOG_MAGIC}")) {
+            return Err(Error::Other("Unsupported packet log header"));
+        }
+        let model = AirModel::from_packet_log_name(
+            header_parts
+                .next()
+                .ok_or(Error::Other("Packet log is missing its model"))?,
+        )?;
+        let calibration: JsonValue = header_parts
+            .next()
+            .ok_or(Error::Other("Packet log is missing IMU calibration"))?
+            .parse()
+            .map_err(|_| Error::Other("Packet log has invalid IMU calibration JSON"))?;
+        if header_parts.next().is_some() {
+            return Err(Error::Other("Packet log header has extra fields"));
+        }
+
+        let base = XrealAirBase::from_calibration(&calibration)?;
+        let expected_packet_size = model.imu_packet_size();
+        let packets = lines
+            .map(|line| decode_packet_log_line(line, expected_packet_size))
+            .collect::<Result<Vec<_>>>()?;
+        if packets.is_empty() {
+            return Err(Error::Other("Packet log contains no packets"));
+        }
+
+        Ok(Self {
+            model,
+            packets,
+            next_packet: 0,
+            base,
+        })
+    }
+}
+
+impl ARGlasses for XrealAirReplay {
+    fn serial(&mut self) -> Result<String> {
+        Err(Error::NotImplemented)
+    }
+
+    fn read_event(&mut self) -> Result<GlassesEvent> {
+        if let Some(event) = self.base.pop_event() {
+            return Ok(event);
+        }
+
+        for _ in 0..self.packets.len() {
+            let packet = &self.packets[self.next_packet];
+            self.next_packet = (self.next_packet + 1) % self.packets.len();
+            self.base.push_packet(packet)?;
+            if let Some(event) = self.base.pop_event() {
+                return Ok(event);
+            }
+        }
+
+        Err(Error::Other("Packet log contains no sensor reports"))
+    }
+
+    fn get_display_mode(&mut self) -> Result<DisplayMode> {
+        Err(Error::NotImplemented)
+    }
+
+    fn set_display_mode(&mut self, _display_mode: DisplayMode) -> Result<()> {
+        Err(Error::NotImplemented)
+    }
+
+    fn display_fov(&self) -> f32 {
+        24.0f32.to_radians()
+    }
+
+    fn imu_to_display_matrix(&self, side: Side, ipd: f32) -> Isometry3<f64> {
+        let side_multiplier = match side {
+            Side::Left => -0.5,
+            Side::Right => 0.5,
+        };
+        Translation3::new(ipd as f64 * side_multiplier, 0.0, 0.0)
+            * UnitQuaternion::from_euler_angles(
+                0.0,
+                XrealAir::DISPLAY_DIVERGENCE * side_multiplier,
+                0.0,
+            )
+    }
+
+    fn name(&self) -> &'static str {
+        self.model.display_name()
+    }
+
+    fn display_matrices(&self) -> Result<(DisplayMatrices, DisplayMatrices)> {
+        Err(Error::NotImplemented)
+    }
+
+    fn display_delay(&self) -> u64 {
+        7000
+    }
+}
+
+fn parse_calibration_vector(calibration: &JsonValue, name: &str) -> Result<Vector3<f32>> {
+    let object = calibration
+        .get::<HashMap<String, JsonValue>>()
+        .ok_or(Error::Other("IMU calibration must be a JSON object"))?;
+    let values = object
+        .get(name)
+        .and_then(|value| value.get::<Vec<JsonValue>>())
+        .ok_or(Error::Other("IMU calibration vector is missing or invalid"))?;
+    if values.len() != 3 {
+        return Err(Error::Other("IMU calibration vector has invalid length"));
+    }
+    let mut components = [0.0; 3];
+    for (component, value) in components.iter_mut().zip(values) {
+        *component = *value
+            .get::<f64>()
+            .ok_or(Error::Other("IMU calibration vector contains a non-number"))?
+            as f32;
+    }
+    Ok(Vector3::from(components))
+}
+
+fn decode_packet_log_line(line: &str, expected_packet_size: usize) -> Result<Vec<u8>> {
+    if line.len() != expected_packet_size * 2 {
+        return Err(Error::Other("Packet log line has invalid length"));
+    }
+    if !line
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(Error::Other(
+            "Packet log data must be lowercase hexadecimal",
+        ));
+    }
+    (0..expected_packet_size)
+        .map(|index| {
+            u8::from_str_radix(&line[index * 2..index * 2 + 2], 16)
+                .map_err(|_| Error::Other("Packet log contains invalid hexadecimal"))
+        })
+        .collect()
+}
+
+fn is_valid_magnetic_observation(magnetometer: &Vector3<f32>) -> bool {
+    let norm_squared = magnetometer.norm_squared();
+    magnetometer.iter().all(|component| component.is_finite())
+        && norm_squared.is_finite()
+        && norm_squared > 0.0
+}
+
+#[derive(Debug, Clone, Copy)]
+struct XrealMagnetometerReport {
+    magnetic_field: Vector3<f32>,
+    sensor_timestamp_nanos: u64,
+    fresh: bool,
+}
+
+// Ported from ar-glass-lib's decode_xreal_imu at
+// c172403f8df2108de5708c8663bb4c2359b0bf5b.
+fn decode_xreal_magnetometer_report(report: &[u8]) -> Option<XrealMagnetometerReport> {
+    if report.len() < 64 || report[0] != 1 {
+        return None;
+    }
+    let (offset_field, denominator_field, values_field, sensor_timestamp_field, freshness_field) =
+        match report[1] {
+            1 => (36, 38, 42, 48, 56),
+            2 => (42, 44, 48, 54, 62),
+            _ => return None,
+        };
+    let offset = LittleEndian::read_u16(&report[offset_field..]) as f64;
+    let denominator = LittleEndian::read_u32(&report[denominator_field..]) as f64;
+    let mut scaled = [0.0f32; 3];
+    for (index, value) in scaled.iter_mut().enumerate() {
+        let raw = LittleEndian::read_u16(&report[values_field + index * 2..]) as f64;
+        *value = (100.0 * (raw - offset) / denominator) as f32;
+    }
+    Some(XrealMagnetometerReport {
+        // The ar-glass-lib transcription kept positive signs on axes 1 and 2, which
+        // breaks the constant magnetic-gravity inner product on the captured
+        // calibration dance. The fixture requires (scaled[1], -scaled[2], -scaled[0]).
+        magnetic_field: Vector3::new(scaled[1], -scaled[2], -scaled[0]),
+        sensor_timestamp_nanos: LittleEndian::read_u64(&report[sensor_timestamp_field..]),
+        fresh: report[freshness_field] != 0,
+    })
+}
+
+impl XrealAir {
+    /// Vendor ID of the XREAL Air's components
+    pub const VID: u16 = XREAL_VID;
+    /// Product ID of the XREAL Air 1's components
     #[deprecated]
     pub const PID: u16 = AIR_PID;
 
@@ -219,11 +453,11 @@ impl NrealAir {
         Self::new_common(model, device, ImuDevice::new(fd, model)?)
     }
 
-    /// Find a connected Nreal Air device and connect to it. (And claim the USB interface)
+    /// Find a connected XREAL Air device and connect to it. (And claim the USB interface)
     /// Only one instance can be alive at a time
     #[cfg(not(target_os = "android"))]
     pub fn new() -> Result<Self> {
-        let (model, mcu_device, imu_device) = open_nreal_air()?;
+        let (model, mcu_device, imu_device) = open_xreal_air()?;
         Self::new_common(model, mcu_device, ImuDevice::new_device(imu_device, model)?)
     }
     fn new_common(model: AirModel, device: HidDevice, imu_device: ImuDevice) -> Result<Self> {
@@ -308,11 +542,8 @@ struct ImuDevice {
     model: AirModel,
     config_json: JsonValue,
     displays: Option<(DisplayMatrices, DisplayMatrices)>,
-    pending_events: Vec<GlassesEvent>,
-    gyro_bias: Vector3<f32>,
-    accelerometer_bias: Vector3<f32>,
-    mag_bias: Vector3<f32>,
-    gyro_q_mag: UnitQuaternion<f32>,
+    base: XrealAirBase,
+    packet_log: Option<BufWriter<File>>,
 }
 
 impl ImuDevice {
@@ -331,11 +562,8 @@ impl ImuDevice {
             model,
             config_json: JsonValue::Null,
             displays: None,
-            pending_events: Default::default(),
-            gyro_bias: Default::default(),
-            accelerometer_bias: Default::default(),
-            mag_bias: Default::default(),
-            gyro_q_mag: Default::default(),
+            base: XrealAirBase::default(),
+            packet_log: None,
         };
         // Turn off IMU stream while reading config
         result.command(0x19, &[0x0])?;
@@ -367,12 +595,7 @@ impl ImuDevice {
         //      should probably return Err() instead.
         self.displays = Self::parse_display_descriptors(&self.config_json["display"]);
         let cfg = &self.config_json["IMU"]["device_1"];
-        self.accelerometer_bias = Self::parse_vector(&cfg["accel_bias"]).map(|c| c as f32);
-        self.gyro_bias = nalgebra::convert(Self::parse_vector(&cfg["gyro_bias"]));
-        self.mag_bias = nalgebra::convert(Self::parse_vector(&cfg["mag_bias"]));
-        self.gyro_q_mag = nalgebra::convert(UnitQuaternion::from_quaternion(
-            Self::parse_quaternion(&cfg["gyro_q_mag"]),
-        ));
+        self.base = XrealAirBase::from_calibration(cfg)?;
         Ok(())
     }
 
@@ -461,25 +684,90 @@ impl ImuDevice {
         Err(Error::Other("Couldn't get acknowledgement to command"))
     }
 
+    fn start_packet_logging(&mut self, path: &Path) -> Result<()> {
+        if self.packet_log.is_some() {
+            return Err(Error::Other("Packet logging already started"));
+        }
+
+        let imu_config = self.config_json["IMU"]["device_1"]
+            .stringify()
+            .map_err(|_| Error::Other("Couldn't serialize IMU calibration for packet log"))?;
+        let mut packet_log = BufWriter::new(File::create(path)?);
+        writeln!(
+            packet_log,
+            "# {PACKET_LOG_MAGIC}\t{}\t{imu_config}",
+            self.model.packet_log_name()
+        )?;
+        packet_log.flush()?;
+        self.packet_log = Some(packet_log);
+        Ok(())
+    }
+
+    fn stop_packet_logging(&mut self) -> Result<()> {
+        if let Some(mut packet_log) = self.packet_log.take() {
+            packet_log.flush()?;
+        }
+        Ok(())
+    }
+
+    fn log_packet(&mut self, packet: &[u8]) -> Result<()> {
+        if let Some(packet_log) = &mut self.packet_log {
+            for byte in packet {
+                write!(packet_log, "{byte:02x}")?;
+            }
+            writeln!(packet_log)?;
+            packet_log.flush()?;
+        }
+        Ok(())
+    }
+
     pub fn read_packet(&mut self) -> Result<GlassesEvent> {
         loop {
-            if self.pending_events.len() > 0 {
-                return Ok(self.pending_events.remove(0));
+            if let Some(event) = self.base.pop_event() {
+                return Ok(event);
             }
             let mut packet_data = [0u8; 0x80];
             let data_size = self.device.read_timeout(&mut packet_data, IMU_TIMEOUT)?;
             if data_size == 0 {
                 return Err(Error::PacketTimeout);
             }
+            self.log_packet(&packet_data[..data_size])?;
 
-            if packet_data[0] == 1 && packet_data[1] == 2 {
-                self.pending_events = self.parse_report(&packet_data)?;
-            };
+            self.base.push_packet(&packet_data[..data_size])?;
             // Else try again
         }
     }
+}
 
-    fn parse_report(&mut self, packet_data: &[u8]) -> Result<Vec<GlassesEvent>> {
+#[derive(Default)]
+struct XrealAirBase {
+    pending_events: VecDeque<GlassesEvent>,
+    gyro_bias: Vector3<f32>,
+    accelerometer_bias: Vector3<f32>,
+}
+
+impl XrealAirBase {
+    fn from_calibration(calibration: &JsonValue) -> Result<Self> {
+        Ok(Self {
+            pending_events: VecDeque::new(),
+            gyro_bias: parse_calibration_vector(calibration, "gyro_bias")?,
+            accelerometer_bias: parse_calibration_vector(calibration, "accel_bias")?,
+        })
+    }
+
+    fn pop_event(&mut self) -> Option<GlassesEvent> {
+        self.pending_events.pop_front()
+    }
+
+    fn push_packet(&mut self, packet_data: &[u8]) -> Result<()> {
+        if packet_data.starts_with(&[1, 2]) {
+            self.pending_events
+                .extend(self.decode_sensor_report(packet_data)?);
+        }
+        Ok(())
+    }
+
+    fn decode_sensor_report(&self, packet_data: &[u8]) -> Result<Vec<GlassesEvent>> {
         let mut ret = Vec::with_capacity(2);
         // TODO: This skips over a 2 byte temperature field that may be useful.
         let mut reader = std::io::Cursor::new(&packet_data[4..]);
@@ -511,33 +799,46 @@ impl ImuDevice {
             (acc_y * acc_mul / acc_div) * 9.81 + self.accelerometer_bias.z,
         );
 
-        // Magnetometer is different. The scaling factors are encoded big-endian for some
-        // reason, and the values are unsigned but centered at 32768 (0x8000).
-        let mag_mul = reader.read_u16::<BigEndian>()? as f32;
-        let mag_div = reader.read_u32::<BigEndian>()? as f32;
-        let mag_x = reader.read_u16::<LittleEndian>()?;
-        let mag_y = reader.read_u16::<LittleEndian>()?;
-        let mag_z = reader.read_u16::<LittleEndian>()?;
-
-        // Magnetometer comes online separately from the IMU, check for useful data
-        // before sending the events.
-        if mag_x != 0 || mag_y != 0 || mag_z != 0 {
-            let magnetometer = self.gyro_q_mag
-                * Vector3::new(
-                    mag_x.wrapping_sub(32768) as i16 as f32 * mag_mul / mag_div,
-                    mag_y.wrapping_sub(32768) as i16 as f32 * mag_mul / mag_div,
-                    mag_z.wrapping_sub(32768) as i16 as f32 * mag_mul / mag_div,
-                );
-
-            // Send magnetometer event first so that clients can match the most
-            // recent magnetometer event to the most recent accgyro event and not get
-            // out of sync. This is necessary because the magnetometer event is
-            // optional.
-            ret.push(GlassesEvent::Magnetometer {
-                magnetometer,
-                timestamp,
-            });
+        if let Some(XrealMagnetometerReport {
+            magnetic_field,
+            sensor_timestamp_nanos,
+            fresh: true,
+        }) = decode_xreal_magnetometer_report(packet_data)
+        {
+            // The event API has no transport-metadata channel. Keep using the
+            // report's primary device timestamp, as ar-glass-lib does.
+            let _sensor_timestamp_nanos = sensor_timestamp_nanos;
+            if is_valid_magnetic_observation(&magnetic_field) {
+                // Send magnetometer event first so that clients can match the most
+                // recent magnetometer event to the most recent accgyro event and not get
+                // out of sync. This is necessary because the magnetometer event is
+                // optional.
+                ret.push(GlassesEvent::Magnetometer {
+                    magnetometer: magnetic_field,
+                    timestamp,
+                });
+            }
         }
+
+        // TODO: Replace the XREAL Air 1 magnetometer decoder with a hardware-backed implementation.
+        //
+        // Recovery workflow (one commit per numbered step):
+        // 1. Add object-safe `ARGlasses` methods that start and stop packet logging. Their default
+        //    implementations are no-ops.
+        // 2. Implement logging for `XrealAir`. The versioned text file starts with the model and the
+        //    sanitized `IMU.device_1` calibration object; every remaining line is one exact HID packet
+        //    encoded as lowercase hexadecimal.
+        // 3. Add a 60-second Air 1 logging example and capture a continuous three-axis calibration dance.
+        // 4. Add `XrealAirReplay`, which validates the log and replays its packets cyclically.
+        // 5. Move all sensor-report parsing and event queuing into a shared `XrealAirBase` used by the live
+        //    and replay transports.
+        // 6. Convert the `read_sensors` calibration experiment into a replay integration test that reports
+        //    every `CalibrationQuality` factor.
+        // 7. Rewrite only the version-2 magnetometer path. Treat ar-glass-lib, Monado, and XRLinuxDriver as
+        //    competing hypotheses rather than ground truth; reject stale, non-finite, zero-divisor, and
+        //    zero-norm magnetic observations without changing accelerometer or gyroscope output.
+        // 8. Require `fitness`, `radial_fitness`, and `gravity_fitness` to remain at least 0.8 for the final
+        //    five seconds of fresh observations after calibration becomes usable, then remove this TODO.
 
         // TODO: Check checksum
         ret.push(GlassesEvent::AccGyro {
@@ -666,7 +967,7 @@ impl ImuPacket {
 }
 
 #[cfg(not(target_os = "android"))]
-fn open_nreal_air() -> Result<(AirModel, HidDevice, HidDevice)> {
+fn open_xreal_air() -> Result<(AirModel, HidDevice, HidDevice)> {
     let hidapi = HidApi::new()?;
 
     // First find the model by checking MCU interfaces
@@ -674,7 +975,7 @@ fn open_nreal_air() -> Result<(AirModel, HidDevice, HidDevice)> {
     let mut mcu_device: Option<HidDevice> = None;
 
     for device in hidapi.device_list() {
-        if device.vendor_id() != NREAL_VID {
+        if device.vendor_id() != XREAL_VID {
             continue;
         }
         let pid = device.product_id();
@@ -697,7 +998,7 @@ fn open_nreal_air() -> Result<(AirModel, HidDevice, HidDevice)> {
     let mut imu_device: Option<HidDevice> = None;
 
     for device in hidapi.device_list() {
-        if device.vendor_id() != NREAL_VID {
+        if device.vendor_id() != XREAL_VID {
             continue;
         }
         let pid = device.product_id();
@@ -730,3 +1031,7 @@ fn write_hid_packet(device: &HidDevice, payload: &[u8; 0x40]) -> Result<()> {
     device.write(payload)?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "xreal_air_tests.rs"]
+mod xreal_air_tests;

@@ -1,5 +1,7 @@
 //! Simulated AR glasses implementations.
 
 pub mod dummy;
+pub use dummy::Dummy;
 
-pub use dummy::{Dummy, DummyConfig, DummySnapshot};
+pub mod sim_motion;
+pub use sim_motion::SimMotion;

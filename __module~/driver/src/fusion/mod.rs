@@ -6,13 +6,10 @@ high level interface of glasses & state estimation, with the following built-in 
 - roll/pitch <= acc + gyro (complementary filter)
   - assuming that acc vector always pointed up, spacecraft moving in that direction can create 1G artificial gravity
     - TODO: this obviously assumes no steadily accelerating frame, at which point up d_acc has to be used for correction
-  - TODO: use ESKF (error-state/multiplicatory KF, https://arxiv.org/abs/1711.02508)
 - gyro-yaw <= gyro (integrate over time)
 - mag-yaw <= mag + roll/pitch (arctan)
-  - TODO: mag calibration?
-     (continuous ellipsoid fitting, assuming homogeneous E-M environment & hardpoint-mounted E-M interference)
 - yaw <= mag-yaw + gyro-gyro (complementary filter)
-  - TODO: use EKF
+  - TODO: add EKF/ESKF (error-state/multiplicatory KF, https://arxiv.org/abs/1711.02508)
 
 CAUTION: unlike [[GlassesEvent]], all states & outputs should use FRD reference frame
  (forward, right, down, corresponding to roll, pitch, yaw in Euler angles-represented rotation)
@@ -25,15 +22,13 @@ use std::fmt;
 use nalgebra::{Quaternion, UnitQuaternion, Vector3, Vector4};
 
 use self::naive_cf::NaiveCF;
-use crate::fusion::mag_calibration::MagCalibrator;
 use crate::{any_glasses_or_dummy, ARGlasses, Result};
 
 mod bad_mag_cause;
 pub use bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
-mod mag_calibration;
-#[cfg(test)]
-mod mag_calibration_test;
+mod mag_calibrator;
+pub use mag_calibrator::{CalibrationQuality, MagCalibrationResult, MagCalibrator};
 mod naive_cf;
 #[cfg(test)]
 mod naive_cf_test;
@@ -51,11 +46,13 @@ pub trait FusionInconsistency {
 
 impl<T: Fusion + ?Sized> FusionInconsistency for T {
     fn inconsistency(&self) -> f32 {
-        self.corrections().totalAvg()
+        self.corrections().total_avg()
     }
 }
 
+/// Sensor fusion algorithm interface: consumes raw glasses events and produces an attitude estimate.
 pub trait Fusion: Send + FusionInconsistency {
+    /// Underlying glasses device this fusion reads events from.
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses>;
     // TODO: only declared mutable as many API of ARGlasses are also mutable
 
@@ -66,10 +63,12 @@ pub trait Fusion: Send + FusionInconsistency {
     /// Per-sensor correction magnitudes tracked by the fusion algorithm.
     fn corrections(&self) -> NineAxis<Correction>;
 
+    /// Consume the next sensor event and advance the attitude estimate.
     fn update(&mut self) -> ();
 }
 
 impl dyn Fusion {
+    /// Create a fusion instance over whichever glasses are connected, or the SimMotion device.
     pub fn any_cf() -> Result<Box<dyn Fusion>> {
         // let glasses = any_glasses()?;
         let glasses = any_glasses_or_dummy()?;
@@ -115,6 +114,7 @@ impl fmt::Display for Correction {
     }
 }
 
+/// Per-sensor (acc/gyro/mag) triplet of homogeneous values.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NineAxis<T> {
     /// Accelerometer correction.
@@ -126,7 +126,7 @@ pub struct NineAxis<T> {
 }
 
 impl NineAxis<Correction> {
-    fn totalAvg(&self) -> f32 {
+    fn total_avg(&self) -> f32 {
         self.acc.avg + self.gyro.avg + self.mag.avg
     }
 }
@@ -141,10 +141,13 @@ impl fmt::Display for NineAxis<Correction> {
     }
 }
 
+/// Shared fusion algorithm state: glasses device, current attitude, and magnetometer calibration.
 pub struct FusionState {
+    /// Glasses device the state reads events from.
     pub glasses: Box<dyn ARGlasses>,
 
     // following data will be updated in memory directly,
+    /// Latest attitude estimate as a unit quaternion.
     pub attitude: UnitQuaternion<f32>,
 
     /// Per-sensor correction magnitudes.
@@ -155,8 +158,13 @@ pub struct FusionState {
     // it only spans one rotation segment, the retained readings cover a
     // near-planar circle on the sphere, and the ellipsoid fit is free to
     // drift along the unobserved axis (seen as >20 deg worst-case heading
-    // error in the dummy integration test with 255 samples).
-    pub mag: MagCalibrator<1023>,
+    // error in the SimMotion integration test with 255 samples).
+    /// Magnetometer calibration state shared by all fusion implementations.
+    ///
+    /// Boxed: the calibrator is ~104 KB inline, and constructing it by value
+    /// through the `FusionState::new`/`NaiveCF::new` chain overflowed the
+    /// 1 MiB Windows main-thread stack in debug builds.
+    pub magCalibrator: Box<MagCalibrator<1023>>,
 }
 
 impl FusionState {
@@ -166,11 +174,12 @@ impl FusionState {
             glasses,
             attitude: UnitQuaternion::identity(),
             corrections: NineAxis::default(),
-            mag: MagCalibrator::new(),
+            magCalibrator: Box::new(MagCalibrator::new()),
         }
     }
 }
 
+/// Wraps a [`Fusion`] to output attitudes in a chosen reference frame and bias convention.
 pub struct AhrsCorrection {
     fusion: Box<dyn Fusion>,
     neutral_bias: (UnitQuaternion<f32>, UnitQuaternion<f32>), // multiplicative
@@ -186,6 +195,7 @@ impl AhrsCorrection {
     // Euler-Angle: forward-right-down, right hand axes, right hand rotation
     //
     // Quaternion: right hand, ijkw
+    /// Correction with the standard forward-right-down (FRD) reference frame.
     pub fn frd(fusion: Box<dyn Fusion>) -> AhrsCorrection {
         AhrsCorrection {
             // defaults to RUF reference frame of Unity game engine
@@ -207,6 +217,7 @@ impl AhrsCorrection {
     //   but here it is used for backward compatibility
     //
     // Quaternion: left hand, ijkw ?
+    /// Correction matching the AirAPI_Windows reference frame, with neutral heading 90° pitch down.
     pub fn left_fru_down(fusion: Box<dyn Fusion>) -> AhrsCorrection {
         AhrsCorrection {
             // defaults to RUF reference frame of Unity game engine
@@ -235,6 +246,7 @@ impl AhrsCorrection {
         corrected
     }
 
+    /// Attitude as Euler angles (roll, pitch, yaw) in the configured frame, in radians.
     pub fn attitude_euler_rad(&self) -> Vector3<f32> {
         let (roll, pitch, yaw) = self.attitude_quaternion_frd().euler_angles();
         let frd = Vector3::new(roll, pitch, yaw);
@@ -248,6 +260,7 @@ impl AhrsCorrection {
         ordered
     }
 
+    /// Attitude as Euler angles (roll, pitch, yaw) in the configured frame, in degrees.
     pub fn attitude_euler_deg(&self) -> Vector3<f32> {
         self.attitude_euler_rad().map(|x| x.to_degrees())
     }

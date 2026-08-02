@@ -10,21 +10,14 @@ pub enum BadMagCause {
 /// Reason a magnetometer calibration is not usable.
 #[derive(Clone, Copy, derive_more::Debug, PartialEq)]
 pub enum BadCalibration {
-    /// Not enough accepted samples have been collected for the calibration model.
-    InsufficientSamples {
-        /// Number of accepted samples currently available.
-        samples: usize,
-        /// Minimum number of samples required by the calibration model.
-        required: usize,
-    },
-    /// The calibration solve produced non-finite parameters.
+    /// Calibration optimization or candidate conversion produced unusable parameters.
     Unsolveable {
         /// Original rejection message.
         message: &'static str,
     },
     /// The samples or fitted soft-iron correction are numerically degenerate.
     DegenerateSoftIronMatrix {
-        /// Estimated condition number of the sample covariance or inverse factor.
+        /// Estimated condition number of the fitted soft-iron correction.
         #[debug("{:+10.4}", condition)]
         condition: f32,
         /// Maximum accepted condition number.

@@ -2,10 +2,10 @@
   <configuration default="false" name="make-all.sh (Windows)" type="ShConfigurationType">
     <option name="SCRIPT_TEXT" value="" />
     <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
-    <option name="SCRIPT_PATH" value="$PROJECT_DIR$/__module~/driver/dev/make-all.sh" />
+    <option name="SCRIPT_PATH" value="$PROJECT_DIR$/dev/make-all.sh" />
     <option name="SCRIPT_OPTIONS" value="" />
     <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
-    <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$/__module~/driver/dev" />
+    <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$/dev" />
     <option name="INDEPENDENT_INTERPRETER_PATH" value="false" />
     <option name="INTERPRETER_PATH" value="C:/Program Files/Git/git-bash.exe" />
     <option name="INTERPRETER_OPTIONS" value="" />

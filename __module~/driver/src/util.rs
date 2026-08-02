@@ -41,7 +41,7 @@ pub fn get_interface_for_endpoint(
     None
 }
 
-#[cfg(feature = "nreal")]
+#[cfg(feature = "xreal")]
 pub(crate) fn crc32_adler(buf: &[u8]) -> u32 {
     // Code copied from rust-zip, but a similar code is also present in the
     // javascript version of the firmware updater.

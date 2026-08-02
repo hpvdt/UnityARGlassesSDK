@@ -87,12 +87,14 @@ impl NaiveCF {
 
     const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; //microseconds
 
-    const UP_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
+    const REGRESS_ROLL_FACTOR: f32 = 0.05; // TODO: should be zero
+
+    const G_ACC_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
     //const NORTH_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -1.0);
 
     //CAUTION: right-multiplication means rotation, unconventionally
 
-    fn update_gyro(&mut self, gyro_rub: &Vector3<f32>, t: u64) -> () {
+    fn integrate_gyro(&mut self, gyro_rub: &Vector3<f32>, t: u64) -> () {
         let gyro = rub_to_frd(gyro_rub);
 
         let d_t1 = t - self.prev_gyro.1;
@@ -108,7 +110,7 @@ impl NaiveCF {
         self.prev_gyro = (gyro, t);
     }
 
-    fn update_acc(&mut self, acc_rub: &Vector3<f32>, _t: u64) -> () {
+    fn integrate_acc(&mut self, acc_rub: &Vector3<f32>, _t: u64) -> () {
         let acc = rub_to_frd(acc_rub);
 
         if acc.norm() < 1.0 {
@@ -129,27 +131,74 @@ impl NaiveCF {
                 self.state.attitude = attitude * correction;
             }
             None => {
-                //TODO: opposite direction, don't know how to correct
+                // opposite direction, don't know how to correct
             }
         }
     }
 
-    pub(super) fn update_mag(&mut self, mag_rub: &Vector3<f32>, t: u64) -> () {
-        let raw_mag = rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
+    pub(super) fn integrate_regress_roll(&mut self) -> () {
+        if !Self::REGRESS_ROLL_FACTOR.is_finite() || (Self::REGRESS_ROLL_FACTOR <= 0.0) {
+            return;
+        }
 
-        let mag_north: Vector3<f32> = match self.state.mag.evaluate_correct(raw_mag, None, t) {
-            Ok(mag_north) => mag_north,
-            Err(_cause) => {
-                return;
-            }
+        let no_roll_factor = Self::REGRESS_ROLL_FACTOR.clamp(0.0, 1.0);
+        let (roll, pitch, yaw) = self.state.attitude.euler_angles();
+        let corrected_roll = roll * (1.0 - no_roll_factor);
+        self.state.attitude = UnitQuaternion::from_euler_angles(corrected_roll, pitch, yaw);
+    }
+
+    pub(super) fn integrate_mag(
+        &mut self,
+        mag_rub: &Vector3<f32>,
+        calibration_use_gravity: bool,
+        horizontal_only: bool,
+        t: u64,
+    ) -> () {
+        let mag_raw = rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
+
+        let gravity_hint: Option<Vector3<f32>> = if calibration_use_gravity {
+            // gravity direction is already estimated by the acc complementary filter
+            Some(self.state.attitude.inverse() * Self::G_ACC_FRD)
+        } else {
+            None
         };
+        let mag_corrected: Vector3<f32> = match self
+            .state
+            .magCalibrator
+            .evaluate_correct(mag_raw, gravity_hint, t)
+            .ok()
+            .and_then(|result| result.direction)
+        {
+            Some(r) => r,
+            None => return,
+        };
+
+        // near the magnetic poles the field is almost vertical and carries no usable heading
+        if mag_corrected.norm_squared() < 0.01 {
+            return;
+        }
+
+        let mag_normalised = mag_corrected.normalize(); // TODO: is it necessary?
 
         let attitude = &self.state.attitude;
         let north_frd = Vector3::new(1.0, 0.0, 0.0);
+
+        let mag_effective: Vector3<f32> = if horizontal_only {
+            // magnetic north dips below the horizon by a location-dependent inclination
+            // angle; correcting against the full field vector would tip the level the acc
+            // filter already maintains, so only the field's horizontal component is compared.
+            // both vectors are then perpendicular to estimated up, making the correction a
+            // pure heading rotation about the up axis.
+            let up_body = attitude.inverse() * Self::G_ACC_FRD.normalize();
+            mag_normalised - mag_normalised.dot(&up_body) * up_body
+        } else {
+            mag_normalised
+        };
+
         let estimated_north = attitude.inverse() * north_frd;
         let correction_opt = UnitQuaternion::scaled_rotation_between(
             &estimated_north,
-            &mag_north,
+            &mag_effective,
             Self::BASE_MAG_RATIO,
         );
 
@@ -160,7 +209,7 @@ impl NaiveCF {
                 self.state.attitude = attitude * correction;
             }
             None => {
-                //TODO: opposite direction, don't know how to correct
+                // opposite direction, don't know how to correct
             }
         }
     }
@@ -170,7 +219,7 @@ impl NaiveCF {
         rotation: &UnitQuaternion<f32>,
         scale: f32,
     ) -> Option<UnitQuaternion<f32>> {
-        let uncorrected = rotation * Self::UP_FRD.normalize();
+        let uncorrected = rotation * Self::G_ACC_FRD.normalize();
 
         let scaled_opt =
             UnitQuaternion::scaled_rotation_between(&uncorrected, &acc.normalize(), scale);
@@ -196,6 +245,8 @@ impl NaiveCF {
         scaled_opt
     }
 
+    // ponytail: kept for temporary debugging; remove together with the rest of the rotation helpers
+    #[allow(dead_code)]
     pub fn get_rotation(
         acc: &Vector3<f32>,
         rotation: &UnitQuaternion<f32>,
@@ -203,15 +254,17 @@ impl NaiveCF {
         Self::get_rotation_raw(acc, rotation)
     }
 
+    #[allow(dead_code)]
     fn get_rotation_raw(
         acc: &Vector3<f32>,
         rotation: &UnitQuaternion<f32>,
     ) -> Option<UnitQuaternion<f32>> {
-        let uncorrected = rotation * Self::UP_FRD;
+        let uncorrected = rotation * Self::G_ACC_FRD;
         let correction_opt = UnitQuaternion::scaled_rotation_between(&uncorrected, &acc, 1.0);
         correction_opt
     }
 
+    #[allow(dead_code)]
     fn get_rotation_verified(
         acc: &Vector3<f32>,
         rotation: &UnitQuaternion<f32>,
@@ -248,8 +301,8 @@ impl NaiveCF {
                         assert!((rotation * reconstructed.inverse()).angle() < 0.001);
 
                         assert!(
-                            (rotation * Self::UP_FRD.normalize()
-                                - reconstructed * Self::UP_FRD.normalize())
+                            (rotation * Self::G_ACC_FRD.normalize()
+                                - reconstructed * Self::G_ACC_FRD.normalize())
                             .norm()
                                 < 0.01
                         )
@@ -269,14 +322,14 @@ impl NaiveCF {
 
                     {
                         // verity acc
-                        let q = UnitQuaternion::scaled_rotation_between(&Self::UP_FRD, acc, 1.0)
+                        let q = UnitQuaternion::scaled_rotation_between(&Self::G_ACC_FRD, acc, 1.0)
                             .unwrap();
 
-                        let round1 = (q * Self::UP_FRD.normalize() - acc.normalize()).norm();
+                        let round1 = (q * Self::G_ACC_FRD.normalize() - acc.normalize()).norm();
                         assert!(round1 < 0.001, "round1={}", round1);
 
                         let round2 =
-                            (q.inverse() * acc.normalize() - Self::UP_FRD.normalize()).norm();
+                            (q.inverse() * acc.normalize() - Self::G_ACC_FRD.normalize()).norm();
                         assert!(round2 < 0.001, "round2={}", round2);
                     }
                 }
@@ -289,6 +342,7 @@ impl NaiveCF {
 
     fn renormalize(&mut self) {
         // self.attitude.renormalize_fast(); // TODO: switch to it after rigorous testing
+        self.integrate_regress_roll();
         self.state.attitude.renormalize();
     }
 }
@@ -316,21 +370,22 @@ impl Fusion for NaiveCF {
                 gyroscope,
                 timestamp,
             } => {
-                self.update_gyro(&gyroscope, timestamp);
-                // TODO: need an update_acc that avoid yaw?
-                self.update_acc(&accelerometer, timestamp);
-                self.renormalize();
+                // self.integrate_gyro(&gyroscope, timestamp);
+                // self.integrate_acc(&accelerometer, timestamp);
+                // self.renormalize();
             }
 
             GlassesEvent::Magnetometer {
                 magnetometer,
                 timestamp,
             } => {
-                self.update_mag(&magnetometer, timestamp);
+                self.integrate_mag(&magnetometer, false, false, timestamp);
+                // self.integrate_mag(&magnetometer, true, true, timestamp); TODO: use this
                 self.renormalize();
             }
-
-            _ => {}
+            _ => {
+                // TODO: handle KeyPress signal
+            }
         }
     }
 }
