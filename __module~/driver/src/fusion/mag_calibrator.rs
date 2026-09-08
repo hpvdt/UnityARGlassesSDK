@@ -1,4 +1,4 @@
-use nalgebra::{Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
+use nalgebra::{DMatrix, DVector, Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
 
 use super::bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
@@ -380,21 +380,12 @@ impl<const N: usize> MagCalibrator<N> {
     fn shape_and_linear(
         parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
     ) -> (Matrix3<f32>, Vector3<f32>) {
-        // TODO: use nalgebra views and constructors instead of elementwise parameter unpacking
-        (
-            Matrix3::new(
-                parameters[0],
-                parameters[3],
-                parameters[4],
-                parameters[3],
-                parameters[1],
-                parameters[5],
-                parameters[4],
-                parameters[5],
-                parameters[2],
-            ),
-            Vector3::new(parameters[6], parameters[7], parameters[8]),
-        )
+        // Diagonal [Q00, Q11, Q22] followed by packed off-diagonal [Q01, Q02, Q12].
+        let shape = Matrix3::from_fn(|row, col| {
+            let index = if row == col { row } else { row + col + 2 };
+            parameters[index]
+        });
+        (shape, parameters.fixed_rows::<3>(6).into_owned())
     }
 
     fn features(sample: Vector3<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
@@ -434,13 +425,9 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn regularization_loss(parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>) -> f32 {
-        // TODO: use the shape matrix's built-in squared norm instead of an elementwise weighted sum
-        let prior = Self::parameter_prior();
-        let weights = [1.0, 1.0, 1.0, 2.0, 2.0, 2.0];
+        let (shape, _) = Self::shape_and_linear(parameters);
         0.5 * SHAPE_REGULARIZATION
-            * (0..6)
-                .map(|index| weights[index] * (parameters[index] - prior[index]).powi(2))
-                .sum::<f32>()
+            * (shape - Matrix3::identity() * SHAPE_PRIOR_SCALE).norm_squared()
     }
 
     fn add_raw_moment(&mut self, sample: Vector3<f32>) {
@@ -558,49 +545,71 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
+    /// Stacks feature rows into a batched `B x 9` matrix.
+    fn feature_matrix(rows: &[SVector<f32, CALIBRATION_PARAMETER_COUNT>]) -> DMatrix<f32> {
+        DMatrix::from_fn(rows.len(), CALIBRATION_PARAMETER_COUNT, |row, col| {
+            rows[row][col]
+        })
+    }
+
+    /// Reinterprets the nine-entry dynamic result of a batched feature-matrix
+    /// product as a fixed parameter vector.
+    fn parameter_vector(vector: DVector<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
+        SVector::from_column_slice(vector.as_slice())
+    }
+
+    /// Chains the anchoring observation with the randomly drawn cache rows of
+    /// one minibatch and returns their batched radial and gravity feature
+    /// matrices along with the advanced private draw state. Gravity rows cover
+    /// only the observations carrying a usable gravity direction.
+    fn minibatch_feature_matrices(
+        &self,
+        minibatch: MinibatchSpec,
+    ) -> (DMatrix<f32>, DMatrix<f32>, u64) {
+        let mut random_state = minibatch.random_state;
+        let observations = minibatch
+            .current_sample
+            .map(|sample| (sample, minibatch.current_gravity))
+            .into_iter()
+            .chain((0..minibatch.random_draws).map_while(|_| {
+                Self::random_cache_row(
+                    &mut random_state,
+                    self.sample_row_count,
+                    minibatch.accepted_row,
+                )
+                .map(|row| (self.sample(row), self.gravity_directions[row]))
+            }));
+        let mut radial_rows = Vec::with_capacity(minibatch.random_draws + 1);
+        let mut gravity_rows = Vec::with_capacity(minibatch.random_draws + 1);
+        for (sample, gravity) in observations {
+            let normalized = self.normalized_sample(sample);
+            radial_rows.push(Self::features(normalized));
+            if let Some(gravity) = gravity.filter(|_| self.gravity_projection_initialized) {
+                gravity_rows.push(Self::gravity_features(normalized, gravity));
+            }
+        }
+        (
+            Self::feature_matrix(&radial_rows),
+            Self::feature_matrix(&gravity_rows),
+            random_state,
+        )
+    }
+
     fn minibatch_objective(
         &self,
         parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
         gravity_projection: f32,
         minibatch: MinibatchSpec,
     ) -> f32 {
-        // TODO: use batched feature matrices and residual norms instead of scalar accumulation
-        let mut random_state = minibatch.random_state;
-        let mut radial_squared = 0.0;
-        let mut gravity_squared = 0.0;
-        let mut observation_count = 0;
-        let mut gravity_count = 0;
-        let mut add_observation = |sample: Vector3<f32>, gravity: Option<Vector3<f32>>| {
-            let normalized = self.normalized_sample(sample);
-            let residual = Self::features(normalized).dot(parameters) - 1.0;
-            radial_squared += residual * residual;
-            observation_count += 1;
-            if let Some(gravity) = gravity.filter(|_| self.gravity_projection_initialized) {
-                let residual = Self::gravity_features(normalized, gravity).dot(parameters)
-                    - gravity_projection;
-                gravity_squared += residual * residual;
-                gravity_count += 1;
-            }
-        };
-
-        if let Some(sample) = minibatch.current_sample {
-            add_observation(sample, minibatch.current_gravity);
-        }
-        for _ in 0..minibatch.random_draws {
-            let Some(row) = Self::random_cache_row(
-                &mut random_state,
-                self.sample_row_count,
-                minibatch.accepted_row,
-            ) else {
-                break;
-            };
-            add_observation(self.sample(row), self.gravity_directions[row]);
-        }
-
-        let mut objective =
-            0.5 * radial_squared / observation_count as f32 + Self::regularization_loss(parameters);
-        if gravity_count > 0 {
-            objective += 0.5 * self.gravity_weight * gravity_squared / gravity_count as f32;
+        let (features, gravity_features, _) = self.minibatch_feature_matrices(minibatch);
+        let residuals = &features * parameters - DVector::from_element(features.nrows(), 1.0);
+        let mut objective = 0.5 * residuals.norm_squared() / features.nrows() as f32
+            + Self::regularization_loss(parameters);
+        if gravity_features.nrows() > 0 {
+            let residuals = &gravity_features * parameters
+                - DVector::from_element(gravity_features.nrows(), gravity_projection);
+            objective += 0.5 * self.gravity_weight * residuals.norm_squared()
+                / gravity_features.nrows() as f32;
         }
         objective
     }
@@ -665,71 +674,45 @@ impl<const N: usize> MagCalibrator<N> {
     /// observation or no usable descent direction leaves the working state
     /// unchanged.
     fn apply_minibatch_update(&mut self, minibatch: MinibatchSpec) -> bool {
-        // TODO: use batched feature matrices and matrix products instead of accumulating vectors one at a time
-        let mut next_random_state = minibatch.random_state;
-        let mut gradient = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
-        let mut gradient_scale = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
-        let mut gravity_gradient = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
-        let mut gravity_scale = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
-        let mut gravity_projection_gradient = 0.0;
-        let mut observation_count = 0;
-        let mut gravity_count = 0;
-        let parameters = self.parameters;
-        let gravity_projection = self.gravity_projection;
-        let mut add_observation = |sample: Vector3<f32>, gravity: Option<Vector3<f32>>| {
-            let normalized = self.normalized_sample(sample);
-            let features = Self::features(normalized);
-            let residual = features.dot(&parameters) - 1.0;
-            gradient += residual * features;
-            gradient_scale += features.component_mul(&features);
-            observation_count += 1;
-            if let Some(gravity) = gravity.filter(|_| self.gravity_projection_initialized) {
-                let features = Self::gravity_features(normalized, gravity);
-                let residual = features.dot(&parameters) - gravity_projection;
-                gravity_gradient += residual * features;
-                gravity_scale += features.component_mul(&features);
-                gravity_projection_gradient -= residual;
-                gravity_count += 1;
-            }
-        };
-
-        if let Some(sample) = minibatch.current_sample {
-            add_observation(sample, minibatch.current_gravity);
-        }
-        for _ in 0..minibatch.random_draws {
-            let Some(row) = Self::random_cache_row(
-                &mut next_random_state,
-                self.sample_row_count,
-                minibatch.accepted_row,
-            ) else {
-                break;
-            };
-            add_observation(self.sample(row), self.gravity_directions[row]);
-        }
-        self.prng_state = next_random_state;
-        if observation_count == 0 {
+        let (features, gravity_features, random_state) = self.minibatch_feature_matrices(minibatch);
+        self.prng_state = random_state;
+        if features.nrows() == 0 {
             return false;
         }
 
-        gradient /= observation_count as f32;
-        gradient_scale /= observation_count as f32;
-        if gravity_count > 0 {
-            gradient += self.gravity_weight * gravity_gradient / gravity_count as f32;
-            gradient_scale += self.gravity_weight * gravity_scale / gravity_count as f32;
-            gravity_projection_gradient *= self.gravity_weight / gravity_count as f32;
-        } else {
-            gravity_projection_gradient = 0.0;
+        let parameters = self.parameters;
+        let gravity_projection = self.gravity_projection;
+        let residuals = &features * parameters - DVector::from_element(features.nrows(), 1.0);
+        let mut gradient =
+            Self::parameter_vector(features.tr_mul(&residuals)) / features.nrows() as f32;
+        let mut gradient_scale =
+            Self::parameter_vector(features.map(|value| value * value).row_sum_tr())
+                / features.nrows() as f32;
+        let mut gravity_projection_gradient = 0.0;
+        if gravity_features.nrows() > 0 {
+            let residuals = &gravity_features * parameters
+                - DVector::from_element(gravity_features.nrows(), gravity_projection);
+            gradient += self.gravity_weight
+                * Self::parameter_vector(gravity_features.tr_mul(&residuals))
+                / gravity_features.nrows() as f32;
+            gradient_scale += self.gravity_weight
+                * Self::parameter_vector(gravity_features.map(|value| value * value).row_sum_tr())
+                / gravity_features.nrows() as f32;
+            gravity_projection_gradient =
+                -residuals.sum() * (self.gravity_weight / gravity_features.nrows() as f32);
         }
 
         let prior = Self::parameter_prior();
-        // TODO: use fixed vector views and component-wise operations instead of indexed scalar updates
-        for (index, weight) in [1.0, 1.0, 1.0, 2.0, 2.0, 2.0].into_iter().enumerate() {
-            gradient[index] += SHAPE_REGULARIZATION * weight * (parameters[index] - prior[index]);
-            gradient_scale[index] += SHAPE_REGULARIZATION * weight;
-        }
+        let regularization_weights =
+            SVector::<f32, CALIBRATION_PARAMETER_COUNT>::from_row_slice(&[
+                1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0,
+            ]);
+        gradient +=
+            SHAPE_REGULARIZATION * regularization_weights.component_mul(&(parameters - prior));
+        gradient_scale += SHAPE_REGULARIZATION * regularization_weights;
         gradient_scale.add_scalar_mut(ONLINE_SCALE_EPSILON);
         let descent_direction = gradient.component_div(&gradient_scale);
-        let projection_step = if gravity_count > 0 && self.gravity_weight > 0.0 {
+        let projection_step = if gravity_features.nrows() > 0 && self.gravity_weight > 0.0 {
             gravity_projection_gradient / (self.gravity_weight + ONLINE_SCALE_EPSILON)
         } else {
             0.0
@@ -769,11 +752,9 @@ impl<const N: usize> MagCalibrator<N> {
     /// rows of the sample buffer. Entries at and beyond `count` are set to
     /// infinity so selection never picks them.
     fn squared_distances_to(&self, mag_sample: Vector3<f32>, count: usize) -> [f32; N] {
-        // TODO: use nalgebra row iteration and squared norms instead of rebuilding and dotting each row
         let mut squared_distances = [f32::INFINITY; N];
         for (j, dist) in squared_distances.iter_mut().enumerate().take(count) {
-            let diff = mag_sample - self.sample(j);
-            *dist = diff.dot(&diff);
+            *dist = (mag_sample - self.sample(j)).norm_squared();
         }
         squared_distances
     }
@@ -790,8 +771,7 @@ impl<const N: usize> MagCalibrator<N> {
         squared_distances.select_nth_unstable_by(neighbor_count - 1, |a, b| a.total_cmp(b));
         let smallest = &mut squared_distances[..neighbor_count];
         smallest.sort_unstable_by(|a, b| a.total_cmp(b));
-        // TODO: use a built-in sum reduction instead of a manual fold
-        smallest.iter().rev().fold(0., |acc, &d| acc + d.sqrt()) / neighbor_count as f32
+        smallest.iter().map(|&d| d.sqrt()).sum::<f32>() / neighbor_count as f32
     }
 
     /// Inserts `entry` into a row's neighbor cache, keeping it sorted and
@@ -881,10 +861,10 @@ impl<const N: usize> MagCalibrator<N> {
             self.rebuild_row_cache(row);
         }
         let cache = &self.neighbor_cache[row];
-        // TODO: use a built-in sum reduction instead of a manual fold
-        (0..neighbor_count)
-            .rev()
-            .fold(0., |acc, i| acc + cache[i].squared_distance.sqrt())
+        cache[..neighbor_count]
+            .iter()
+            .map(|entry| entry.squared_distance.sqrt())
+            .sum::<f32>()
             / neighbor_count as f32
     }
 
@@ -931,40 +911,10 @@ impl<const N: usize> MagCalibrator<N> {
     /// Is used when replacing the least useful value in the array.
     fn lowest_mean_distance_by_index(&mut self) -> (usize, f32) {
         let neighbor_count = self.neighbor_count.min(N.saturating_sub(1));
-        // TODO: use nalgebra vector construction, mean, and arg-min operations instead of manual array processing
-        let mut mean_dist: [f32; N] = [0.; N];
-        for (i, mean) in mean_dist.iter_mut().enumerate() {
-            *mean = self.row_mean_distance(i, neighbor_count);
-        }
-
-        // Set mean distance now that we are at it
-        self.mean_distance = mean_dist.iter().rfold(0., |a, &b| a + b) / N as f32;
-
-        // Obtain index for lowest mean distance
-        mean_dist
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| a.total_cmp(b))
-            .map(|(index, value)| (index, *value))
-            .unwrap()
-    }
-
-    /// Normalizes an optional co-timestamped direction; non-finite and zero
-    /// directions are dropped.
-    fn normalized_direction(direction: Option<Vector3<f32>>) -> Option<Vector3<f32>> {
-        // TODO: used only once, should be inline
-        // TODO: use nalgebra's fallible normalization instead of computing and applying the norm manually
-        direction.and_then(|direction| {
-            let norm = direction.norm();
-            if norm.is_finite()
-                && direction.iter().all(|value| value.is_finite())
-                && norm > f32::EPSILON
-            {
-                Some(direction / norm)
-            } else {
-                None
-            }
-        })
+        let mean_dist =
+            SVector::<f32, N>::from_fn(|index, _| self.row_mean_distance(index, neighbor_count));
+        self.mean_distance = mean_dist.mean();
+        mean_dist.argmin()
     }
 
     /// Add a sample if it is deemed more useful than the least useful sample.
@@ -979,7 +929,11 @@ impl<const N: usize> MagCalibrator<N> {
         gravity_hint: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) {
-        let gravity_direction = Self::normalized_direction(gravity_hint);
+        let gravity_direction = gravity_hint.and_then(|direction| {
+            direction
+                .try_normalize(f32::EPSILON)
+                .filter(|direction| direction.iter().all(|value| value.is_finite()))
+        });
         let valid_current_sample = self.ingest_sample(mag_sample, gravity_direction, timestamp_us);
         self.update_publication(
             valid_current_sample.then_some(mag_sample),
@@ -989,7 +943,7 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Updates the cache and online optimizer, returning whether the current
     /// magnetometer observation was finite and nonzero. `gravity_direction`
-    /// must already be normalized (see `Self::normalized_direction`).
+    /// must already be normalized to a unit vector.
     fn ingest_sample(
         &mut self,
         mag_sample: Vector3<f32>,
@@ -1006,11 +960,8 @@ impl<const N: usize> MagCalibrator<N> {
             {
                 *map_slot = retained_count as u32;
                 if retained_count != index {
-                    // TODO: copy matrix rows with nalgebra row views instead of looping over elements
-                    for column in 0..3 {
-                        self.sample_matrix[(retained_count, column)] =
-                            self.sample_matrix[(index, column)];
-                    }
+                    self.sample_matrix
+                        .set_row(retained_count, &sample.transpose());
                     self.gravity_directions[retained_count] = self.gravity_directions[index];
                     self.sample_timestamps_us[retained_count] = self.sample_timestamps_us[index];
                 }
@@ -1147,10 +1098,7 @@ impl<const N: usize> MagCalibrator<N> {
         timestamp_us: u64,
     ) {
         if index < N {
-            // TODO: write the matrix row through a nalgebra row view instead of assigning individual elements
-            self.sample_matrix[(index, 0)] = sample[0];
-            self.sample_matrix[(index, 1)] = sample[1];
-            self.sample_matrix[(index, 2)] = sample[2];
+            self.sample_matrix.set_row(index, &sample.transpose());
             self.gravity_directions[index] = gravity_direction;
             self.sample_timestamps_us[index] = timestamp_us;
         }
@@ -1205,10 +1153,8 @@ impl<const N: usize> MagCalibrator<N> {
         let mut gram_sum = CoverageGramMatrix::zeros();
         for row in 0..self.sample_row_count {
             let centered = self.sample(row) - self.normalization_mean;
-            // TODO: use nalgebra's fallible normalization instead of computing and applying the norm manually
-            let norm = centered.norm();
-            if norm.is_finite() && norm > f32::EPSILON {
-                let feature = Self::direction_feature(centered / norm);
+            if let Some(direction) = centered.try_normalize(f32::EPSILON) {
+                let feature = Self::direction_feature(direction);
                 gram_sum += feature * feature.transpose();
             }
         }
@@ -1244,20 +1190,16 @@ impl<const N: usize> MagCalibrator<N> {
         if !self.calibration_initialized {
             return Ok(MagCalibrationResult::from_quality(self.quality, None));
         }
-        let mag = self.soft_iron_correction * (raw_mag - self.hard_iron_offset);
+        let mut mag = self.soft_iron_correction * (raw_mag - self.hard_iron_offset);
 
-        // TODO: use nalgebra's in-place fallible normalization instead of computing the norm twice
-        let mag_norm = mag.norm();
+        let mag_norm = mag.normalize_mut();
         if !mag_norm.is_finite() || mag_norm < MIN_MAG_NORM {
             Err(BadMagCause::BadReading(BadReading::WeakCalibratedReading {
                 norm: mag_norm,
                 min_norm: MIN_MAG_NORM,
             }))
         } else {
-            Ok(MagCalibrationResult::from_quality(
-                self.quality,
-                Some(mag.normalize()),
-            ))
+            Ok(MagCalibrationResult::from_quality(self.quality, Some(mag)))
         }
     }
 
@@ -1471,21 +1413,12 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn sample(&self, row: usize) -> Vector3<f32> {
-        // TODO: read the matrix row through a nalgebra row view instead of individual elements
-        Vector3::new(
-            self.sample_matrix[(row, 0)],
-            self.sample_matrix[(row, 1)],
-            self.sample_matrix[(row, 2)],
-        )
+        self.sample_matrix.row(row).transpose().into_owned()
     }
 
     fn condition_number(eigenvalues: &Vector3<f32>) -> f32 {
-        // TODO: use nalgebra's vector min/max reductions instead of manual folds
-        let min = eigenvalues.iter().copied().fold(f32::INFINITY, f32::min);
-        let max = eigenvalues
-            .iter()
-            .copied()
-            .fold(f32::NEG_INFINITY, f32::max);
+        let min = eigenvalues.min();
+        let max = eigenvalues.max();
         if !min.is_finite() || !max.is_finite() || min <= 0.0 {
             f32::INFINITY
         } else {
