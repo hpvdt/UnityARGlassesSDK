@@ -46,8 +46,8 @@ All features are enabled by default.
 - Import the concrete types and traits used by the module. Avoid glob imports.
 - Prefer one module-level import over repeated fully qualified paths when that
   makes the code easier to read.
-- only exported definitions (by `pub use`) should be imported directly, everything
-  else should be invoked under it's preceding qualifier, including mod, enum, and error
+- Only definitions re-exported with `pub use` may be imported directly; reference
+  everything else through its preceding qualifier (module, enum, or error type).
 
 ### Naming and API Shape
 
@@ -62,9 +62,9 @@ All features are enabled by default.
 - Builder-style configuration methods take and return `self`; state-changing
   operations take `&mut self`; read-only operations take `&self`.
 - Re-exporting a definition under a different name is strictly forbidden.
-- Definitions that are not defined or exported in a crate root (`lib.rs`) or module
-  root (`mod.rs`) are supporting data structure,
-  they have to be referenced through their preceding module names.
+- Definitions that are neither defined in nor re-exported from a crate root
+  (`lib.rs`) or module root (`mod.rs`) are supporting data structures and must be
+  referenced through their preceding module names.
 
 ### Documentation and Comments
 
@@ -179,29 +179,40 @@ submitting a change.
 
 ## Git (Version Control)
 
-- Commit message always have the following format:
+- Commit messages always have the following format:
 
 ```
 [{{LLM MODEL}}] {{Task Info}} {{Optional Subtask Info}}
 ```
 
-- If a task contains multiple subtasks. Each subtask should have it's own commit
+- If a task contains multiple subtasks, each subtask should have its own commit
 - If HEAD is DETACHED, create a temporary branch and commit into it
 
-## Documentation/Markdown Files
+## Documentation (including Markdown & Comments)
 
-- Indentation is 4 spaces, continuation indentation is 6 spaces
-- Hard wrap is 120 characters. The only exceptions are Table and markup sections
+Before starting to work on code, actively enforce the following guardrails on every document you read; apply
+corrections in one or more preceding git commits if necessary:
+
+- Indentation is 4 spaces, continuation indentation is 6 spaces.
+- Hard wrap is 120 characters. The only exceptions are table and markup sections
   which can be longer.
-- Duplicated or contradicting information should be actively deleted (including information in code comment)
+- Duplicated or contradicting information should be merged or deleted.
+- Inconsistent or dangling references should be fixed.
+- Spelling and syntax errors should be fixed.
+- All references must point to existing code or artefacts; references to historical
+  objects must be deleted.
 
 ### Acronyms
 
-Every acronym used in the documentation (e.g. this guide, `TODO.md`) must
+Every acronym used in the documentation (e.g. this guide, a `TODO.md`) must
 appear in this list. Add a new acronym here in the same change that introduces it; otherwise spell the term out.
 
+- **ABI:** Application Binary Interface.
 - **AHRS:** Attitude and Heading Reference System.
+- **API:** Application Programming Interface.
+- **FFI:** Foreign Function Interface.
 - **FRD:** Forward-Right-Down aerospace coordinate frame.
+- **LLM:** Large Language Model.
 - **RMS:** Root Mean Square.
 - **RUB:** Right-Up-Back Android sensor coordinate frame.
 - **SGD:** Stochastic Gradient Descent.
@@ -209,25 +220,66 @@ appear in this list. Add a new acronym here in the same change that introduces i
 
 ### Formulas
 
-Every math formula (e.g. equation, pseudo-algorithm) in the documentation (e.g. this guide, `TODO.md`) should be
-in LaTeX math block (enclosed a pair of `$` or `$$`).
+Every math formula (e.g. equation, pseudo-algorithm) in the documentation (e.g. this guide, a `TODO.md`) should
+be in a LaTeX math block (enclosed in a pair of `$` or `$$`).
 
 ### Symbols
 
-Every symbol used in the documentation (e.g. this guide, `TODO.md`) and symbolic variable name in the code must
-appear in this list. Add a new symbol here in the same change that introduces it; otherwise use the full name reference.
+Every symbol used in the documentation (e.g. this guide, a `TODO.md`) and every symbolic variable name in the code
+must appear in this list. Add a new symbol here in the same change that introduces it; otherwise use the full name.
 
-You should avoid abusing 1 symbol to refer to different concepts. This include symbols written in different alphabets
-(e.g. `\mu` in LaTex math and `mu` in code should always refer to the same concept)
+You should avoid abusing one symbol to refer to different concepts. This includes symbols written in different
+alphabets (e.g. `\mu` in LaTeX math and `mu` in code should always refer to the same concept).
+
+- **$A$:** Soft-iron correction matrix, $A = D^{-1}$.
+- **$B$:** Online-optimizer minibatch; $|B|$ is its observation count.
+- **$B_r$:** Replay minibatch size (`replay_minibatch_size`).
+- **$b$:** Hard-iron offset vector.
+- **$c$:** Shape-prior scale of the regularization target $c I$.
+- **$D$:** Symmetric positive-definite soft-iron distortion matrix.
+- **$d$:** Normalized-offset candidate in cache-normalization units.
+- **$e_{r,i}$:** Radial algebraic residual of observation $i$.
+- **$e_{g,i}$:** Gravity-projection residual of observation $i$.
+- **$G$:** Gravity-carrying subset of a minibatch; $|G|$ is its observation count.
+- **$g_i$:** Normalized gravity direction of observation $i$.
+- **$H$:** Mean Gram matrix of retained direction features.
+- **$J_r$:** Radial online objective.
+- **$J_g$:** Gravity-surrogate objective.
+- **$k$:** Diversity neighbor count (`num_neighbors`).
+- **$M$:** Normalized shape matrix $Q / \gamma$.
+- **$m_i$:** Ideal calibrated unit magnetic vector of sample $i$.
+- **$N$:** `MagCalibrator` cache capacity in rows.
+- **$n$:** Number of terms in an objective or Gram average.
+- **$n_g$:** Gravity-carrying term count in $J_g$.
+- **$n_i$:** Ellipsoid normal at $u_i$.
+- **$p$:** Ramped count of cold-start replay updates per sample.
+- **$Q$:** Symmetric $3 \times 3$ ellipsoid shape matrix.
+- **$q$:** Ellipsoid linear coefficient vector.
+- **$R$:** Diagonal feature-space regularization weights $\operatorname{diag}(1, 1, 1, 2, 2, 2, 0, 0, 0)$.
+- **$r$:** RMS radius of the retained cache samples.
+- **$s_i$:** Gravity normal projection $g_i^T n_i$.
+- **$u_i$:** Normalized magnetometer sample $(x_i - \mu) / r$.
+- **$\hat{u}_i$:** Mean-centered unit direction of retained sample $i$.
+- **$w_g$:** Gravity term weight (`gravity_weight`).
+- **$x_i$:** Raw retained magnetometer sample vector.
+- **$\gamma$:** Ellipsoid normalization scale $1 + d^T Q d$.
+- **$\epsilon$:** Numerical floor of the optimizer feature-energy scales.
+- **$\theta$:** Packed online coefficients $[Q_{00}, Q_{11}, Q_{22}, Q_{01}, Q_{02}, Q_{12}, q_0, q_1, q_2]$ (code
+  field `parameters`).
+- **$\theta_{\mathrm{prior}}$:** Prior coefficient vector $[c, c, c, 0, 0, 0, 0, 0, 0]$.
+- **$\kappa$:** Learned gravity projection scalar.
+- **$\lambda$:** Shape regularization weight.
+- **$\mu$:** Cache sample mean.
+- **$\phi(u)$:** Ellipsoid-fit feature vector with cross-term weight $2$.
+- **$\varphi(u)$:** Direction-feature vector with cross-term weight $\sqrt{2}$.
 
 ### TODO.md Format
 
-- Contain only a flat checklist of issues grouped by severity.
-- All issues are grouped by severity heading (e.g. `## High severity`).
+- Contains only a flat checklist of issues, grouped under severity headings (e.g. `## High severity`).
 
 #### Issue Format
 
-- Each issue is a `- [ ]` or `- [x]` checkbox followed by a short name & indented fields:
+- Each issue is a `- [ ]` or `- [x]` checkbox followed by a short name and indented fields:
   - **Summary:** Short description.
   - **Position:** Path of the block code comment that explains the issue, e.g. `src/path/to/file.rs (issue_summary)`. The block comment should have the following sections:
     - always start with `TODO: issue_summary`.
