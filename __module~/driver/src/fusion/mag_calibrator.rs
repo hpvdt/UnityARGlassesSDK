@@ -3,8 +3,8 @@ use nalgebra::{DMatrix, DVector, Matrix3, SMatrix, SVector, SymmetricEigen, Vect
 use super::bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
 const CALIBRATION_PARAMETER_COUNT: usize = 9;
-/// Gram sum of the retained direction features, `sum_i phi(d_i) phi(d_i)^T`,
-/// backing the coverage score.
+/// Gram sum of the retained direction features, `sum_i varphi(d_i)
+/// varphi(d_i)^T`, backing the coverage score.
 pub(super) type CoverageGramMatrix =
     SMatrix<f32, CALIBRATION_PARAMETER_COUNT, CALIBRATION_PARAMETER_COUNT>;
 const SHAPE_REGULARIZATION: f32 = 1.0e-3;
@@ -43,9 +43,10 @@ const PUBLICATION_STREAK_RESET_CONFIDENCE: f32 = 0.01;
 /// is about 1.1 s of sustained quality at the 50 Hz magnetometer rate.
 pub(super) const MIN_PUBLICATION_STREAK: usize = 55;
 /// Uniform-sphere reference for directional coverage: the smallest
-/// eigenvalue of `E[phi(d) phi(d)^T]` over uniformly distributed unit
-/// directions, where `phi` is the quadratic feature vector shared with the
-/// ellipsoid fit. A fully isotropic cache scores 1 against this reference.
+/// eigenvalue of `E[varphi(d) varphi(d)^T]` over uniformly distributed unit
+/// directions, where `varphi` is the direction-feature vector with
+/// `sqrt(2)` cross-term weights (see `direction_feature`). A fully isotropic
+/// cache scores 1 against this reference.
 const COVERAGE_LAMBDA_REF: f32 = 2.0 / 15.0;
 const MIN_MAG_NORM: f32 = 0.4;
 // TODO: gravity_surrogate_anisotropy
@@ -293,7 +294,8 @@ impl<const N: usize> MagCalibrator<N> {
         Self::default()
     }
 
-    /// Configure the number of `k` neighbors to calculate distance to.
+    /// Configure the number of nearest neighbors `k` whose mean distance
+    /// scores each buffered row in the diversity heuristic.
     pub fn num_neighbors(self, neighbor_count: usize) -> Self {
         Self {
             neighbor_count: neighbor_count.clamp(1, N.saturating_sub(1).max(1)),
@@ -470,7 +472,7 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Recomputes the current cache normalization from the raw moments
     /// without touching the working state. Every append, replacement, and
-    /// expiry drifts the mean and radius; the working coefficients keep
+    /// expiry drift the mean and radius; the working coefficients keep
     /// their meaning in the new normalization directly, because the drift
     /// per cache mutation is `O(1 / sample_row_count)` and the online optimizer
     /// is already designed to track the moving convex optimum as cache
@@ -764,8 +766,8 @@ impl<const N: usize> MagCalibrator<N> {
     /// Mean distance over the `k` smallest entries of `squared_distances`,
     /// selected in O(n) with a partial sort; `squared_distances` is reordered
     /// in the process. The square root is deferred until after selection, so
-    /// only the `k` selected entries are sqrt'd. Returns infinity for
-    /// `k == 0`.
+    /// only the `k` selected entries have their square roots taken. Returns
+    /// infinity for `k == 0`.
     fn mean_of_smallest(squared_distances: &mut [f32], neighbor_count: usize) -> f32 {
         if neighbor_count == 0 {
             return f32::INFINITY;
@@ -908,9 +910,10 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    /// Returns index of the buffered row with the lowest mean distance to its
-    /// `k` nearest neighbors, derived from the incremental neighbor cache.
-    /// Is used when replacing the least useful value in the array.
+    /// Returns the index of the buffered row with the lowest mean distance
+    /// to its `k` nearest neighbors, derived from the incremental neighbor
+    /// cache. Used to pick the victim row that a more diverse incoming
+    /// sample may replace.
     fn lowest_mean_distance_by_index(&mut self) -> (usize, f32) {
         let neighbor_count = self.neighbor_count.min(N.saturating_sub(1));
         let mean_dist =
@@ -919,9 +922,11 @@ impl<const N: usize> MagCalibrator<N> {
         mean_dist.argmin()
     }
 
-    /// Add a sample if it is deemed more useful than the least useful sample.
+    /// Add a sample to the cache: the first `N` valid samples fill it
+    /// unconditionally, and once the cache is full a sample is retained only
+    /// if it scores more diverse than the least diverse retained row.
     ///
-    /// `gravity_direction` is an optional co-timestamped body-frame FRD
+    /// `gravity_hint` is an optional co-timestamped body-frame FRD
     /// direction. Non-finite and zero directions are ignored. The live quality
     /// and publication state are updated even when diversity rejects the valid
     /// current observation.
@@ -1105,13 +1110,13 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    /// Quadratic feature vector of a unit direction: the nine ellipsoid-fit
-    /// features with `sqrt(2)` cross-term weights. With this weighting the
-    /// feature norm equals the rotation-invariant `tr(d d^T d d^T)`, so the
-    /// induced rotation on feature space is orthogonal and the Gram
-    /// eigenvalues are exactly rotation-invariant. Under the uniform
-    /// spherical distribution `E[phi phi^T]` has eigenvalues `{1/3 x4, 2/15
-    /// x5}`.
+    /// Quadratic feature vector of a unit direction: the nine components of
+    /// the ellipsoid-fit feature vector, but with `sqrt(2)` cross-term
+    /// weights. With this weighting the feature norm equals the
+    /// rotation-invariant `tr(d d^T d d^T)`, so the induced rotation on
+    /// feature space is orthogonal and the Gram eigenvalues are exactly
+    /// rotation-invariant. Under the uniform spherical distribution
+    /// `E[varphi varphi^T]` has eigenvalues `{1/3 x4, 2/15 x5}`.
     fn direction_feature(direction: Vector3<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
         // TODO: use nalgebra outer-product and vector-view operations instead of elementwise feature construction
         SVector::<f32, CALIBRATION_PARAMETER_COUNT>::from_column_slice(&[
@@ -1162,7 +1167,8 @@ impl<const N: usize> MagCalibrator<N> {
         Self::coverage_from_gram(&gram_sum, self.sample_row_count)
     }
 
-    /// Get mean distance value between samples in the sample matrix.
+    /// Get the mean of the per-row nearest-neighbor distances over the
+    /// retained samples.
     pub fn get_mean_distance(&self) -> f32 {
         self.mean_distance
     }
@@ -1178,7 +1184,7 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Calibrates a magnetometer vector that has already been converted to FRD.
     ///
-    /// `gravity_direction` is an optional co-timestamped body-frame FRD
+    /// `gravity_hint` is an optional co-timestamped body-frame FRD
     /// direction. It contributes a convex constant-projection surrogate to the
     /// online ellipsoid fit without making gravity mandatory for calibration.
     pub fn evaluate_correct(
@@ -1349,16 +1355,16 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     /// Updates the live radial and gravity statistics and quality for the
-    /// current working candidate. All cache-dependent data comes from
-    /// maintained moments.
+    /// current working candidate. Normalization uses the maintained raw
+    /// moments; the coverage score rescans the retained rows.
     ///
     /// FIXME: the Air 1 replay shows block-long post-warm-up radial-fitness
     /// dips to zero even though the running statistic persists (it is never
-    /// wiped) and grows smoothly through each dip. The dips are genuine
-    /// working-candidate degradation on certain trace segments, not a
-    /// normalization-lifecycle reset artifact, and persist unchanged across
-    /// the removal of the rebase/reset path. Investigate why the online
-    /// candidate degrades there instead of converging.
+    /// wiped) and grows smoothly through each dip. Working state is never
+    /// rebased or reset, so the dips are genuine working-candidate
+    /// degradation on certain trace segments, not a normalization-lifecycle
+    /// artifact. Investigate why the online candidate degrades there instead
+    /// of converging.
     fn update_quality(
         &mut self,
         current_sample: Option<Vector3<f32>>,
