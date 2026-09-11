@@ -409,18 +409,17 @@ impl<const N: usize> MagCalibrator<N> {
         sample: Vector3<f32>,
         gravity: Vector3<f32>,
     ) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
-        // TODO: use nalgebra outer-product and vector-view operations instead of elementwise feature construction
-        SVector::from_row_slice(&[
-            gravity.x * sample.x,
-            gravity.y * sample.y,
-            gravity.z * sample.z,
-            gravity.x * sample.y + gravity.y * sample.x,
-            gravity.x * sample.z + gravity.z * sample.x,
-            gravity.y * sample.z + gravity.z * sample.y,
-            0.5 * gravity.x,
-            0.5 * gravity.y,
-            0.5 * gravity.z,
-        ])
+        const PAIRS: [(usize, usize); 6] = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)]; // upper-entry pairs
+        let scale = Matrix3::from_fn(|row, col| if row == col { 0.5 } else { 1.0 }); // exact half
+        let quadratic =
+            (sample * gravity.transpose() + gravity * sample.transpose()).component_mul(&scale);
+        SVector::from_fn(|index, _| {
+            if index < 6 {
+                quadratic[PAIRS[index]]
+            } else {
+                0.5 * gravity[index - 6]
+            }
+        })
     }
 
     fn regularization_loss(parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>) -> f32 {
