@@ -9,17 +9,18 @@
 
 ## Medium severity
 
-- [ ]  Bound stale optimizer influence after sample expiry
-
-  - **Summary:** Online parameters retain historical gradient influence after a row is replaced or expires, and
-    nothing removes that contribution, so `max_sample_lifespan_us` no longer strictly bounds the estimator's
-    effective history. The impact is bounded in practice because gradients come only from currently retained rows,
-    so stale influence dilutes as updates track the moving optimum; the main residual risk is slower re-tracking
-    after the learning rate has annealed to its floor when the true optimum actually shifts (e.g. hard-iron drift).
-  - **Position:** `src/fusion/mag_calibrator.rs (online_history_outlives_sample_lifespan)`
-  - **Unit test:** `src/fusion/mag_calibrator_test.rs (mag_calibrator_online_history_outlives_sample_lifespan)`
 - [ ]  Score replacement candidates in their post-replacement buffer
 
   - **Summary:** Candidate and victim diversity scores currently use different neighbor pools.
   - **Position:** `src/fusion/mag_calibrator.rs (candidate_score_includes_replaced_victim)`
   - **Unit test:** `src/fusion/mag_calibrator_test.rs (mag_calibrator_candidate_score_includes_replaced_victim)`
+- [ ]  Make live fitness statistics cache-derived and lifespan-aware
+
+  - **Summary:** The radial and gravity fitness statistics never expire: their running mean squares keep describing
+    removed rows after expiry or replacement (pinned byte-for-byte by the expiry regression). Recompute both from
+    the retained cache with the current working candidate on each quality update, mirroring coverage, so that
+    `max_sample_lifespan_us` strictly bounds fitness history. Optimizer history in the online parameters and the
+    gravity projection dilutes through the floored learning rate and stays non-strict by design.
+  - **Position:** `src/fusion/mag_calibrator.rs (cache_derived_fitness_statistics)`
+  - **Unit test:** `src/fusion/mag_calibrator_test.rs (mag_calibrator_online_history_outlives_sample_lifespan,`
+    rewritten, plus a new partial-expiry sequence-equivalence test)

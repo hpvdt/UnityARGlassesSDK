@@ -306,14 +306,16 @@ impl<const N: usize> MagCalibrator<N> {
     /// Configure the maximum time a sample remains in the calibration buffer,
     /// in microseconds. The default is one hour.
     pub fn max_sample_lifespan_us(self, max_sample_lifespan_us: u64) -> Self {
-        // TODO: online_history_outlives_sample_lifespan
-        // Expiring or replacing a row removes it from the cache but not its
-        // historical online-SGD gradient contribution, so this bounds cache
-        // membership rather than the optimizer's effective history.
-        // Recommended fix: reset and replay a bounded number of minibatches
-        // after expiry, or add an explicit forgetting schedule whose horizon
-        // is no longer than this lifespan, plus an adaptive hard-iron drift
-        // case.
+        // TODO: cache_derived_fitness_statistics
+        // The radial and gravity fitness running mean squares never expire:
+        // they keep describing removed rows after expiry or replacement. The
+        // online-optimizer parameter history dilutes through the floored
+        // learning rate and stays non-strict by design, but the persisted
+        // fitness statistics keep `max_sample_lifespan_us` from strictly
+        // bounding the estimator's live-quality history.
+        // Recommended fix: recompute both fitness statistics from the
+        // retained cache with the current working candidate on every quality
+        // update, mirroring coverage.
         Self {
             max_sample_lifespan_us,
             ..self
