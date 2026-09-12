@@ -7,13 +7,51 @@ use super::{
 };
 
 impl<const N: usize> MagCalibrator<N> {
+    /// Independently recomputes the radial mean square of the current
+    /// working candidate over the retained cache, row by row in ascending
+    /// order. Deliberately duplicates the accumulation inside
+    /// `update_quality` instead of calling it, so the tests cross-check the
+    /// production path.
+    fn radial_mean_square_for_test(&self) -> Option<f32> {
+        let candidate = self.working_candidate().ok()?;
+        let mut sum = 0.0f32;
+        for row in 0..self.sample_row_count {
+            let residual =
+                (candidate.correction * (self.sample(row) - candidate.offset)).norm() - 1.0;
+            sum += residual * residual;
+        }
+        Some(sum / self.sample_row_count as f32)
+    }
+
+    /// Independently recomputes the gravity mean square of the current
+    /// working parameters over the retained rows carrying a gravity
+    /// direction, mirroring the gating in `update_quality`.
+    fn gravity_mean_square_for_test(&self) -> Option<f32> {
+        if !(self.gravity_projection_initialized && self.gravity_weight > 0.0) {
+            return None;
+        }
+        let mut sum = 0.0f32;
+        let mut count = 0usize;
+        for row in 0..self.sample_row_count {
+            if let Some(gravity) = self.gravity_directions[row] {
+                let residual =
+                    Self::gravity_features(self.normalized_sample(self.sample(row)), gravity)
+                        .dot(&self.parameters)
+                        - self.gravity_projection;
+                sum += residual * residual;
+                count += 1;
+            }
+        }
+        (count > 0).then_some(sum / count as f32)
+    }
+
     fn working_quality_components(&self) -> (bool, f32, f32, f32) {
-        let Ok(_candidate) = self.working_candidate() else {
+        if self.working_candidate().is_err() {
             return (false, 0.0, 0.0, 0.0);
-        };
+        }
         let coverage = self.mean_centered_coverage();
-        let radial_fitness = Self::radial_fitness_score(self.radial_residual_mean_square);
-        let gravity_fitness = Self::gravity_fitness_score(self.gravity_residual_mean_square);
+        let radial_fitness = Self::radial_fitness_score(self.radial_mean_square_for_test());
+        let gravity_fitness = Self::gravity_fitness_score(self.gravity_mean_square_for_test());
         (true, coverage, radial_fitness, gravity_fitness)
     }
 
@@ -47,18 +85,6 @@ impl<const N: usize> MagCalibrator<N> {
 
     fn gravity_fitness_score_for_test(mean_square: Option<f32>) -> f32 {
         Self::gravity_fitness_score(mean_square)
-    }
-
-    fn running_mean_square_for_test(
-        current: Option<f32>,
-        residual_squared: f32,
-        update_weight: f32,
-    ) -> Option<f32> {
-        Self::update_running_mean_square(current, residual_squared, update_weight)
-    }
-
-    fn radial_residual_mean_square_for_test(&self) -> Option<f32> {
-        self.radial_residual_mean_square
     }
 
     fn raw_moments_for_test(&self) -> (usize, Vector3<f64>, Matrix3<f64>) {
@@ -338,27 +364,25 @@ fn mag_calibrator_keeps_last_correction_after_rejected_refit() {
         expected,
         0.05,
     );
-    // Working state is never rebased or reset, so the running radial
-    // statistic survives the expiry that empties the cache.
-    assert_ne!(calibrator.radial_residual_mean_square_for_test(), None);
+    // Working state is never rebased or reset, and the radial statistic is
+    // recomputed from the retained rows: the expired history refilled with
+    // identical samples leaves a zero-radius normalization, so no usable
+    // candidate exists to score.
+    assert_eq!(calibrator.radial_mean_square_for_test(), None);
 }
 
 #[test]
-fn mag_calibrator_online_history_outlives_sample_lifespan() {
+fn mag_calibrator_fitness_recovers_after_full_expiry() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let mut calibrator = seeded_calibrator::<63>(offset, distortion).max_sample_lifespan_us(0);
     let expected = Vector3::x();
     let raw = offset + distortion * expected;
 
-    // The radial fitness statistic is a persisted running mean of the online
-    // optimizer's fit over the training cache.
-    let trained_radial = calibrator.radial_residual_mean_square_for_test();
-    assert!(trained_radial.is_some());
-
-    // A zero lifespan makes the next, larger-timestamp sample expire every
-    // retained row, emptying the cache. The last published correction stays in
-    // use even though live confidence collapses.
+    // A strictly larger timestamp with a zero lifespan expires every
+    // retained row, emptying the cache before the new sample lands. The
+    // last published correction stays in use even though live confidence
+    // collapses.
     let result = calibrator.evaluate_correct(raw, None, 1).unwrap();
     assert_eq!(result.confidence, 0.0);
     assert_vec_close(
@@ -369,16 +393,132 @@ fn mag_calibrator_online_history_outlives_sample_lifespan() {
         0.05,
     );
 
-    // Known adaptation limitation: expiry removes rows from the cache but not
-    // their historical online-SGD gradient contribution. The radial statistic
-    // is byte-for-byte unchanged even though every training row is gone,
-    // because nothing resets or forgets the online worker on expiry:
-    // `max_sample_lifespan_us` bounds cache membership, not the optimizer's
-    // effective history.
+    // The statistic that produced the pre-expiry fitness is gone with the
+    // expired rows: while fewer than nine fresh rows are retained, live
+    // quality stays explicitly pending at zero.
+    for i in 0..7 {
+        let raw = offset + distortion * sample_direction(i, 63);
+        let result = calibrator.evaluate_correct(raw, None, 1).unwrap();
+        assert_eq!(
+            result.confidence,
+            0.0,
+            "fresh row {} escaped pending",
+            i + 2
+        );
+    }
+
+    // Once enough fresh rows are retained, the reported fitness is exactly
+    // the mean square residual recomputed over the calibrator's own
+    // retained cache with its current working candidate; nothing from the
+    // expired rows survives in it.
+    let mut result = None;
+    for i in 7..63 {
+        let raw = offset + distortion * sample_direction(i, 63);
+        result = Some(calibrator.evaluate_correct(raw, None, 1).unwrap());
+    }
+    let result = result.unwrap();
+    let radial_mean_square = calibrator
+        .radial_mean_square_for_test()
+        .expect("recovered cache produced no working candidate");
     assert_eq!(
-        calibrator.radial_residual_mean_square_for_test(),
-        trained_radial
+        result.radial_fitness,
+        MagCalibrator::<63>::fitness_score_for_test(Some(radial_mean_square))
     );
+    // No gravity direction was ever supplied, so the gravity factor stays
+    // neutral.
+    assert_eq!(result.gravity_fitness, 1.0);
+    assert_eq!(result.fitness, result.radial_fitness);
+}
+
+#[test]
+fn mag_calibrator_fitness_depends_only_on_retained_rows() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let sample = |i: usize| offset + distortion * sample_direction(i, 63);
+    let gravity = |i: usize| sample_direction(i + 31, 63);
+
+    // Calibrator A ingests an early batch whose older rows then expire
+    // (lifespan 100 us, final batch timestamp 153 keeps exactly the rows
+    // with timestamp >= 53), followed by a fresh batch.
+    let mut lifespan_a = MagCalibrator::<63>::new().max_sample_lifespan_us(100);
+    for timestamp_us in 50..=59 {
+        let index = timestamp_us as usize - 50;
+        lifespan_a.evaluate_sample_vec(sample(index), Some(gravity(index)), timestamp_us);
+    }
+    for timestamp_us in 142..=153 {
+        let index = timestamp_us as usize - 100;
+        lifespan_a.evaluate_sample_vec(sample(index), Some(gravity(index)), timestamp_us);
+    }
+
+    // Calibrator B ingests only the rows that survive in A, in the same
+    // order. Its optimizer history differs from A's (B never saw the
+    // expired prefix), which is the non-strict-by-design part; only the
+    // caches and the cache-derived fitness semantics are pinned here.
+    let mut survivors_only = MagCalibrator::<63>::new().max_sample_lifespan_us(100);
+    for timestamp_us in 53..=59 {
+        let index = timestamp_us as usize - 50;
+        survivors_only.evaluate_sample_vec(sample(index), Some(gravity(index)), timestamp_us);
+    }
+    for timestamp_us in 142..=153 {
+        let index = timestamp_us as usize - 100;
+        survivors_only.evaluate_sample_vec(sample(index), Some(gravity(index)), timestamp_us);
+    }
+
+    // The expired prefix is gone from A's cache: both caches hold exactly
+    // the surviving rows in stable insertion order.
+    assert_eq!(lifespan_a.sample_row_count, 19);
+    assert_caches_identical(&lifespan_a, &survivors_only);
+
+    // A shared suffix at a fixed timestamp (no further expiry) lets both
+    // working candidates converge; cache ingestion is parameter-independent,
+    // so identical inputs keep the caches identical.
+    let mut result_a = None;
+    for i in 0..2 * 63 {
+        let result = lifespan_a.evaluate_correct(sample(i % 63), Some(gravity(i % 63)), 153);
+        survivors_only.evaluate_sample_vec(sample(i % 63), Some(gravity(i % 63)), 153);
+        result_a = Some(result);
+    }
+    assert_caches_identical(&lifespan_a, &survivors_only);
+
+    // A's reported fitness is a pure function of its retained rows and its
+    // current candidate, recomputed independently here row by row. Fitness
+    // itself is NOT asserted bitwise equal to B's: A and B share the cache
+    // but not the online-optimizer parameter history, which legitimately
+    // still carries the expired rows' gradients (non-strict by design; see
+    // TODO.md, "Make live fitness statistics cache-derived and
+    // lifespan-aware").
+    let result_a = result_a.unwrap().unwrap();
+    let radial_mean_square = lifespan_a
+        .radial_mean_square_for_test()
+        .expect("retained cache produced no working candidate");
+    assert_eq!(
+        result_a.radial_fitness,
+        MagCalibrator::<63>::fitness_score_for_test(Some(radial_mean_square))
+    );
+    let gravity_mean_square = lifespan_a
+        .gravity_mean_square_for_test()
+        .expect("retained cache carried no gravity statistic");
+    assert_eq!(
+        result_a.gravity_fitness,
+        MagCalibrator::<63>::gravity_fitness_score_for_test(Some(gravity_mean_square))
+    );
+}
+
+/// Asserts that two calibrators retain exactly the same rows with the same
+/// timestamps and gravity directions, in the same order.
+fn assert_caches_identical<const N: usize>(first: &MagCalibrator<N>, second: &MagCalibrator<N>) {
+    assert_eq!(first.sample_row_count, second.sample_row_count);
+    for row in 0..first.sample_row_count {
+        assert_eq!(first.sample(row), second.sample(row));
+        assert_eq!(
+            first.sample_timestamps_us[row],
+            second.sample_timestamps_us[row]
+        );
+        assert_eq!(
+            first.gravity_directions[row],
+            second.gravity_directions[row]
+        );
+    }
 }
 
 #[test]
@@ -881,7 +1021,7 @@ fn design_coverage_is_rotation_invariant_and_detects_rank_deficiency() {
 }
 
 #[test]
-fn live_quality_ramps_and_running_mean_square_match_the_specification() {
+fn live_quality_ramps_match_the_specification() {
     // Radial RMS ramps fitness linearly from 1 at 0 to 0 at the 0.1 ceiling.
     assert_eq!(MagCalibrator::<9>::fitness_score_for_test(Some(0.0)), 1.0);
     let fitness = MagCalibrator::<9>::fitness_score_for_test(Some(0.05f32.powi(2)));
@@ -896,26 +1036,14 @@ fn live_quality_ramps_and_running_mean_square_match_the_specification() {
         0.0
     );
     assert_eq!(MagCalibrator::<9>::fitness_score_for_test(Some(-1.0)), 0.0);
-    assert_eq!(
-        MagCalibrator::<9>::running_mean_square_for_test(None, 0.04, 0.25),
-        Some(0.01)
-    );
-    let updated = MagCalibrator::<9>::running_mean_square_for_test(Some(0.04), 0.0, 0.25).unwrap();
-    assert!((updated - 0.03).abs() < 1.0e-7, "updated={updated}");
-    assert_eq!(
-        MagCalibrator::<9>::running_mean_square_for_test(Some(f32::NAN), 0.0, 0.25),
-        None
-    );
-    assert_eq!(
-        MagCalibrator::<9>::running_mean_square_for_test(None, f32::INFINITY, 0.25),
-        None
-    );
 }
 
 #[test]
 fn gravity_fitness_ramps_between_floor_and_ceiling_and_defaults_to_one() {
-    // 1 at and below the 0.1 RMS floor, 0 at and beyond the 0.3 ceiling,
-    // linear in between.
+    // 1 at and below the 0.1 RMS floor, 0 at and beyond the 0.35 ceiling,
+    // linear in between. The ceiling was raised from 0.3 when the statistic
+    // changed to the cache-wide mean square, which rides above the
+    // trailing-window estimate the old ceiling was tuned against.
     assert_eq!(
         MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.0)),
         1.0
@@ -924,10 +1052,10 @@ fn gravity_fitness_ramps_between_floor_and_ceiling_and_defaults_to_one() {
         MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.1f32.powi(2))),
         1.0
     );
-    let fitness = MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.2f32.powi(2)));
+    let fitness = MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.225f32.powi(2)));
     assert!((fitness - 0.5).abs() < 1.0e-6, "fitness={fitness}");
     assert_eq!(
-        MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.3f32.powi(2))),
+        MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.35f32.powi(2))),
         0.0
     );
     // Unlike the radial score, a missing or unusable statistic is neutral:

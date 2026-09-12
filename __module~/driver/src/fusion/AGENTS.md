@@ -28,11 +28,11 @@ calibration has been published yet, each valid sample also triggers a ramped num
 accelerate cold-start convergence.
 
 The calibrator maintains the raw first moment and second outer-product moment when rows are appended, replaced, or
-expired; cache normalization is derived from these fixed-size statistics without a row scan. Directional coverage is
-recomputed from the current cache on each quality update: the smallest eigenvalue of the $9 \times 9$ Gram matrix of
-the mean-centered unit directions. Before nine retained samples, calibration is explicitly pending with confidence
-zero; beyond that model minimum, publication follows the sustained-quality rule under "Candidate conversion and live
-quality" below.
+expired; cache normalization is derived from these fixed-size statistics without a row scan. Directional coverage and
+both live fitness statistics are recomputed from the current cache on each quality update: coverage is the smallest
+eigenvalue of the $9 \times 9$ Gram matrix of the mean-centered unit directions. Before nine retained samples,
+calibration is explicitly pending with confidence zero; beyond that model minimum, publication follows the
+sustained-quality rule under "Candidate conversion and live quality" below.
 
 ### Production cache size
 
@@ -225,18 +225,21 @@ still-forming cache keep chord-like directions, which collapses the smallest eig
 survives that drift. The cache mean is the center, not the fitted hard-iron offset: the offset's component along the
 thinnest data direction is itself unconstrained for near-planar support, which destabilizes the score exactly where it
 must be decisive. Rank deficiency detects lower-dimensional support by construction: near-planar motion leaves the Gram
-matrix rank-deficient and scores near zero, so partial-arc caches cannot inflate coverage. Physical radial fitness uses
-the running mean square of $\|A (x - b)\| - 1$, evaluated for each valid current sample after its online update with
-the same working candidate. Its update weight is `1 / min(sample_count, minibatch_size)`; the statistic persists for
-the life of the estimator. Radial fitness is a linear ramp from `1` at radial RMS `0` to `0` at radial RMS `0.1`.
+matrix rank-deficient and scores near zero, so partial-arc caches cannot inflate coverage. Physical radial fitness is
+the mean square of $\|A (x_i - b)\| - 1$ recomputed over every retained row with the current working candidate on
+each quality update, sharing the same $O(N)$ cache rescan as coverage; like coverage, the statistic is strictly
+bounded by the retained cache and never outlives the rows that produced it. Radial fitness is a linear ramp from `1`
+at radial RMS `0` to `0` at radial RMS `0.1`.
 
-Gravity fitness applies the same running statistic and update weight to the optimizer's gravity-projection residual
-$\psi(u, g)^T \theta - \kappa$ of each valid current sample that carries a valid gravity direction, and ramps linearly
-from `1` at the `0.1` RMS floor to `0` at the `0.3` ceiling. The floor absorbs the surrogate's known anisotropic
+Gravity fitness likewise recomputes the mean square of the gravity-projection residual
+$\psi(u_i, g_i)^T \theta - \kappa$ over the retained rows that carry a valid gravity direction, and ramps linearly
+from `1` at the `0.1` RMS floor to `0` at the `0.35` ceiling (the cache-wide mean square rides slightly above the
+trailing-window estimate the original `0.3` ceiling was tuned against). The floor absorbs the surrogate's known
+anisotropic
 soft-iron bias: even a perfect fit keeps an irreducible residual, and it must not drag down a good calibration. A
-missing or unusable gravity statistic maps to a neutral `1` rather than `0`: gravity is optional, so an absent or
-disabled (`gravity_weight(0)`) gravity term never penalizes a magnetometer-only calibration, unlike the mandatory
-radial statistic whose absence scores `0`.
+missing statistic — gravity disabled (`gravity_weight(0)`), uninitialized, or carried by no retained row — maps to a
+neutral `1` rather than `0`: gravity is optional, so an absent or disabled gravity term never penalizes a
+magnetometer-only calibration, unlike the mandatory radial statistic whose absence scores `0`.
 
 Live fitness is the product of the radial and gravity factors, and live confidence is coverage times fitness, clamped
 to $[0, 1]$. `MagCalibrationResult` reports every factor: `confidence`, `coverage`, `fitness`, `radial_fitness`, and
@@ -261,14 +264,14 @@ For a minibatch of size $|B|$:
 - online fitting is $O(10\, |B|)$;
 - cold-start replay adds $O(10\, p\, B_r)$ for $p$ ramped replay updates of size $B_r$, only until first publication;
 - candidate conversion uses fixed $3 \times 3$ operations;
-- normalization and live-quality maintenance use fixed-size raw moments and are $O(1)$ in $N$;
-- coverage is one $O(N)$ Gram-matrix accumulation plus one $9 \times 9$ symmetric eigendecomposition per quality
-  update;
+- normalization uses fixed-size raw moments and is $O(1)$ in $N$;
+- coverage and fitness are one $O(N)$ pass over the retained rows (Gram-matrix accumulation plus residual mean
+  squares) and one $9 \times 9$ symmetric eigendecomposition per quality update;
 - diversity maintenance is expected $O(N)$ for a full cache;
 - persistent online-optimizer, moment, and quality state is $O(1)$ in $N$.
 
-The call remains $O(N)$ overall because sample diversity is linear; the coverage scan shares that budget and stores no
-per-row state of its own.
+The call remains $O(N)$ overall because sample diversity is linear; the coverage and fitness scans share that budget
+and store no per-row state of their own.
 
 ### Diversity neighbor cache
 
@@ -279,9 +282,11 @@ selection operates on squared values and takes square roots only for selected ne
 
 ### Known adaptation limitation
 
-Online parameters retain historical gradient influence after a row is replaced or expires, and nothing removes that
-contribution. The backlog tracks explicit replay or forgetting work needed before sample lifespan can be interpreted
-as a strict optimizer-history bound.
+Fitness and coverage are recomputed from the retained rows on every quality update, so `max_sample_lifespan_us`
+strictly bounds their history. Only the online-optimizer parameters, including the learned gravity projection
+$\kappa$, retain historical gradient influence after a row is replaced or expires, diluting through the floored
+learning rate; that residual history is non-strict by design. The backlog tracks explicit replay or forgetting work
+needed before sample lifespan can be interpreted as a strict optimizer-history bound.
 
 ### Calibration validation
 

@@ -23,9 +23,13 @@ const GRAVITY_RMS_FLOOR: f32 = 0.1;
 /// Gravity-projection RMS residual at which the gravity fitness reaches 0,
 /// ramping linearly down from 1 at `GRAVITY_RMS_FLOOR`. Residuals live in
 /// normalized ellipsoid-equation units; both constants are calibrated
-/// against the synthetic consistent/contradictory gravity test (steady-state
-/// RMS ~0.14 consistent, ~0.25 contradictory) pending benchmark validation.
-const MAX_GRAVITY_RMS: f32 = 0.3;
+/// against the synthetic consistent/contradictory gravity test. The
+/// statistic is the mean square over the whole retained cache, whose
+/// steady-state consistent-fit RMS sits above the trailing-window estimate
+/// the original 0.3 ceiling was tuned against, so the ceiling is raised to
+/// 0.35 to keep the same factor for the same physical fit quality
+/// (SimMotion regression-validated).
+const MAX_GRAVITY_RMS: f32 = 0.35;
 /// Confidence required for a working candidate to advance the publication
 /// streak. This is the highest tested threshold at which every fixed SimMotion
 /// regression seed completes the 2000-evaluation budget; the rank-deficient
@@ -144,12 +148,13 @@ pub struct CalibrationQuality {
     /// `radial_fitness * gravity_fitness`.
     pub fitness: f32,
     /// Radial fitness sub-factor in `[0, 1]`: the bounded fit of the
-    /// working correction over recent valid samples.
+    /// working correction over the retained cache rows.
     pub radial_fitness: f32,
-    /// Gravity-consistency fitness sub-factor in `[0, 1]`: the bounded
-    /// running fit of the gravity-projection surrogate. `1.0` while no
-    /// valid gravity direction has been seen or the gravity term is
-    /// disabled, so a magnetometer-only stream is never penalized.
+    /// Gravity-consistency fitness sub-factor in `[0, 1]`: the bounded fit
+    /// of the gravity-projection surrogate over the retained rows carrying
+    /// a gravity direction. `1.0` while no retained row carries gravity or
+    /// the gravity term is disabled, so a magnetometer-only stream is never
+    /// penalized.
     pub gravity_fitness: f32,
 }
 
@@ -209,7 +214,9 @@ impl MagCalibrationResult {
 }
 
 /// Online regularized ellipsoid fit for a hard-iron offset and full SPD
-/// soft-iron correction from a fixed, diverse sample buffer.
+/// soft-iron correction from a fixed, diverse sample buffer. Live quality
+/// factors are recomputed from the retained rows on each quality update, so
+/// only the online-optimizer parameters carry history beyond the cache.
 pub struct MagCalibrator<const N: usize> {
     sample_matrix: SMatrix<f32, N, 3>,
     gravity_directions: [Option<Vector3<f32>>; N],
@@ -245,8 +252,6 @@ pub struct MagCalibrator<const N: usize> {
     optimizer_steps: u64,
     raw_sample_sum: Vector3<f64>,
     raw_outer_product_sum: Matrix3<f64>,
-    radial_residual_mean_square: Option<f32>,
-    gravity_residual_mean_square: Option<f32>,
     quality: CalibrationQuality,
     publication_quality_streak: usize,
 }
@@ -280,8 +285,6 @@ impl<const N: usize> Default for MagCalibrator<N> {
             optimizer_steps: 0,
             raw_sample_sum: Vector3::zeros(),
             raw_outer_product_sum: Matrix3::zeros(),
-            radial_residual_mean_square: None,
-            gravity_residual_mean_square: None,
             quality: CalibrationQuality::ZERO,
             publication_quality_streak: 0,
         }
@@ -305,17 +308,14 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Configure the maximum time a sample remains in the calibration buffer,
     /// in microseconds. The default is one hour.
+    ///
+    /// Expiry strictly bounds cache membership and the live quality history:
+    /// coverage and both fitness statistics are recomputed from the retained
+    /// rows on every quality update. Only the online-optimizer parameter
+    /// history outlives the rows that produced it, diluting through the
+    /// floored learning rate (see "Known adaptation limitation" in the fusion
+    /// `AGENTS.md`).
     pub fn max_sample_lifespan_us(self, max_sample_lifespan_us: u64) -> Self {
-        // TODO: cache_derived_fitness_statistics
-        // The radial and gravity fitness running mean squares never expire:
-        // they keep describing removed rows after expiry or replacement. The
-        // online-optimizer parameter history dilutes through the floored
-        // learning rate and stays non-strict by design, but the persisted
-        // fitness statistics keep `max_sample_lifespan_us` from strictly
-        // bounding the estimator's live-quality history.
-        // Recommended fix: recompute both fitness statistics from the
-        // retained cache with the current working candidate on every quality
-        // update, mirroring coverage.
         Self {
             max_sample_lifespan_us,
             ..self
@@ -944,10 +944,7 @@ impl<const N: usize> MagCalibrator<N> {
                 .filter(|direction| direction.iter().all(|value| value.is_finite()))
         });
         let valid_current_sample = self.ingest_sample(mag_sample, gravity_direction, timestamp_us);
-        self.update_publication(
-            valid_current_sample.then_some(mag_sample),
-            gravity_direction,
-        );
+        self.update_publication(valid_current_sample);
     }
 
     /// Updates the cache and online optimizer, returning whether the current
@@ -1212,13 +1209,8 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    fn update_publication(
-        &mut self,
-        current_sample: Option<Vector3<f32>>,
-        current_gravity: Option<Vector3<f32>>,
-    ) {
-        let current_sample_valid = current_sample.is_some();
-        let candidate = self.update_quality(current_sample, current_gravity);
+    fn update_publication(&mut self, current_sample_valid: bool) {
+        let candidate = self.update_quality();
         if !current_sample_valid || candidate.is_none() {
             // Invalid observations and unusable candidates always reset the
             // streak: they are evidence against publishing, not jitter.
@@ -1306,27 +1298,10 @@ impl<const N: usize> MagCalibrator<N> {
         Ok(CalibrationCandidate { offset, correction })
     }
 
-    fn update_running_mean_square(
-        current: Option<f32>,
-        residual_squared: f32,
-        update_weight: f32,
-    ) -> Option<f32> {
-        if !residual_squared.is_finite()
-            || residual_squared < 0.0
-            || !update_weight.is_finite()
-            || !(0.0..=1.0).contains(&update_weight)
-            || update_weight == 0.0
-        {
-            return None;
-        }
-        let current = current.unwrap_or(0.0);
-        if !current.is_finite() || current < 0.0 {
-            return None;
-        }
-        let updated = current + update_weight * (residual_squared - current);
-        updated.is_finite().then_some(updated.max(0.0))
-    }
-
+    /// Radial fitness in `[0, 1]`: a linear ramp from 1 at zero RMS to 0 at
+    /// `MAX_RADIAL_RMS`, applied to the mean square radial residual
+    /// `||A (x_i - b)|| - 1` recomputed over the retained rows with the
+    /// current candidate. A missing or unusable statistic scores 0.
     fn radial_fitness_score(mean_square: Option<f32>) -> f32 {
         match mean_square {
             Some(mean_square) if mean_square.is_finite() && mean_square >= 0.0 => {
@@ -1338,14 +1313,14 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Gravity fitness in `[0, 1]`: a linear ramp from 1 at the
     /// `GRAVITY_RMS_FLOOR` residual to 0 at `MAX_GRAVITY_RMS`, applied to
-    /// the running mean square of the gravity-projection residual
-    /// `psi^T theta - kappa`. Unlike the radial score, a missing
-    /// statistic maps to a neutral 1: gravity is optional, so an absent or
-    /// disabled gravity term must never penalize a magnetometer-only
-    /// calibration. The residual measures constancy of the ellipsoid-normal
-    /// projection, which matches the corrected-direction dot product only
-    /// for isotropic correction; the score inherits the surrogate's
-    /// anisotropic soft-iron bias.
+    /// the mean square gravity-projection residual `psi^T theta - kappa`
+    /// recomputed over the retained rows carrying a gravity direction.
+    /// Unlike the radial score, a missing statistic maps to a neutral 1:
+    /// gravity is optional, so an absent or disabled gravity term must
+    /// never penalize a magnetometer-only calibration. The residual
+    /// measures constancy of the ellipsoid-normal projection, which matches
+    /// the corrected-direction dot product only for isotropic correction;
+    /// the score inherits the surrogate's anisotropic soft-iron bias.
     fn gravity_fitness_score(mean_square: Option<f32>) -> f32 {
         match mean_square {
             Some(mean_square) if mean_square.is_finite() && mean_square >= 0.0 => {
@@ -1356,22 +1331,20 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    /// Updates the live radial and gravity statistics and quality for the
-    /// current working candidate. Normalization uses the maintained raw
-    /// moments; the coverage score rescans the retained rows.
+    /// Updates the live quality of the current working candidate.
+    /// Normalization uses the maintained raw moments; coverage and both
+    /// fitness statistics rescan the retained rows, so an expired or
+    /// replaced row stops contributing to the reported quality immediately.
     ///
     /// FIXME: the Air 1 replay shows block-long post-warm-up radial-fitness
-    /// dips to zero even though the running statistic persists (it is never
-    /// wiped) and grows smoothly through each dip. Working state is never
-    /// rebased or reset, so the dips are genuine working-candidate
-    /// degradation on certain trace segments, not a normalization-lifecycle
-    /// artifact. Investigate why the online candidate degrades there instead
-    /// of converging.
-    fn update_quality(
-        &mut self,
-        current_sample: Option<Vector3<f32>>,
-        current_gravity: Option<Vector3<f32>>,
-    ) -> Option<CalibrationCandidate> {
+    /// dips to zero even though the statistic is recomputed from the
+    /// retained rows on every quality update and rows only leave the cache
+    /// through expiry or replacement. Working state is never rebased or
+    /// reset, so the dips are genuine working-candidate degradation over
+    /// the retained rows on certain trace segments, not a statistic- or
+    /// normalization-lifecycle artifact. Investigate why the online
+    /// candidate degrades there instead of converging.
+    fn update_quality(&mut self) -> Option<CalibrationCandidate> {
         if self.sample_row_count < CALIBRATION_PARAMETER_COUNT {
             self.quality = CalibrationQuality::ZERO;
             return None;
@@ -1383,40 +1356,47 @@ impl<const N: usize> MagCalibrator<N> {
                 return None;
             }
         };
-        if let Some(sample) = current_sample {
-            let residual = (candidate.correction * (sample - candidate.offset)).norm() - 1.0;
-            let residual_squared = residual * residual;
-            let update_weight = 1.0 / self.sample_row_count.min(self.minibatch_size).max(1) as f32;
-            let Some(mean_square) = Self::update_running_mean_square(
-                self.radial_residual_mean_square,
-                residual_squared,
-                update_weight,
-            ) else {
-                self.radial_residual_mean_square = None;
-                self.quality = CalibrationQuality::ZERO;
-                return None;
-            };
-            self.radial_residual_mean_square = Some(mean_square);
-            if let Some(gravity) = current_gravity
-                .filter(|_| self.gravity_projection_initialized && self.gravity_weight > 0.0)
-            {
-                let residual = Self::gravity_features(self.normalized_sample(sample), gravity)
-                    .dot(&self.parameters)
-                    - self.gravity_projection;
-                // Gravity is optional: a failed update keeps the previous
-                // statistic instead of zeroing the live quality.
-                if let Some(mean_square) = Self::update_running_mean_square(
-                    self.gravity_residual_mean_square,
-                    residual * residual,
-                    update_weight,
-                ) {
-                    self.gravity_residual_mean_square = Some(mean_square);
+        // Radial fitness: mean square of the corrected-radius residual over
+        // every retained row, in fixed ascending row order so the result is
+        // bit-deterministic. A non-finite accumulation marks the statistic
+        // unusable, matching the zero-quality path above.
+        let mut radial_square_sum = 0.0f32;
+        for row in 0..self.sample_row_count {
+            let residual =
+                (candidate.correction * (self.sample(row) - candidate.offset)).norm() - 1.0;
+            radial_square_sum += residual * residual;
+        }
+        let radial_mean_square = radial_square_sum / self.sample_row_count as f32;
+        if !radial_mean_square.is_finite() {
+            self.quality = CalibrationQuality::ZERO;
+            return None;
+        }
+        // Gravity fitness: mean square of the projection residual over the
+        // retained rows that carry a gravity direction. The statistic stays
+        // absent (neutral 1 below) when gravity is disabled, uninitialized,
+        // or carried by no retained row.
+        let mut gravity_square_sum = 0.0f32;
+        let mut gravity_count = 0usize;
+        let gravity_mean_square = if self.gravity_projection_initialized
+            && self.gravity_weight > 0.0
+        {
+            for row in 0..self.sample_row_count {
+                if let Some(gravity) = self.gravity_directions[row] {
+                    let residual =
+                        Self::gravity_features(self.normalized_sample(self.sample(row)), gravity)
+                            .dot(&self.parameters)
+                            - self.gravity_projection;
+                    gravity_square_sum += residual * residual;
+                    gravity_count += 1;
                 }
             }
-        }
+            (gravity_count > 0).then_some(gravity_square_sum / gravity_count as f32)
+        } else {
+            None
+        };
         let coverage = self.mean_centered_coverage();
-        let radial_fitness = Self::radial_fitness_score(self.radial_residual_mean_square);
-        let gravity_fitness = Self::gravity_fitness_score(self.gravity_residual_mean_square);
+        let radial_fitness = Self::radial_fitness_score(Some(radial_mean_square));
+        let gravity_fitness = Self::gravity_fitness_score(gravity_mean_square);
         self.quality = CalibrationQuality::new(coverage, radial_fitness, gravity_fitness);
         Some(candidate)
     }
