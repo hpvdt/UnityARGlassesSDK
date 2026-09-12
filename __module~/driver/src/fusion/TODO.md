@@ -14,13 +14,13 @@
   - **Summary:** Candidate and victim diversity scores currently use different neighbor pools.
   - **Position:** `src/fusion/mag_calibrator.rs (candidate_score_includes_replaced_victim)`
   - **Unit test:** `src/fusion/mag_calibrator_test.rs (mag_calibrator_candidate_score_includes_replaced_victim)`
-- [ ]  Make live fitness statistics cache-derived and lifespan-aware
+- [x]  Make live fitness statistics cache-derived and lifespan-aware
 
-  - **Summary:** The radial and gravity fitness statistics never expire: their running mean squares keep describing
-    removed rows after expiry or replacement (pinned byte-for-byte by the expiry regression). Recompute both from
-    the retained cache with the current working candidate on each quality update, mirroring coverage, so that
-    `max_sample_lifespan_us` strictly bounds fitness history. Optimizer history in the online parameters and the
-    gravity projection dilutes through the floored learning rate and stays non-strict by design.
+  - **Summary:** The radial and gravity fitness statistics never expired: their running mean squares kept describing
+    removed rows after expiry or replacement (pinned byte-for-byte by the expiry regression). Both are now
+    recomputed from the retained cache with the current working candidate on each quality update, mirroring
+    coverage, so `max_sample_lifespan_us` strictly bounds fitness history. Optimizer history in the online
+    parameters and the gravity projection dilutes through the floored learning rate and stays non-strict by design.
   - **Position:** `src/fusion/mag_calibrator.rs (cache_derived_fitness_statistics)`
-  - **Unit test:** `src/fusion/mag_calibrator_test.rs (mag_calibrator_online_history_outlives_sample_lifespan,`
-    rewritten, plus a new partial-expiry sequence-equivalence test)
+  - **Unit test:** `src/fusion/mag_calibrator_test.rs (mag_calibrator_fitness_recovers_after_full_expiry,`
+    `mag_calibrator_fitness_depends_only_on_retained_rows)`

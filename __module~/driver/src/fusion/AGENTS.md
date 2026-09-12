@@ -235,8 +235,8 @@ Gravity fitness likewise recomputes the mean square of the gravity-projection re
 $\psi(u_i, g_i)^T \theta - \kappa$ over the retained rows that carry a valid gravity direction, and ramps linearly
 from `1` at the `0.1` RMS floor to `0` at the `0.35` ceiling (the cache-wide mean square rides slightly above the
 trailing-window estimate the original `0.3` ceiling was tuned against). The floor absorbs the surrogate's known
-anisotropic
-soft-iron bias: even a perfect fit keeps an irreducible residual, and it must not drag down a good calibration. A
+anisotropic soft-iron bias: even a perfect fit keeps an irreducible residual, and it must not drag down a good
+calibration. A
 missing statistic — gravity disabled (`gravity_weight(0)`), uninitialized, or carried by no retained row — maps to a
 neutral `1` rather than `0`: gravity is optional, so an absent or disabled gravity term never penalizes a
 magnetometer-only calibration, unlike the mandatory radial statistic whose absence scores `0`.
@@ -296,8 +296,8 @@ distortion, degenerate samples, stable repeated correction, and last-known-good 
 from `__module~/driver`:
 
 ```bash
-cargo test --package ar-drivers --no-default-features --lib fusion::mag_calibrator_test
-cargo test --package ar-drivers --no-default-features --lib fusion::naive_cf_test
+cargo test --package ar-drivers --no-default-features --lib fusion::mag_calibrator::mag_calibrator_test
+cargo test --package ar-drivers --no-default-features --lib fusion::naive_cf::naive_cf_test
 cargo test --package ar-drivers --no-default-features --test mag_calibrator_sim_motion regression -- --nocapture
 ```
 
