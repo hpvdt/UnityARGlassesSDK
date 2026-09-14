@@ -48,18 +48,19 @@ pub(super) const MIN_PUBLICATION_STREAK: usize = 55;
 /// ellipsoid fit. A fully isotropic cache scores 1 against this reference.
 const COVERAGE_LAMBDA_REF: f32 = 2.0 / 15.0;
 const MIN_MAG_NORM: f32 = 0.4;
-/// Default weight of the ellipsoid-normal gravity surrogate. The surrogate
-/// pins `g_i^T A m_i` (with `A` the soft-iron correction) approximately
-/// constant instead of the exact magnetic dip `g_i^T m_i`; the two coincide
-/// only for isotropic soft iron, so strong anisotropic soft iron can bias the
-/// fit toward isotropy. The fixed-seed benchmark found that weight `0.1`
-/// regressed accuracy, while lowering the default to `0.01` recovered average
-/// post-warm-up accuracy to within `0.086 degree` of the direct gravity
-/// baseline. Validation must keep extending beyond the fixed simulator
-/// distortion (stronger anisotropy, rotated eigenvectors, inconsistent
-/// acceleration, multiple magnetic dip angles); lower or disable the surrogate
-/// through [`MagCalibrator::gravity_weight`] if such sweeps show a repeatable
-/// regression.
+// TODO: gravity_surrogate_anisotropy
+// The ellipsoid-normal gravity surrogate pins `g_i^T A m_i` (with `A` the
+// soft-iron correction) approximately constant instead of the exact magnetic
+// dip `g_i^T m_i`; the two coincide only for isotropic soft iron, so strong
+// anisotropic soft iron can bias the fit toward isotropy. The fixed-seed
+// benchmark found that weight `0.1` regressed accuracy, while lowering the
+// default to `0.01` recovered average post-warm-up accuracy to within
+// `0.086 degree` of the direct gravity baseline.
+// Recommended fix: keep extending validation beyond the fixed simulator
+// distortion (stronger anisotropy, rotated eigenvectors, inconsistent
+// acceleration, multiple magnetic dip angles); lower or disable the surrogate
+// through [`MagCalibrator::gravity_weight`] if such sweeps show a repeatable
+// regression.
 const DEFAULT_GRAVITY_WEIGHT: f32 = 0.01;
 const DEFAULT_MINIBATCH_SIZE: usize = 32;
 /// Cache-only replay updates run per valid sample while the calibration is
@@ -302,14 +303,15 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Configure the maximum time a sample remains in the calibration buffer,
     /// in microseconds. The default is one hour.
-    ///
-    /// Known adaptation limitation (see `AGENTS.md`): expiring or replacing a
-    /// row removes it from the cache but not its historical online-SGD
-    /// gradient contribution, so this bounds cache membership rather than the
-    /// optimizer's effective history. The backlog is an explicit forgetting
-    /// schedule or bounded replay-after-expiry, plus an adaptive hard-iron
-    /// drift case.
     pub fn max_sample_lifespan_us(self, max_sample_lifespan_us: u64) -> Self {
+        // TODO: online_history_outlives_sample_lifespan
+        // Expiring or replacing a row removes it from the cache but not its
+        // historical online-SGD gradient contribution, so this bounds cache
+        // membership rather than the optimizer's effective history.
+        // Recommended fix: reset and replay a bounded number of minibatches
+        // after expiry, or add an explicit forgetting schedule whose horizon
+        // is no longer than this lifespan, plus an adaptive hard-iron drift
+        // case.
         Self {
             max_sample_lifespan_us,
             ..self
@@ -1080,17 +1082,16 @@ impl<const N: usize> MagCalibrator<N> {
             // The candidate has no self-entry in the buffer, so its mean
             // distance covers the true k nearest buffered rows.
             //
-            // Known asymmetry (see TODO.md "Score replacement candidates in
-            // their post-replacement buffer"): the victim's diversity score
-            // (`replacement_mean_distance`) is its mean distance to its `k`
-            // nearest OTHER rows, because `replacement_row` excludes itself,
-            // so its pool is `N - 1` rows. The candidate below is instead
-            // scored against all `N` old rows, including the victim row it
-            // would replace, so its pool is `N` rows. A candidate close to
-            // the victim can therefore be wrongly rejected because the
-            // soon-to-be-evicted row lowers its nearest-neighbor score.
-            //
-            // Proposed fix (not implemented here): set
+            // TODO: candidate_score_includes_replaced_victim
+            // The victim's diversity score (`replacement_mean_distance`) is
+            // its mean distance to its `k` nearest OTHER rows, because
+            // `replacement_row` excludes itself, so its pool is `N - 1` rows.
+            // The candidate below is instead scored against all `N` old rows,
+            // including the victim row it would replace, so its pool is `N`
+            // rows. A candidate close to the victim can therefore be wrongly
+            // rejected because the soon-to-be-evicted row lowers its
+            // nearest-neighbor score.
+            // Recommended fix: set
             // `candidate_squared_distances[replacement_row] = f32::INFINITY`
             // before selecting the `k` nearest neighbors so both scores use
             // the same `N - 1` retained rows, and update the incremental
