@@ -226,10 +226,12 @@ be in a LaTeX math block (enclosed in a pair of `$` or `$$`).
 ### Symbols
 
 Every symbol used in the documentation (e.g. this guide, a `TODO.md`) and every symbolic variable name in the code
-must appear in this list. Add a new symbol here in the same change that introduces it; otherwise use the full name.
+must appear in the following list, with each entry containing the following information:
+- the meaning of the symbol.
+- (optional) the definitive equation that relate it to other symbols.
+- (if it is a vector, matrix or tensor) its dimensions
 
-You should avoid abusing one symbol to refer to different concepts. This includes symbols written in different
-alphabets (e.g. `\mu` in LaTeX math and `mu` in code should always refer to the same concept).
+Add a new symbol here in the same change that introduces it; otherwise use the full name.
 
 - **$A$:** Soft-iron correction matrix, $A = D^{-1}$.
 - **$B$:** Online-optimizer minibatch; $|B|$ is its observation count.
@@ -272,6 +274,9 @@ alphabets (e.g. `\mu` in LaTeX math and `mu` in code should always refer to the 
 - **$\mu$:** Cache sample mean.
 - **$\phi(u)$:** Ellipsoid-fit feature vector with cross-term weight $2$.
 - **$\varphi(u)$:** Direction-feature vector with cross-term weight $\sqrt{2}$.
+
+You should avoid abusing one symbol to refer to different concepts. This includes symbols written in different
+alphabets (e.g. `\mu` in LaTeX math and `mu` in code should always refer to the same concept).
 
 ### TODO.md Format
 
