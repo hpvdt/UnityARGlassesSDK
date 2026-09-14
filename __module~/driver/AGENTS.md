@@ -229,9 +229,10 @@ You should avoid abusing 1 symbol to refer to different concepts. This include s
 
 - Each issue is a `- [ ]` or `- [x]` checkbox followed by a short name & indented fields:
   - **Summary:** Short description.
-  - **Affected module:** e.g. `src/path/to/file.rs`
-  - **Severity:** e.g. High
-  - **Unit test:** Path of the failing unit test that reveals the issue.
+  - **Position:** Path of the block code comment that explains the issue, e.g. `src/path/to/file.rs (issue_summary)`. The block comment should have the following sections:
+    - always start with `TODO: issue_summary`.
+    - detailed explanation.
+    - recommended fix (if applicable).
+  - **Unit test:** Path of the failing unit test(s) that reveals the issue, e.g. `src/path/to/file.rs (issue_summary)`.
     - issue should always come with one or more unit tests
-    - detailed explanation and proposed fix should be in code comment
 - Keep items that are checked (`[x]`) only when the fix has already been merged; remove them on cleanup passes.
