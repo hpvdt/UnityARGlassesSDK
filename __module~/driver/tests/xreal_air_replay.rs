@@ -222,10 +222,6 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
     eprintln!("    - radial: {:.6}", min_confidence_radial);
     eprintln!("    - gravity: {:.6}", min_confidence_gravity);
     eprintln!("    - coverage: {:.6}", min_confidence_coverage);
-    eprintln!(
-        "  - post-warmup confidence range: {:.6}..={:.6}",
-        min_validation_confidence, max_validation_confidence,
-    );
 
     let mut longest_streak = 0usize;
     let mut current_streak = 0usize;
