@@ -140,7 +140,7 @@ struct CalibrationCandidate {
 pub struct CalibrationQuality {
     /// Current bounded calibration quality in `[0, 1]`: the clamped product
     /// of `coverage` and `fitness`.
-    pub confidence: f32,
+    pub confidence: f32, // FIXME: there is no need to sav confidence and fitness in this struct, they can be computed in its impl
     /// Directional coverage factor of the confidence in `[0, 1]`: the
     /// E-optimality score of the retained mean-centered unit directions.
     pub coverage: f32,
