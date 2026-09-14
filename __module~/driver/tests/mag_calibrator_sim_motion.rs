@@ -145,7 +145,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
             |_| (fusion.magCalibrator.get_confidence(), 0.0, 0.0, 0.0),
             |result| {
                 (
-                    result.confidence,
+                    result.confidence(),
                     result.radial_fitness,
                     result.gravity_fitness,
                     result.coverage,

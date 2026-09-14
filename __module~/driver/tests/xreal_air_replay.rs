@@ -105,11 +105,11 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
                     });
                 eval_time += eval_start.elapsed();
                 eval_count += 1;
-                confidence_sum += f64::from(quality.confidence);
+                confidence_sum += f64::from(quality.confidence());
 
                 if direction.is_some() && first_success_count.is_none() {
                     first_success_count = Some(eval_count);
-                    first_success_confidence = Some(quality.confidence);
+                    first_success_confidence = Some(quality.confidence());
                     first_calibrated_timestamp = Some(timestamp);
                 }
                 if first_success_count.is_some() {
@@ -127,18 +127,18 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
                     warmup_count = Some(eval_count - first_success_count.unwrap());
                 }
 
-                validation_confidence_sum += f64::from(quality.confidence);
+                validation_confidence_sum += f64::from(quality.confidence());
                 validation_confidence_count += 1;
                 validation_radial_sum += f64::from(quality.radial_fitness);
                 validation_gravity_sum += f64::from(quality.gravity_fitness);
                 validation_coverage_sum += f64::from(quality.coverage);
-                if quality.confidence < min_validation_confidence {
-                    min_validation_confidence = quality.confidence;
+                if quality.confidence() < min_validation_confidence {
+                    min_validation_confidence = quality.confidence();
                     min_confidence_radial = quality.radial_fitness;
                     min_confidence_gravity = quality.gravity_fitness;
                     min_confidence_coverage = quality.coverage;
                 }
-                max_validation_confidence = max_validation_confidence.max(quality.confidence);
+                max_validation_confidence = max_validation_confidence.max(quality.confidence());
                 tail_samples.push((timestamp, quality.radial_fitness, quality.gravity_fitness));
             }
             _ => {}

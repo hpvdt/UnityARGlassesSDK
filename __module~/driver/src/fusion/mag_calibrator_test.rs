@@ -2,8 +2,8 @@ use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
 use super::super::BadMagCause;
 use super::{
-    CalibrationQuality, CoverageGramMatrix, MagCalibrationResult, MagCalibrator,
-    MIN_PUBLICATION_CONFIDENCE, MIN_PUBLICATION_STREAK,
+    CoverageGramMatrix, MagCalibrationResult, MagCalibrator, MIN_PUBLICATION_CONFIDENCE,
+    MIN_PUBLICATION_STREAK,
 };
 
 impl<const N: usize> MagCalibrator<N> {
@@ -240,12 +240,9 @@ fn mag_calibrator_stays_pending_with_underconstrained_or_degenerate_data() {
     assert!(matches!(
         single,
         Ok(MagCalibrationResult {
-            quality: CalibrationQuality {
-                confidence: 0.0,
-                ..
-            },
+            quality,
             direction: None,
-        })
+        }) if quality.confidence() == 0.0
     ));
     let result = (1..9)
         .map(|timestamp_us| calibrator.evaluate_correct(sample, None, timestamp_us))
@@ -255,12 +252,9 @@ fn mag_calibrator_stays_pending_with_underconstrained_or_degenerate_data() {
     assert!(matches!(
         result,
         Ok(MagCalibrationResult {
-            quality: CalibrationQuality {
-                confidence: 0.0,
-                ..
-            },
+            quality,
             direction: None,
-        })
+        }) if quality.confidence() == 0.0
     ));
     assert_eq!(calibrator.get_confidence(), 0.0);
 }
@@ -277,7 +271,7 @@ fn mag_calibrator_publishes_before_the_buffer_is_full() {
         let result = calibrator
             .evaluate_correct(offset + distortion * direction, None, i as u64)
             .unwrap();
-        if result.confidence >= MIN_PUBLICATION_CONFIDENCE {
+        if result.confidence() >= MIN_PUBLICATION_CONFIDENCE {
             qualifying_streak += 1;
         } else {
             qualifying_streak = 0;
@@ -333,12 +327,9 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
     assert!(matches!(
         result.unwrap(),
         Ok(MagCalibrationResult {
-            quality: CalibrationQuality {
-                confidence: 0.0,
-                ..
-            },
+            quality,
             direction: None,
-        })
+        }) if quality.confidence() == 0.0
     ));
 }
 
@@ -356,7 +347,7 @@ fn mag_calibrator_keeps_last_correction_after_rejected_refit() {
     }
 
     let result = result.unwrap().unwrap();
-    assert_eq!(result.confidence, 0.0);
+    assert_eq!(result.confidence(), 0.0);
     assert_vec_close(
         result
             .direction
@@ -384,7 +375,7 @@ fn mag_calibrator_fitness_recovers_after_full_expiry() {
     // last published correction stays in use even though live confidence
     // collapses.
     let result = calibrator.evaluate_correct(raw, None, 1).unwrap();
-    assert_eq!(result.confidence, 0.0);
+    assert_eq!(result.confidence(), 0.0);
     assert_vec_close(
         result
             .direction
@@ -400,7 +391,7 @@ fn mag_calibrator_fitness_recovers_after_full_expiry() {
         let raw = offset + distortion * sample_direction(i, 63);
         let result = calibrator.evaluate_correct(raw, None, 1).unwrap();
         assert_eq!(
-            result.confidence,
+            result.confidence(),
             0.0,
             "fresh row {} escaped pending",
             i + 2
@@ -427,7 +418,7 @@ fn mag_calibrator_fitness_recovers_after_full_expiry() {
     // No gravity direction was ever supplied, so the gravity factor stays
     // neutral.
     assert_eq!(result.gravity_fitness, 1.0);
-    assert_eq!(result.fitness, result.radial_fitness);
+    assert_eq!(result.fitness(), result.radial_fitness);
 }
 
 #[test]
@@ -676,12 +667,9 @@ fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
         assert!(matches!(
             result,
             Ok(MagCalibrationResult {
-                quality: CalibrationQuality {
-                    confidence: 0.0,
-                    ..
-                },
+                quality,
                 direction: None,
-            })
+            }) if quality.confidence() == 0.0
         ));
     }
 }
@@ -702,12 +690,9 @@ fn mag_calibrator_defaults_sample_lifespan_to_one_hour() {
     assert!(matches!(
         result,
         MagCalibrationResult {
-            quality: CalibrationQuality {
-                confidence: 0.0,
-                ..
-            },
+            quality,
             direction: Some(_),
-        }
+        } if quality.confidence() == 0.0
     ));
 }
 
@@ -723,12 +708,9 @@ fn mag_calibrator_uses_configured_sample_lifespan() {
     assert!(matches!(
         result,
         MagCalibrationResult {
-            quality: CalibrationQuality {
-                confidence: 0.0,
-                ..
-            },
+            quality,
             direction: Some(_),
-        }
+        } if quality.confidence() == 0.0
     ));
 }
 
@@ -1089,10 +1071,10 @@ fn mag_calibrator_reports_confidence_factors() {
     }
     let plain = plain_result.unwrap();
     assert_eq!(plain.gravity_fitness, 1.0);
-    assert_eq!(plain.fitness, plain.radial_fitness);
+    assert_eq!(plain.fitness(), plain.radial_fitness);
     assert_eq!(
-        plain.confidence,
-        (plain.coverage * plain.fitness).clamp(0.0, 1.0)
+        plain.confidence(),
+        (plain.coverage * plain.fitness()).clamp(0.0, 1.0)
     );
 
     // With a consistent co-rotating gravity direction the gravity factor is
@@ -1135,12 +1117,12 @@ fn mag_calibrator_reports_confidence_factors() {
         refined.gravity_fitness
     );
     assert_eq!(
-        refined.fitness,
+        refined.fitness(),
         refined.radial_fitness * refined.gravity_fitness
     );
     assert_eq!(
-        refined.confidence,
-        (refined.coverage * refined.fitness).clamp(0.0, 1.0)
+        refined.confidence(),
+        (refined.coverage * refined.fitness()).clamp(0.0, 1.0)
     );
     assert!(
         opposed.gravity_fitness < refined.gravity_fitness,

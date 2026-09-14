@@ -133,20 +133,15 @@ struct CalibrationCandidate {
 }
 
 /// Live calibration quality factors of the current working candidate, all
-/// bounded in `[0, 1]`. Kept as one unit because they are stored as state,
-/// reset together, and reported together as the quality half of
-/// [`MagCalibrationResult`].
+/// bounded in `[0, 1]`. Only the sub-factors are stored as state, reset
+/// together, and reported together as the quality half of
+/// [`MagCalibrationResult`]; `fitness` and `confidence` are derived from
+/// them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CalibrationQuality {
-    /// Current bounded calibration quality in `[0, 1]`: the clamped product
-    /// of `coverage` and `fitness`.
-    pub confidence: f32, // FIXME: there is no need to sav confidence and fitness in this struct, they can be computed in its impl
     /// Directional coverage factor of the confidence in `[0, 1]`: the
     /// E-optimality score of the retained mean-centered unit directions.
     pub coverage: f32,
-    /// Combined fitness factor of the confidence in `[0, 1]`:
-    /// `radial_fitness * gravity_fitness`.
-    pub fitness: f32,
     /// Radial fitness sub-factor in `[0, 1]`: the bounded fit of the
     /// working correction over the retained cache rows.
     pub radial_fitness: f32,
@@ -160,26 +155,33 @@ pub struct CalibrationQuality {
 
 impl CalibrationQuality {
     const ZERO: Self = Self {
-        confidence: 0.0,
         coverage: 0.0,
-        fitness: 0.0,
         radial_fitness: 0.0,
         gravity_fitness: 0.0,
     };
 
     fn new(coverage: f32, radial_fitness: f32, gravity_fitness: f32) -> Self {
-        let fitness = radial_fitness * gravity_fitness;
-        let quality = coverage * fitness;
         Self {
-            confidence: if quality.is_finite() {
-                quality.clamp(0.0, 1.0)
-            } else {
-                0.0
-            },
             coverage,
-            fitness,
             radial_fitness,
             gravity_fitness,
+        }
+    }
+
+    /// Combined fitness factor of the confidence in `[0, 1]`:
+    /// `radial_fitness * gravity_fitness`.
+    pub fn fitness(&self) -> f32 {
+        self.radial_fitness * self.gravity_fitness
+    }
+
+    /// Current bounded calibration quality in `[0, 1]`: the clamped product
+    /// of `coverage` and `fitness`.
+    pub fn confidence(&self) -> f32 {
+        let quality = self.coverage * self.fitness();
+        if quality.is_finite() {
+            quality.clamp(0.0, 1.0)
+        } else {
+            0.0
         }
     }
 }
@@ -187,8 +189,8 @@ impl CalibrationQuality {
 /// Result of evaluating one FRD magnetometer observation.
 ///
 /// The quality factors are exposed directly through [`Deref`] to
-/// [`CalibrationQuality`], so `result.confidence` reads the same as
-/// `result.quality.confidence`.
+/// [`CalibrationQuality`], so `result.confidence()` reads the same as
+/// `result.quality.confidence()`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MagCalibrationResult {
     /// Live calibration quality factors of the current working candidate.
@@ -1178,7 +1180,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// previously published correction can remain available while this value
     /// is zero after a rejected later candidate.
     pub fn get_confidence(&self) -> f32 {
-        self.quality.confidence
+        self.quality.confidence()
     }
 
     /// Calibrates a magnetometer vector that has already been converted to FRD.
@@ -1215,9 +1217,9 @@ impl<const N: usize> MagCalibrator<N> {
             // Invalid observations and unusable candidates always reset the
             // streak: they are evidence against publishing, not jitter.
             self.publication_quality_streak = 0;
-        } else if self.quality.confidence >= MIN_PUBLICATION_CONFIDENCE {
+        } else if self.quality.confidence() >= MIN_PUBLICATION_CONFIDENCE {
             self.publication_quality_streak = self.publication_quality_streak.saturating_add(1);
-        } else if self.quality.confidence < PUBLICATION_STREAK_RESET_CONFIDENCE {
+        } else if self.quality.confidence() < PUBLICATION_STREAK_RESET_CONFIDENCE {
             // Only a genuine quality collapse restarts the streak; a short
             // dip in live quality while the optimizer absorbs newly visited
             // directions merely pauses it.
