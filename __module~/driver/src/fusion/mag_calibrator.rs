@@ -53,20 +53,20 @@ pub(super) const MIN_PUBLICATION_STREAK: usize = 55;
 /// cache scores 1 against this reference.
 const COVERAGE_LAMBDA_REF: f32 = 2.0 / 15.0;
 const MIN_MAG_NORM: f32 = 0.4;
-// TODO: gravity_surrogate_anisotropy
-// The ellipsoid-normal gravity surrogate pins `g_i^T A m_i` (with `A` the
-// soft-iron correction) approximately constant instead of the exact magnetic
-// dip `g_i^T m_i`; the two coincide only for isotropic soft iron, so strong
-// anisotropic soft iron can bias the fit toward isotropy. The fixed-seed
-// benchmark found that weight `0.1` regressed accuracy, while lowering the
-// default to `0.01` recovered average post-warm-up accuracy to within
-// `0.086 degree` of the direct gravity baseline.
-// Recommended fix: keep extending validation beyond the fixed simulator
-// distortion (stronger anisotropy, rotated eigenvectors, inconsistent
-// acceleration, multiple magnetic dip angles); lower or disable the surrogate
-// through [`MagCalibrator::gravity_weight`] if such sweeps show a repeatable
-// regression.
-const DEFAULT_GRAVITY_WEIGHT: f32 = 0.01;
+/// Default gravity-surrogate weight: disabled. The ellipsoid-normal gravity
+/// surrogate pins `g_i^T A m_i` (with `A` the soft-iron correction)
+/// approximately constant instead of the exact magnetic dip `g_i^T m_i`; the
+/// two coincide only for isotropic soft iron, so anisotropic soft iron biases
+/// the fit toward isotropy. Validation sweeps beyond the fixed simulator
+/// distortion — condition numbers up to 8, rotated eigenvectors, inconsistent
+/// acceleration, and dip angles from 12 to 83 degrees — found a repeatable
+/// accuracy regression under rotated-eigenvector soft iron at every tested
+/// nonzero weight (already +0.3 aggregate probe error at weight 0.003,
+/// growing with the weight), while the fixed-seed SimMotion benchmark at
+/// weight 0.01 differed from the disabled baseline by under 0.04 degree.
+/// Lowering the default therefore cannot remove the regression, so the
+/// surrogate ships disabled; [`MagCalibrator::gravity_weight`] opts back in.
+const DEFAULT_GRAVITY_WEIGHT: f32 = 0.0;
 const DEFAULT_MINIBATCH_SIZE: usize = 32;
 /// Cache-only replay updates run per valid sample while the calibration is
 /// still unpublished. They let the cold-start optimizer take several gradient
@@ -325,8 +325,10 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     /// Configure the relative weight of the gravity-consistency residual.
-    /// The default is 0.01; zero disables the ellipsoid-normal gravity
-    /// surrogate.
+    /// The default is 0: the ellipsoid-normal gravity surrogate is disabled
+    /// because its anisotropic soft-iron bias regresses accuracy under
+    /// rotated-eigenvector distortion (see `DEFAULT_GRAVITY_WEIGHT`). A
+    /// positive weight opts back in.
     pub fn gravity_weight(self, gravity_weight: f32) -> Self {
         Self {
             gravity_weight: if gravity_weight.is_finite() {

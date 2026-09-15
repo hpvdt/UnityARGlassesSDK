@@ -430,8 +430,12 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
 
     // Calibrator A ingests an early batch whose older rows then expire
     // (lifespan 100 us, final batch timestamp 153 keeps exactly the rows
-    // with timestamp >= 53), followed by a fresh batch.
-    let mut lifespan_a = MagCalibrator::<63>::new().max_sample_lifespan_us(100);
+    // with timestamp >= 53), followed by a fresh batch. The surrogate is
+    // disabled by default; both calibrators opt in explicitly so the
+    // gravity-projection statistic stays live.
+    let mut lifespan_a = MagCalibrator::<63>::new()
+        .max_sample_lifespan_us(100)
+        .gravity_weight(0.01);
     for timestamp_us in 50..=59 {
         let index = timestamp_us as usize - 50;
         lifespan_a.evaluate_sample_vec(sample(index), Some(gravity(index)), timestamp_us);
@@ -445,7 +449,9 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
     // order. Its optimizer history differs from A's (B never saw the
     // expired prefix), which is the non-strict-by-design part; only the
     // caches and the cache-derived fitness semantics are pinned here.
-    let mut survivors_only = MagCalibrator::<63>::new().max_sample_lifespan_us(100);
+    let mut survivors_only = MagCalibrator::<63>::new()
+        .max_sample_lifespan_us(100)
+        .gravity_weight(0.01);
     for timestamp_us in 53..=59 {
         let index = timestamp_us as usize - 50;
         survivors_only.evaluate_sample_vec(sample(index), Some(gravity(index)), timestamp_us);
@@ -721,7 +727,8 @@ fn mag_calibrator_improves_with_consistent_gravity() {
     let world_mag = Vector3::new(0.8, 0.1, 0.5).normalize();
     let world_gravity = Vector3::z();
     let mut plain = MagCalibrator::<63>::new();
-    let mut gravity_refined = MagCalibrator::<63>::new();
+    // The surrogate is disabled by default; opt in explicitly to exercise it.
+    let mut gravity_refined = MagCalibrator::<63>::new().gravity_weight(0.01);
 
     for i in 0..63 {
         let attitude = UnitQuaternion::from_euler_angles(
@@ -811,7 +818,10 @@ fn mag_calibrator_gravity_surrogate_survives_strong_anisotropy() {
     for distortion in distortions {
         for (world_mag, world_gravity) in dip_cases {
             let mut plain = MagCalibrator::<63>::new();
-            let mut gravity_refined = MagCalibrator::<63>::new();
+            // The surrogate is disabled by default; this sweep opts into the
+            // highest weight whose SimMotion benchmark matched the disabled
+            // baseline, to keep characterizing its anisotropy bias.
+            let mut gravity_refined = MagCalibrator::<63>::new().gravity_weight(0.01);
             for i in 0..16 * 63 {
                 let j = i % 63;
                 let attitude = UnitQuaternion::from_euler_angles(
@@ -849,14 +859,17 @@ fn mag_calibrator_gravity_surrogate_survives_strong_anisotropy() {
         }
     }
 
-    // At the shipped default weight (`0.01`) the gravity surrogate must not
-    // regress the aggregate accuracy by more than a small, bounded amount.
     // The ellipsoid-normal surrogate pins `g_i^T A m_i` rather than the exact
-    // dip `g_i^T m_i`, so rotated full-SPD soft iron can bias the fit toward
-    // isotropy; the isotropic-axis cases still improve and the net regression
-    // summed over all nine cases stays under this tolerance, far below the
-    // repeatable regression that weight `0.1` produced in the fixed-seed
-    // benchmark. Kept as an open issue rather than treated as fixed.
+    // dip `g_i^T m_i`, so rotated full-SPD soft iron biases the fit toward
+    // isotropy. Validation found that bias repeatable: the rotated case above
+    // regresses on every dip angle at every tested nonzero weight (already
+    // +0.3 aggregate probe error at weight `0.003`), while axis-aligned and
+    // isotropic cases improve. Lowering the weight therefore cannot remove
+    // the regression, so the default weight is 0 and this sweep runs at the
+    // opt-in weight `0.01` to keep the aggregate bias bounded for callers
+    // that enable the surrogate. The extended sweep behind this conclusion
+    // covered condition numbers up to 8, dip angles from 12 to 83 degrees,
+    // and inconsistent-acceleration gravity hints.
     let regression_tolerance = 0.2_f32;
     assert!(
         refined_total <= plain_total + regression_tolerance,
@@ -866,11 +879,40 @@ fn mag_calibrator_gravity_surrogate_survives_strong_anisotropy() {
 }
 
 #[test]
+fn mag_calibrator_disables_gravity_surrogate_by_default() {
+    // The validation sweep behind `DEFAULT_GRAVITY_WEIGHT` found a
+    // repeatable rotated-eigenvector regression at every tested nonzero
+    // weight, so the surrogate ships disabled: a default calibrator fed
+    // valid gravity hints must stay bit-identical to one fed none.
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let world_gravity = Vector3::z();
+    let mut plain = MagCalibrator::<63>::new();
+    let mut hinted = MagCalibrator::<63>::new();
+    for i in 0..17 * 63 {
+        let j = i % 63;
+        let attitude = UnitQuaternion::from_euler_angles(
+            0.25 * (j as f32 * 0.7).sin(),
+            0.35 * (j as f32 * 1.7).sin(),
+            j as f32 * 2.4,
+        );
+        let body_gravity = attitude.inverse() * world_gravity;
+        let raw = offset + distortion * sample_direction(j, 63);
+        assert_eq!(
+            plain.evaluate_correct(raw, None, i as u64),
+            hinted.evaluate_correct(raw, Some(body_gravity), i as u64)
+        );
+    }
+}
+
+#[test]
 fn mag_calibrator_ignores_invalid_gravity() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let mut plain = MagCalibrator::<12>::new();
-    let mut invalid = MagCalibrator::<12>::new();
+    // The surrogate is disabled by default; opt in explicitly so the test
+    // keeps exercising invalid-gravity filtering with an active gravity term.
+    let mut invalid = MagCalibrator::<12>::new().gravity_weight(0.01);
     for i in 0..12 {
         let raw = offset + distortion * sample_direction(i, 12);
         let _ = plain.evaluate_correct(raw, None, i as u64);
@@ -1084,8 +1126,9 @@ fn mag_calibrator_reports_confidence_factors() {
     // stays large, and the factor drops.
     let world_mag = Vector3::new(0.8, 0.1, 0.5).normalize();
     let world_gravity = Vector3::z();
-    let mut refined = MagCalibrator::<63>::new();
-    let mut opposed = MagCalibrator::<63>::new();
+    // The surrogate is disabled by default; opt in explicitly to exercise it.
+    let mut refined = MagCalibrator::<63>::new().gravity_weight(0.01);
+    let mut opposed = MagCalibrator::<63>::new().gravity_weight(0.01);
     let mut refined_result = None;
     let mut opposed_result = None;
     for i in 0..16 * 63 {

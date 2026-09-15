@@ -118,8 +118,8 @@ J_g = \frac{w_g}{2 n_g} \sum_i (\psi_i^T \theta - \kappa)^2.
 $$
 
 $J_r + J_g$ is convex and quadratic in $(\theta, \kappa)$; matrix square roots occur only during physical candidate
-conversion, not in the optimizer. Gravity is optional, defaults to weight `0.01`, and `gravity_weight(0)` removes this
-term.
+conversion, not in the optimizer. Gravity is optional and disabled by default (weight `0`); `gravity_weight(w)` with a
+positive `w` opts back in.
 
 This term is a physical surrogate rather than the exact magnetic dip. The model gives
 
@@ -128,8 +128,12 @@ Q\, (u_i - d) = \gamma\, r\, A\, m_i,
 $$
 
 so the surrogate keeps $g_i^T A m_i$ approximately constant instead of the exact $g_i^T m_i$. It is exact for isotropic
-correction and can be biased by anisotropic soft iron. Fixed-seed with-gravity integration results must therefore be
-compared with magnetometer-only results from the SimMotion regression test named under "Calibration validation".
+correction and biased by anisotropic soft iron. Validation sweeps beyond the fixed simulator distortion (condition
+numbers up to 8, rotated eigenvectors, inconsistent acceleration, dip angles from 12 to 83 degrees) found a repeatable
+accuracy regression under rotated-eigenvector soft iron at every tested nonzero weight, while the fixed-seed SimMotion
+benchmark at weight `0.01` differed from the disabled baseline by under 0.04 degrees; the surrogate therefore ships
+disabled. Any change to an opted-in weight must be validated the same way: compare fixed-seed with-gravity integration
+results against magnetometer-only results from the SimMotion regression test named under "Calibration validation".
 
 Gravity changes the shared $\theta$. Physical candidate conversion still uses only $\theta$; there is no second
 gravity-refined candidate and no relaxed radial-error allowance for gravity-assisted fits.
