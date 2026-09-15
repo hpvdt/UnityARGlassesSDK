@@ -227,53 +227,62 @@ be in a LaTeX math block (enclosed in a pair of `$` or `$$`).
 
 Every symbol used in the documentation (e.g. this guide, a `TODO.md`) and every symbolic variable name in the code
 must appear in the following list, with each entry containing the following information:
+
 - the meaning of the symbol.
-- (optional) the definitive equation that relate it to other symbols.
-- (if it is a vector, matrix or tensor) its dimensions
+- (optional) the definitive equation that relates it to other symbols.
+- (if it is a vector, matrix or tensor) its dimensions.
 
 Add a new symbol here in the same change that introduces it; otherwise use the full name.
 
-- **$A$:** Soft-iron correction matrix, $A = D^{-1}$.
+- **$A$:** Soft-iron correction matrix, $A = D^{-1}$; $3 \times 3$.
 - **$B$:** Online-optimizer minibatch; $|B|$ is its observation count.
 - **$B_r$:** Replay minibatch size (`replay_minibatch_size`).
-- **$b$:** Hard-iron offset vector.
+- **$b$:** Hard-iron offset vector, $b = \mu + r d$; $3 \times 1$.
 - **$c$:** Shape-prior scale of the regularization target $c I$.
-- **$D$:** Symmetric positive-definite soft-iron distortion matrix.
-- **$d$:** Normalized-offset candidate in cache-normalization units.
-- **$e_{r,i}$:** Radial algebraic residual of observation $i$.
-- **$e_{g,i}$:** Gravity-projection residual of observation $i$.
+- **$D$:** Symmetric positive-definite soft-iron distortion matrix; $3 \times 3$.
+- **$d$:** Normalized-offset candidate in cache-normalization units, $d = -\tfrac{1}{2} Q^{-1} q$; $3 \times 1$.
+- **$e_{r,i}$:** Radial algebraic residual of observation $i$, $e_{r,i} = \phi_i^T \theta - 1$.
+- **$e_{g,i}$:** Gravity-projection residual of observation $i$, $e_{g,i} = \psi_i^T \theta - \kappa$.
 - **$G$:** Gravity-carrying subset of a minibatch; $|G|$ is its observation count.
-- **$g_i$:** Normalized gravity direction of observation $i$.
-- **$H$:** Mean Gram matrix of retained direction features.
-- **$J_r$:** Radial online objective.
-- **$J_g$:** Gravity-surrogate objective.
+- **$g_i$:** Normalized gravity direction of observation $i$; $3 \times 1$.
+- **$H$:** Mean Gram matrix of the retained mean-centered unit directions,
+  $H = \frac{1}{n} \sum_i \varphi(\hat{u}_i) \varphi(\hat{u}_i)^T$; $9 \times 9$.
+- **$I$:** Identity matrix in the regularization target $c I$ and in $\|Q - c I\|_F^2$; $3 \times 3$.
+- **$J_r$:** Radial online objective, $J_r = \frac{1}{2 n} \sum_i e_{r,i}^2 + \frac{\lambda}{2} \|Q - c I\|_F^2$.
+- **$J_g$:** Gravity-surrogate objective, $J_g = \frac{w_g}{2 n_g} \sum_i e_{g,i}^2$.
 - **$k$:** Diversity neighbor count (`num_neighbors`).
-- **$M$:** Normalized shape matrix $Q / \gamma$.
-- **$m_i$:** Ideal calibrated unit magnetic vector of sample $i$.
+- **$M$:** Normalized shape matrix, $M = Q / \gamma$; $3 \times 3$.
+- **$m_i$:** Ideal calibrated unit magnetic vector of sample $i$; $3 \times 1$.
 - **$N$:** `MagCalibrator` cache capacity in rows.
 - **$n$:** Number of terms in an objective or Gram average.
 - **$n_g$:** Gravity-carrying term count in $J_g$.
-- **$n_i$:** Ellipsoid normal at $u_i$.
+- **$n_i$:** Ellipsoid normal at $u_i$, $n_i = Q u_i + q / 2$; $3 \times 1$.
 - **$p$:** Ramped count of cold-start replay updates per sample.
-- **$Q$:** Symmetric $3 \times 3$ ellipsoid shape matrix.
-- **$q$:** Ellipsoid linear coefficient vector.
-- **$R$:** Diagonal feature-space regularization weights $\operatorname{diag}(1, 1, 1, 2, 2, 2, 0, 0, 0)$.
+- **$Q$:** Symmetric ellipsoid shape matrix in $u_i^T Q\, u_i + q^T u_i = 1$; $3 \times 3$.
+- **$q$:** Ellipsoid linear coefficient vector in $u_i^T Q\, u_i + q^T u_i = 1$; $3 \times 1$.
+- **$R$:** Diagonal feature-space regularization weights $\operatorname{diag}(1, 1, 1, 2, 2, 2, 0, 0, 0)$; $9 \times 9$.
 - **$r$:** RMS radius of the retained cache samples.
-- **$s_i$:** Gravity normal projection $g_i^T n_i$.
-- **$u_i$:** Normalized magnetometer sample $(x_i - \mu) / r$.
-- **$\hat{u}_i$:** Mean-centered unit direction of retained sample $i$.
+- **$s_i$:** Gravity normal projection, $s_i = g_i^T n_i$.
+- **$s_{\theta,j}$, $s_\kappa$:** Diagonal feature-energy scales normalizing the optimizer descent step,
+  $s_{\theta,j} = \frac{1}{|B|} \sum_{i \in B} \phi_{i,j}^2 + \frac{w_g}{|G|} \sum_{i \in G} \psi_{i,j}^2
+  + \lambda R_{jj} + \epsilon$, and $s_\kappa = w_g + \epsilon$.
+- **$u_i$:** Normalized magnetometer sample, $u_i = (x_i - \mu) / r$; $3 \times 1$.
+- **$\hat{u}_i$:** Mean-centered unit direction of retained sample $i$; $3 \times 1$.
 - **$w_g$:** Gravity term weight (`gravity_weight`).
-- **$x_i$:** Raw retained magnetometer sample vector.
-- **$\gamma$:** Ellipsoid normalization scale $1 + d^T Q d$.
+- **$x_i$:** Raw retained magnetometer sample vector; $3 \times 1$.
+- **$\gamma$:** Ellipsoid normalization scale, $\gamma = 1 + d^T Q d$.
 - **$\epsilon$:** Numerical floor of the optimizer feature-energy scales.
 - **$\theta$:** Packed online coefficients $[Q_{00}, Q_{11}, Q_{22}, Q_{01}, Q_{02}, Q_{12}, q_0, q_1, q_2]$ (code
-  field `parameters`).
-- **$\theta_{\mathrm{prior}}$:** Prior coefficient vector $[c, c, c, 0, 0, 0, 0, 0, 0]$.
+  field `parameters`); $9 \times 1$.
+- **$\theta_{\mathrm{prior}}$:** Prior coefficient vector $[c, c, c, 0, 0, 0, 0, 0, 0]$; $9 \times 1$.
 - **$\kappa$:** Learned gravity projection scalar.
 - **$\lambda$:** Shape regularization weight.
-- **$\mu$:** Cache sample mean.
-- **$\phi(u)$:** Ellipsoid-fit feature vector with cross-term weight $2$.
-- **$\varphi(u)$:** Direction-feature vector with cross-term weight $\sqrt{2}$.
+- **$\mu$:** Cache sample mean; $3 \times 1$.
+- **$\nabla_\theta$, $\nabla_\kappa$:** Gradients of $J_r + J_g$ with respect to
+  $\theta$ ($\nabla_\theta$; $9 \times 1$) and $\kappa$ ($\nabla_\kappa$; scalar).
+- **$\phi(u)$:** Ellipsoid-fit feature vector with cross-term weight $2$; $9 \times 1$.
+- **$\varphi(u)$:** Direction-feature vector with cross-term weight $\sqrt{2}$; $9 \times 1$.
+- **$\psi(u, g)$:** Gravity-surrogate feature vector, $\psi(u, g)^T \theta = g^T (Q u + q / 2)$; $9 \times 1$.
 
 You should avoid abusing one symbol to refer to different concepts. This includes symbols written in different
 alphabets (e.g. `\mu` in LaTeX math and `mu` in code should always refer to the same concept).
@@ -286,7 +295,8 @@ alphabets (e.g. `\mu` in LaTeX math and `mu` in code should always refer to the 
 
 - Each issue is a `- [ ]` or `- [x]` checkbox followed by a short name and indented fields:
   - **Summary:** Short description.
-  - **Position:** Path of the block code comment that explains the issue, e.g. `src/path/to/file.rs (issue_summary)`. The block comment should have the following sections:
+  - **Position:** Path of the block code comment that explains the issue, e.g. `src/path/to/file.rs (issue_summary)`.
+    The block comment should have the following sections:
     - always start with `TODO: issue_summary`.
     - detailed explanation.
     - recommended fix (if applicable).
