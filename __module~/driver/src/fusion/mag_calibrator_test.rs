@@ -1,9 +1,9 @@
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
+use super::super::mag_model::{CoverageGramMatrix, MagModel};
 use super::super::BadMagCause;
 use super::{
-    CoverageGramMatrix, MagCalibrationResult, MagCalibrator, MIN_PUBLICATION_CONFIDENCE,
-    MIN_PUBLICATION_STREAK,
+    MagCalibrationResult, MagCalibrator, MIN_PUBLICATION_CONFIDENCE, MIN_PUBLICATION_STREAK,
 };
 
 impl<const N: usize> MagCalibrator<N> {
@@ -13,7 +13,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// `update_quality` instead of calling it, so the tests cross-check the
     /// production path.
     fn radial_mean_square_for_test(&self) -> Option<f32> {
-        let candidate = self.working_candidate().ok()?;
+        let candidate = self.model.working_candidate().ok()?;
         let mut sum = 0.0f32;
         for row in 0..self.model.sample_row_count {
             let residual =
@@ -34,10 +34,12 @@ impl<const N: usize> MagCalibrator<N> {
         let mut count = 0usize;
         for row in 0..self.model.sample_row_count {
             if let Some(gravity) = self.model.gravity_directions[row] {
-                let residual =
-                    Self::gravity_features(self.normalized_sample(self.sample(row)), gravity)
-                        .dot(&self.model.parameters)
-                        - self.model.learned_gravity_projection;
+                let residual = MagModel::<N>::gravity_features(
+                    self.model.normalized_sample(self.sample(row)),
+                    gravity,
+                )
+                .dot(&self.model.parameters)
+                    - self.model.learned_gravity_projection;
                 sum += residual * residual;
                 count += 1;
             }
@@ -46,17 +48,19 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn working_quality_components(&self) -> (bool, f32, f32, f32) {
-        if self.working_candidate().is_err() {
+        if self.model.working_candidate().is_err() {
             return (false, 0.0, 0.0, 0.0);
         }
-        let coverage = self.mean_centered_coverage();
-        let radial_fitness = Self::radial_fitness_score(self.radial_mean_square_for_test());
-        let gravity_fitness = Self::gravity_fitness_score(self.gravity_mean_square_for_test());
+        let coverage = self.model.mean_centered_coverage();
+        let radial_fitness =
+            MagModel::<N>::radial_fitness_score(self.radial_mean_square_for_test());
+        let gravity_fitness =
+            MagModel::<N>::gravity_fitness_score(self.gravity_mean_square_for_test());
         (true, coverage, radial_fitness, gravity_fitness)
     }
 
     fn correct_working_for_test(&self, raw_mag: Vector3<f32>) -> Option<Vector3<f32>> {
-        let candidate = self.working_candidate().ok()?;
+        let candidate = self.model.working_candidate().ok()?;
         let corrected = candidate.correction * (raw_mag - candidate.offset);
         let norm = corrected.norm();
         (norm.is_finite() && norm > f32::EPSILON).then(|| corrected / norm)
@@ -67,24 +71,24 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn coverage_scores_for_test(gram_sum: &CoverageGramMatrix, sample_row_count: usize) -> f32 {
-        Self::coverage_from_gram(gram_sum, sample_row_count)
+        MagModel::<N>::coverage_from_gram(gram_sum, sample_row_count)
     }
 
     fn coverage_gram_sum_for_test(directions: &[Vector3<f32>]) -> CoverageGramMatrix {
         let mut gram_sum = CoverageGramMatrix::zeros();
         for &direction in directions {
-            let feature = Self::direction_feature(direction);
+            let feature = MagModel::<N>::direction_feature(direction);
             gram_sum += feature * feature.transpose();
         }
         gram_sum
     }
 
     fn fitness_score_for_test(mean_square: Option<f32>) -> f32 {
-        Self::radial_fitness_score(mean_square)
+        MagModel::<N>::radial_fitness_score(mean_square)
     }
 
     fn gravity_fitness_score_for_test(mean_square: Option<f32>) -> f32 {
-        Self::gravity_fitness_score(mean_square)
+        MagModel::<N>::gravity_fitness_score(mean_square)
     }
 
     fn raw_moments_for_test(&self) -> (usize, Vector3<f64>, Matrix3<f64>) {
