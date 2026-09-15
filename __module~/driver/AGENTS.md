@@ -189,8 +189,8 @@ submitting a change.
   - each subtask should have its own commit.
   - after each commit:
     - launch a subagent to review it for guardrail compliance
-    - wait for user's approval
 - If HEAD is DETACHED, create a temporary branch and commit into it
+- If the commit can't compile cleanly, it should have [WIP] in its commit message
 
 ## Planning
 
