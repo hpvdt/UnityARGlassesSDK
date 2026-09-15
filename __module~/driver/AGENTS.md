@@ -188,6 +188,11 @@ submitting a change.
 - If a task contains multiple subtasks, each subtask should have its own commit
 - If HEAD is DETACHED, create a temporary branch and commit into it
 
+## Planning
+
+- Any inconsistency or contradiction discovered during the planning stage must be immediately raised and highlighted in the plan
+- no plan shall be executed until the inconsistency or contradiction is full addressed
+
 ## Documentation (including Markdown & Comments)
 
 Before starting to work on code, actively enforce the following guardrails on every document you read; apply
