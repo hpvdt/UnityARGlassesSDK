@@ -22,6 +22,8 @@ pub(super) struct MagModel<const N: usize> {
     pub(super) parameters: SVector<f32, CALIBRATION_PARAMETER_COUNT>,
     pub(super) normalization_mean: Vector3<f32>,
     pub(super) normalization_radius: f32,
+    //FIXME, both normalization_initialized and gravity_projection_initialized are not required
+    // whether the calibration is initialised should be totally determined by the confidence score of CalibrationQuality
     pub(super) normalization_initialized: bool,
     pub(super) gravity_projection: f32,
     pub(super) gravity_projection_initialized: bool,
