@@ -185,7 +185,11 @@ submitting a change.
 [{{LLM MODEL}}] {{Task Info}} {{Optional Subtask Info}}
 ```
 
-- If a task contains multiple subtasks, each subtask should have its own commit
+- If a task contains multiple subtasks:
+  - each subtask should have its own commit.
+  - after each commit:
+    - launch a subagent to review it for guardrail compliance
+    - wait for user's approval
 - If HEAD is DETACHED, create a temporary branch and commit into it
 
 ## Planning
