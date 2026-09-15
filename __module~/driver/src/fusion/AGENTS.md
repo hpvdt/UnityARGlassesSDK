@@ -221,7 +221,7 @@ $$
 H = \frac{1}{n} \sum_i \varphi(\hat{u}_i)\, \varphi(\hat{u}_i)^T,
 $$
 
-relative to its uniform-sphere reference $2/15$ and clamped to $[0, 1]$. The direction-feature vector $\varphi$ holds
+relative to its uniform-sphere reference $2/15$ and clamped to $[0, 1]$. The coverage-feature vector $\varphi$ holds
 the nine ellipsoid-fit features with $\sqrt{2}$ cross-term weights, which makes the induced rotation on feature space
 orthogonal, so the score is exactly rotation-invariant. The Gram sum is recomputed from the current cache on every
 quality update: directions stored at insertion go stale as the centering mean drifts (the earliest rows of a

@@ -296,7 +296,7 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$\nabla_\theta$, $\nabla_\kappa$:** Gradients of $J_r + J_g$ with respect to
   $\theta$ ($\nabla_\theta$; $9 \times 1$) and $\kappa$ ($\nabla_\kappa$; scalar).
 - **$\phi(u)$:** Ellipsoid-fit feature vector with cross-term weight $2$; $9 \times 1$.
-- **$\varphi(u)$:** Direction-feature vector with cross-term weight $\sqrt{2}$; $9 \times 1$.
+- **$\varphi(u)$:** Coverage-feature vector with cross-term weight $\sqrt{2}$; $9 \times 1$.
 - **$\psi(u, g)$:** Gravity-surrogate feature vector, $\psi(u, g)^T \theta = g^T (Q u + q / 2)$; $9 \times 1$.
 
 You should avoid abusing one symbol to refer to different concepts. This includes symbols written in different

@@ -77,7 +77,7 @@ impl<const N: usize> MagCalibrator<N> {
     fn coverage_gram_sum_for_test(directions: &[Vector3<f32>]) -> CoverageGramMatrix {
         let mut gram_sum = CoverageGramMatrix::zeros();
         for &direction in directions {
-            let feature = MagModel::<N>::direction_feature(direction);
+            let feature = MagModel::<N>::coverage_feature(direction);
             gram_sum += feature * feature.transpose();
         }
         gram_sum
