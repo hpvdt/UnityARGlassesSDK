@@ -2,7 +2,7 @@ use nalgebra::{DMatrix, DVector, Matrix3, SVector, Vector3};
 
 use super::bad_mag_cause::{BadMagCause, BadReading};
 use super::mag_model::{MagModel, CALIBRATION_PARAMETER_COUNT};
-use super::mag_samples::{MagSampleRow, MagSamples};
+use super::mag_samples::{MagSampleAccess, MagSampleRow, MagSamples};
 const SHAPE_REGULARIZATION: f32 = 1.0e-3;
 /// Scale of the regularization target shape, in units of the identity.
 /// Algebraic ellipsoid fits under noise systematically inflate the ellipsoid
@@ -472,8 +472,8 @@ impl<const N: usize> MagCalibrator<N> {
             .map(|gravity| (current_sample, gravity))
             .or_else(|| {
                 (0..self.model.sample_row_count).find_map(|row| {
-                    let row = self.model.samples.row(row);
-                    row.gravity.map(|gravity| (row.sample, gravity))
+                    let row = self.model.samples.view(row);
+                    row.gravity().map(|gravity| (row.sample(), gravity))
                 })
             });
         if let Some((sample, gravity)) = observation {
@@ -520,8 +520,8 @@ impl<const N: usize> MagCalibrator<N> {
                     minibatch.accepted_row,
                 )
                 .map(|row| {
-                    let row = self.model.samples.row(row);
-                    (row.sample, row.gravity)
+                    let row = self.model.samples.view(row);
+                    (row.sample(), row.gravity())
                 })
             }));
         let mut radial_rows = Vec::with_capacity(minibatch.random_draws + 1);
@@ -702,7 +702,7 @@ impl<const N: usize> MagCalibrator<N> {
     fn squared_distances_to(&self, mag_sample: Vector3<f32>, count: usize) -> [f32; N] {
         let mut squared_distances = [f32::INFINITY; N];
         for (j, dist) in squared_distances.iter_mut().enumerate().take(count) {
-            *dist = (mag_sample - self.model.samples.sample(j)).norm_squared();
+            *dist = (mag_sample - self.model.samples.view(j).sample()).norm_squared();
         }
         squared_distances
     }
@@ -789,7 +789,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// Recomputes a row's neighbor cache when its trusted prefix has shrunk
     /// below `k`. Only called with a full buffer.
     fn rebuild_row_cache(&mut self, row: usize) {
-        let squared_distances = self.squared_distances_to(self.model.samples.sample(row), N);
+        let squared_distances = self.squared_distances_to(self.model.samples.view(row).sample(), N);
         self.reset_row_cache(row, &squared_distances, N);
     }
 
@@ -819,7 +819,8 @@ impl<const N: usize> MagCalibrator<N> {
     /// Direct O(N) computation of a row's mean distance to its `k` nearest
     /// other rows, used when `k` exceeds the neighbor cache capacity.
     fn mean_distance_uncached(&self, row: usize, neighbor_count: usize) -> f32 {
-        let mut squared_distances = self.squared_distances_to(self.model.samples.sample(row), N);
+        let mut squared_distances =
+            self.squared_distances_to(self.model.samples.view(row).sample(), N);
         // Skip the self-entry by index instead of dropping the smallest value.
         squared_distances[row] = f32::INFINITY;
         Self::mean_of_smallest(&mut squared_distances, neighbor_count)
@@ -906,7 +907,7 @@ impl<const N: usize> MagCalibrator<N> {
             .enumerate()
             .take(self.model.sample_row_count)
         {
-            let row = self.model.samples.row(index);
+            let row = self.model.samples.view(index).copied();
             if timestamp_us.saturating_sub(self.sample_timestamps_us[index])
                 <= self.max_sample_lifespan_us
             {
@@ -917,7 +918,7 @@ impl<const N: usize> MagCalibrator<N> {
                 }
                 retained_count += 1;
             } else {
-                self.remove_raw_moment(row.sample);
+                self.remove_raw_moment(row.sample());
             }
         }
         if retained_count != self.model.sample_row_count {
@@ -1024,7 +1025,7 @@ impl<const N: usize> MagCalibrator<N> {
                         complete,
                     );
                 }
-                self.remove_raw_moment(self.model.samples.sample(replacement_row));
+                self.remove_raw_moment(self.model.samples.view(replacement_row).sample());
                 self.add_raw_moment(mag_sample);
                 self.add_sample_at(replacement_row, mag_sample, gravity_direction, timestamp_us);
                 self.reset_row_cache(replacement_row, &squared_distances, N);
@@ -1047,13 +1048,9 @@ impl<const N: usize> MagCalibrator<N> {
         timestamp_us: u64,
     ) {
         if index < N {
-            self.model.samples.set_row(
-                index,
-                MagSampleRow {
-                    sample,
-                    gravity: gravity_direction,
-                },
-            );
+            self.model
+                .samples
+                .set_row(index, MagSampleRow::new(sample, gravity_direction));
             self.sample_timestamps_us[index] = timestamp_us;
         }
     }

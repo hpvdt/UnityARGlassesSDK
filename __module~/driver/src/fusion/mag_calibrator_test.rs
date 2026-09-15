@@ -1,6 +1,7 @@
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
 use super::super::mag_model::{CoverageGramMatrix, MagModel};
+use super::super::mag_samples::MagSampleAccess;
 use super::super::BadMagCause;
 use super::{
     MagCalibrationResult, MagCalibrator, MIN_PUBLICATION_CONFIDENCE, MIN_PUBLICATION_STREAK,
@@ -16,9 +17,10 @@ impl<const N: usize> MagCalibrator<N> {
         let candidate = self.model.working_candidate().ok()?;
         let mut sum = 0.0f32;
         for row in 0..self.model.sample_row_count {
-            let residual =
-                (candidate.correction * (self.model.samples.sample(row) - candidate.offset)).norm()
-                    - 1.0;
+            let residual = (candidate.correction
+                * (self.model.samples.view(row).sample() - candidate.offset))
+                .norm()
+                - 1.0;
             sum += residual * residual;
         }
         Some(sum / self.model.sample_row_count as f32)
@@ -34,10 +36,10 @@ impl<const N: usize> MagCalibrator<N> {
         let mut sum = 0.0f32;
         let mut count = 0usize;
         for row in 0..self.model.sample_row_count {
-            let row = self.model.samples.row(row);
-            if let Some(gravity) = row.gravity {
+            let row = self.model.samples.view(row);
+            if let Some(gravity) = row.gravity() {
                 let residual = MagModel::<N>::gravity_features(
-                    self.model.normalized_sample(row.sample),
+                    self.model.normalized_sample(row.sample()),
                     gravity,
                 )
                 .dot(&self.model.parameters)
@@ -106,7 +108,7 @@ impl<const N: usize> MagCalibrator<N> {
         let (sum, outer_sum) = (0..self.model.sample_row_count).fold(
             (Vector3::<f64>::zeros(), Matrix3::<f64>::zeros()),
             |(sum, outer_sum), row| {
-                let sample = self.model.samples.sample(row).cast::<f64>();
+                let sample = self.model.samples.view(row).sample().cast::<f64>();
                 (sum + sample, outer_sum + sample * sample.transpose())
             },
         );
@@ -134,7 +136,8 @@ impl<const N: usize> MagCalibrator<N> {
             let mut true_dists: Vec<f32> = (0..self.model.sample_row_count)
                 .filter(|&j| j != row)
                 .map(|j| {
-                    let diff = self.model.samples.sample(row) - self.model.samples.sample(j);
+                    let diff =
+                        self.model.samples.view(row).sample() - self.model.samples.view(j).sample();
                     diff.dot(&diff)
                 })
                 .collect();
@@ -149,8 +152,8 @@ impl<const N: usize> MagCalibrator<N> {
                 if cache[..i].iter().any(|e| e.row == entry.row) {
                     return Err(format!("row {row}: duplicate entry for row {}", entry.row));
                 }
-                let diff =
-                    self.model.samples.sample(row) - self.model.samples.sample(entry.row as usize);
+                let diff = self.model.samples.view(row).sample()
+                    - self.model.samples.view(entry.row as usize).sample();
                 if diff.dot(&diff) != entry.squared_distance {
                     return Err(format!("row {row}: stale distance for row {}", entry.row));
                 }
@@ -514,16 +517,16 @@ fn assert_caches_identical<const N: usize>(first: &MagCalibrator<N>, second: &Ma
     assert_eq!(first.model.sample_row_count, second.model.sample_row_count);
     for row in 0..first.model.sample_row_count {
         assert_eq!(
-            first.model.samples.sample(row),
-            second.model.samples.sample(row)
+            first.model.samples.view(row).sample(),
+            second.model.samples.view(row).sample()
         );
         assert_eq!(
             first.sample_timestamps_us[row],
             second.sample_timestamps_us[row]
         );
         assert_eq!(
-            first.model.samples.row(row).gravity,
-            second.model.samples.row(row).gravity
+            first.model.samples.view(row).gravity(),
+            second.model.samples.view(row).gravity()
         );
     }
 }
@@ -1306,7 +1309,10 @@ fn mag_calibrator_candidate_score_includes_replaced_victim() {
     // victim's own ~0.01; including the victim (~0.001), its score drops to
     // ~0.0055, below the victim's.
     let (replacement_row, _) = calibrator.lowest_mean_distance_by_index();
-    assert_eq!(calibrator.model.samples.sample(replacement_row), victim);
+    assert_eq!(
+        calibrator.model.samples.view(replacement_row).sample(),
+        victim
+    );
     let candidate = Vector3::new(5.001, 5.0, 5.0);
 
     calibrator.evaluate_sample_vec(candidate, None, 12);
@@ -1315,7 +1321,7 @@ fn mag_calibrator_candidate_score_includes_replaced_victim() {
     // candidate takes its row. This assertion fails while the candidate is
     // still scored against the victim row it would replace.
     assert_ne!(
-        calibrator.model.samples.sample(replacement_row),
+        calibrator.model.samples.view(replacement_row).sample(),
         victim,
         "candidate adjacent to the victim was wrongly rejected"
     );

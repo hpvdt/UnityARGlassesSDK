@@ -1,7 +1,7 @@
 use nalgebra::{Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
 
 use super::bad_mag_cause::BadCalibration;
-use super::mag_samples::MagSamples;
+use super::mag_samples::{MagSampleAccess, MagSamples};
 use super::CalibrationQuality;
 
 /// Number of ellipsoid coefficients fitted by the magnetometer calibration
@@ -184,7 +184,7 @@ impl<const N: usize> MagModel<N> {
     pub(super) fn mean_centered_coverage(&self) -> f32 {
         let mut gram_sum = CoverageGramMatrix::zeros();
         for row in 0..self.sample_row_count {
-            let centered = self.samples.sample(row) - self.sample_mean;
+            let centered = self.samples.view(row).sample() - self.sample_mean;
             if let Some(direction) = centered.try_normalize(f32::EPSILON) {
                 let feature = Self::coverage_feature(direction);
                 gram_sum += feature * feature.transpose();
@@ -330,8 +330,10 @@ impl<const N: usize> MagModel<N> {
         // unusable, matching the zero-quality path above.
         let mut radial_square_sum = 0.0f32;
         for row in 0..self.sample_row_count {
-            let residual =
-                (candidate.correction * (self.samples.sample(row) - candidate.offset)).norm() - 1.0;
+            let residual = (candidate.correction
+                * (self.samples.view(row).sample() - candidate.offset))
+                .norm()
+                - 1.0;
             radial_square_sum += residual * residual;
         }
         let radial_mean_square = radial_square_sum / self.sample_row_count as f32;
@@ -348,10 +350,10 @@ impl<const N: usize> MagModel<N> {
         let gravity_mean_square =
             if self.learned_gravity_projection_initialized && self.gravity_weight > 0.0 {
                 for row in 0..self.sample_row_count {
-                    let row = self.samples.row(row);
-                    if let Some(gravity) = row.gravity {
+                    let row = self.samples.view(row);
+                    if let Some(gravity) = row.gravity() {
                         let residual =
-                            Self::gravity_features(self.normalized_sample(row.sample), gravity)
+                            Self::gravity_features(self.normalized_sample(row.sample()), gravity)
                                 .dot(&self.parameters)
                                 - self.learned_gravity_projection;
                         gravity_square_sum += residual * residual;
