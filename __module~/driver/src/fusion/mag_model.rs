@@ -95,7 +95,10 @@ impl<const N: usize> MagModel<N> {
         (sample - self.sample_mean) / self.sample_rms_radius
     }
 
-    pub(super) fn shape_and_linear(
+    /// Unpacks the packed coefficient vector `parameters` into the shape
+    /// matrix `Q` and the linear coefficient vector `q` of the ellipsoid
+    /// equation `u^T Q u + q^T u = 1`.
+    pub(super) fn unpack_ellipsoid_coefficients(
         parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
     ) -> (Matrix3<f32>, Vector3<f32>) {
         // Diagonal [Q00, Q11, Q22] followed by packed off-diagonal [Q01, Q02, Q12].
@@ -251,7 +254,7 @@ impl<const N: usize> MagModel<N> {
             });
         }
 
-        let (shape, linear) = Self::shape_and_linear(&parameters);
+        let (shape, linear) = Self::unpack_ellipsoid_coefficients(&parameters);
         let shape_eigen = shape.symmetric_eigen();
         let correction_condition = Self::condition_number(&shape_eigen.eigenvalues).sqrt();
         if correction_condition > MAX_CORRECTION_CONDITION {

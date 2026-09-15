@@ -368,7 +368,7 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     fn regularization_loss(parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>) -> f32 {
-        let (shape, _) = MagModel::<N>::shape_and_linear(parameters);
+        let (shape, _) = MagModel::<N>::unpack_ellipsoid_coefficients(parameters);
         0.5 * SHAPE_REGULARIZATION
             * (shape - Matrix3::identity() * SHAPE_PRIOR_SCALE).norm_squared()
     }
