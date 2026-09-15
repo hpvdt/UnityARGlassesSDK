@@ -295,7 +295,8 @@ alphabets (e.g. `\mu` in LaTeX math and `mu` in code should always refer to the 
 
 - Each issue is a `- [ ]` or `- [x]` checkbox followed by a short name and indented fields:
   - **Summary:** Short description.
-  - **Position:** Path of the block code comment that explains the issue, e.g. `src/path/to/file.rs (issue_summary)`.
+  - **Position:** Path of the block comment in code that explains the issue, e.g. `src/path/to/file.rs (issue_summary)`.
+    The block comment must be consistency with both code and documentation, every symbol should be annotated with a variable name in the code.
     The block comment should have the following sections:
     - always start with `TODO: issue_summary`.
     - detailed explanation.
