@@ -27,19 +27,17 @@ impl<const N: usize> MagCalibrator<N> {
     /// working parameters over the retained rows carrying a gravity
     /// direction, mirroring the gating in `update_quality`.
     fn gravity_mean_square_for_test(&self) -> Option<f32> {
-        if !(self.model.gravity_projection_initialized && self.model.gravity_weight > 0.0) {
+        if !(self.model.learned_gravity_projection_initialized && self.model.gravity_weight > 0.0) {
             return None;
         }
         let mut sum = 0.0f32;
         let mut count = 0usize;
         for row in 0..self.model.sample_row_count {
             if let Some(gravity) = self.model.gravity_directions[row] {
-                let residual = Self::gravity_features(
-                    self.normalized_sample(self.sample(row)),
-                    gravity,
-                )
-                .dot(&self.model.parameters)
-                    - self.model.gravity_projection;
+                let residual =
+                    Self::gravity_features(self.normalized_sample(self.sample(row)), gravity)
+                        .dot(&self.model.parameters)
+                        - self.model.learned_gravity_projection;
                 sum += residual * residual;
                 count += 1;
             }
@@ -136,9 +134,7 @@ impl<const N: usize> MagCalibrator<N> {
                 .collect();
             true_dists.sort_unstable_by(|a, b| a.total_cmp(b));
             for (i, entry) in cache.iter().enumerate() {
-                if entry.row as usize >= self.model.sample_row_count
-                    || entry.row as usize == row
-                {
+                if entry.row as usize >= self.model.sample_row_count || entry.row as usize == row {
                     return Err(format!("row {row}: entry {i} references row {}", entry.row));
                 }
                 if i > 0 && cache[i - 1].squared_distance > entry.squared_distance {

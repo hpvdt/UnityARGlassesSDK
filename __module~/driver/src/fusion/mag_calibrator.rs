@@ -1,7 +1,7 @@
 use nalgebra::{DMatrix, DVector, Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
 
 use super::bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
-use super::mag_model::{CALIBRATION_PARAMETER_COUNT, MagModel};
+use super::mag_model::{MagModel, CALIBRATION_PARAMETER_COUNT};
 
 /// Gram sum of the retained direction features, `sum_i varphi(d_i)
 /// varphi(d_i)^T`, backing the coverage score.
@@ -277,11 +277,11 @@ impl<const N: usize> Default for MagCalibrator<N> {
                 gravity_directions: std::array::from_fn(|_| None),
                 sample_row_count: Default::default(),
                 parameters: Self::parameter_prior(),
-                normalization_mean: Vector3::zeros(),
-                normalization_radius: 0.0,
-                normalization_initialized: false,
-                gravity_projection: 0.0,
-                gravity_projection_initialized: false,
+                sample_mean: Vector3::zeros(),
+                sample_rms_radius: 0.0,
+                sample_normalization_initialized: false,
+                learned_gravity_projection: 0.0,
+                learned_gravity_projection_initialized: false,
                 gravity_weight: DEFAULT_GRAVITY_WEIGHT,
                 quality: CalibrationQuality::ZERO,
             },
@@ -488,21 +488,22 @@ impl<const N: usize> MagCalibrator<N> {
     /// through the usual unusable-candidate path.
     fn refresh_normalization(&mut self) {
         let Some((sample_mean, covariance)) = self.raw_mean_and_covariance() else {
-            self.model.normalization_mean = Vector3::zeros();
-            self.model.normalization_radius = 0.0;
-            self.model.normalization_initialized = false;
+            self.model.sample_mean = Vector3::zeros();
+            self.model.sample_rms_radius = 0.0;
+            self.model.sample_normalization_initialized = false;
             return;
         };
         let radius = covariance.trace().sqrt();
-        self.model.normalization_initialized = sample_mean.iter().all(|value| value.is_finite())
-            && radius.is_finite()
-            && radius > f32::EPSILON;
-        self.model.normalization_mean = sample_mean;
-        self.model.normalization_radius = radius;
+        self.model.sample_normalization_initialized =
+            sample_mean.iter().all(|value| value.is_finite())
+                && radius.is_finite()
+                && radius > f32::EPSILON;
+        self.model.sample_mean = sample_mean;
+        self.model.sample_rms_radius = radius;
     }
 
     fn normalized_sample(&self, sample: Vector3<f32>) -> Vector3<f32> {
-        (sample - self.model.normalization_mean) / self.model.normalization_radius
+        (sample - self.model.sample_mean) / self.model.sample_rms_radius
     }
 
     fn next_random(random_state: &mut u64) -> u64 {
@@ -534,23 +535,22 @@ impl<const N: usize> MagCalibrator<N> {
         current_sample: Vector3<f32>,
         current_gravity: Option<Vector3<f32>>,
     ) {
-        if self.model.gravity_projection_initialized || self.model.gravity_weight == 0.0 {
+        if self.model.learned_gravity_projection_initialized || self.model.gravity_weight == 0.0 {
             return;
         }
         let observation = current_gravity
             .map(|gravity| (current_sample, gravity))
             .or_else(|| {
                 (0..self.model.sample_row_count).find_map(|row| {
-                    self.model.gravity_directions[row]
-                        .map(|gravity| (self.sample(row), gravity))
+                    self.model.gravity_directions[row].map(|gravity| (self.sample(row), gravity))
                 })
             });
         if let Some((sample, gravity)) = observation {
             let features = Self::gravity_features(self.normalized_sample(sample), gravity);
             let projection = features.dot(&self.model.parameters);
             if projection.is_finite() {
-                self.model.gravity_projection = projection;
-                self.model.gravity_projection_initialized = true;
+                self.model.learned_gravity_projection = projection;
+                self.model.learned_gravity_projection_initialized = true;
             }
         }
     }
@@ -594,7 +594,9 @@ impl<const N: usize> MagCalibrator<N> {
         for (sample, gravity) in observations {
             let normalized = self.normalized_sample(sample);
             radial_rows.push(Self::features(normalized));
-            if let Some(gravity) = gravity.filter(|_| self.model.gravity_projection_initialized) {
+            if let Some(gravity) =
+                gravity.filter(|_| self.model.learned_gravity_projection_initialized)
+            {
                 gravity_rows.push(Self::gravity_features(normalized, gravity));
             }
         }
@@ -608,7 +610,7 @@ impl<const N: usize> MagCalibrator<N> {
     fn minibatch_objective(
         &self,
         parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
-        gravity_projection: f32,
+        kappa: f32,
         minibatch: MinibatchSpec,
     ) -> f32 {
         let (features, gravity_features, _) = self.minibatch_feature_matrices(minibatch);
@@ -617,7 +619,7 @@ impl<const N: usize> MagCalibrator<N> {
             + Self::regularization_loss(parameters);
         if gravity_features.nrows() > 0 {
             let residuals = &gravity_features * parameters
-                - DVector::from_element(gravity_features.nrows(), gravity_projection);
+                - DVector::from_element(gravity_features.nrows(), kappa);
             objective += 0.5 * self.model.gravity_weight * residuals.norm_squared()
                 / gravity_features.nrows() as f32;
         }
@@ -634,7 +636,7 @@ impl<const N: usize> MagCalibrator<N> {
         current_gravity: Option<Vector3<f32>>,
         accepted_row: Option<usize>,
     ) {
-        if !self.model.normalization_initialized {
+        if !self.model.sample_normalization_initialized {
             return;
         }
         self.initialize_gravity_projection(current_sample, current_gravity);
@@ -666,8 +668,10 @@ impl<const N: usize> MagCalibrator<N> {
         if self.calibration_initialized || self.model.sample_row_count == 0 {
             return;
         }
-        let replay_count =
-            self.replay_updates.saturating_mul(self.model.sample_row_count) / N.max(1);
+        let replay_count = self
+            .replay_updates
+            .saturating_mul(self.model.sample_row_count)
+            / N.max(1);
         for _ in 0..replay_count {
             self.apply_minibatch_update(MinibatchSpec {
                 current_sample: None,
@@ -692,24 +696,24 @@ impl<const N: usize> MagCalibrator<N> {
         }
 
         let parameters = self.model.parameters;
-        let gravity_projection = self.model.gravity_projection;
+        let kappa = self.model.learned_gravity_projection;
         let residuals = &features * parameters - DVector::from_element(features.nrows(), 1.0);
         let mut gradient =
             Self::parameter_vector(features.tr_mul(&residuals)) / features.nrows() as f32;
         let mut gradient_scale =
             Self::parameter_vector(features.map(|value| value * value).row_sum_tr())
                 / features.nrows() as f32;
-        let mut gravity_projection_gradient = 0.0;
+        let mut kappa_gradient = 0.0;
         if gravity_features.nrows() > 0 {
             let residuals = &gravity_features * parameters
-                - DVector::from_element(gravity_features.nrows(), gravity_projection);
+                - DVector::from_element(gravity_features.nrows(), kappa);
             gradient += self.model.gravity_weight
                 * Self::parameter_vector(gravity_features.tr_mul(&residuals))
                 / gravity_features.nrows() as f32;
             gradient_scale += self.model.gravity_weight
                 * Self::parameter_vector(gravity_features.map(|value| value * value).row_sum_tr())
                 / gravity_features.nrows() as f32;
-            gravity_projection_gradient =
+            kappa_gradient =
                 -residuals.sum() * (self.model.gravity_weight / gravity_features.nrows() as f32);
         }
 
@@ -723,36 +727,33 @@ impl<const N: usize> MagCalibrator<N> {
         gradient_scale += SHAPE_REGULARIZATION * regularization_weights;
         gradient_scale.add_scalar_mut(ONLINE_SCALE_EPSILON);
         let descent_direction = gradient.component_div(&gradient_scale);
-        let projection_step = if gravity_features.nrows() > 0 && self.model.gravity_weight > 0.0 {
-            gravity_projection_gradient
-                / (self.model.gravity_weight + ONLINE_SCALE_EPSILON)
+        let kappa_step = if gravity_features.nrows() > 0 && self.model.gravity_weight > 0.0 {
+            kappa_gradient / (self.model.gravity_weight + ONLINE_SCALE_EPSILON)
         } else {
             0.0
         };
         // TODO: use built-in norm operations instead of manually combining vector and scalar squared norms
-        let descent_norm =
-            (descent_direction.norm_squared() + projection_step * projection_step).sqrt();
+        let descent_norm = (descent_direction.norm_squared() + kappa_step * kappa_step).sqrt();
         if !descent_norm.is_finite() || descent_norm <= f32::EPSILON {
             return false;
         }
 
-        let old_objective = self.minibatch_objective(&parameters, gravity_projection, minibatch);
+        let old_objective = self.minibatch_objective(&parameters, kappa, minibatch);
         let learning_rate = (ONLINE_INITIAL_LEARNING_RATE
             / (1.0 + self.optimizer_steps as f32 / ONLINE_LEARNING_RATE_DECAY_STEPS))
             .max(ONLINE_MIN_LEARNING_RATE);
         let mut step_size = learning_rate.min(ONLINE_MAX_STEP_NORM / descent_norm);
         for _ in 0..ONLINE_BACKTRACK_STEPS {
             let trial_parameters = parameters - step_size * descent_direction;
-            let trial_gravity_projection = gravity_projection - step_size * projection_step;
-            let objective =
-                self.minibatch_objective(&trial_parameters, trial_gravity_projection, minibatch);
+            let trial_kappa = kappa - step_size * kappa_step;
+            let objective = self.minibatch_objective(&trial_parameters, trial_kappa, minibatch);
             if trial_parameters.iter().all(|value| value.is_finite())
-                && trial_gravity_projection.is_finite()
+                && trial_kappa.is_finite()
                 && objective.is_finite()
                 && objective < old_objective
             {
                 self.model.parameters = trial_parameters;
-                self.model.gravity_projection = trial_gravity_projection;
+                self.model.learned_gravity_projection = trial_kappa;
                 return true;
             }
             step_size *= 0.5;
@@ -1169,7 +1170,7 @@ impl<const N: usize> MagCalibrator<N> {
     fn mean_centered_coverage(&self) -> f32 {
         let mut gram_sum = CoverageGramMatrix::zeros();
         for row in 0..self.model.sample_row_count {
-            let centered = self.sample(row) - self.model.normalization_mean;
+            let centered = self.sample(row) - self.model.sample_mean;
             if let Some(direction) = centered.try_normalize(f32::EPSILON) {
                 let feature = Self::direction_feature(direction);
                 gram_sum += feature * feature.transpose();
@@ -1250,14 +1251,10 @@ impl<const N: usize> MagCalibrator<N> {
     /// Derives one finite SPD correction candidate from the current online
     /// ellipsoid state without scanning retained rows.
     fn working_candidate(&self) -> Result<CalibrationCandidate, BadCalibration> {
-        if !self.model.normalization_initialized
-            || !self
-                .model
-                .normalization_mean
-                .iter()
-                .all(|value| value.is_finite())
-            || !self.model.normalization_radius.is_finite()
-            || self.model.normalization_radius <= f32::EPSILON
+        if !self.model.sample_normalization_initialized
+            || !self.model.sample_mean.iter().all(|value| value.is_finite())
+            || !self.model.sample_rms_radius.is_finite()
+            || self.model.sample_rms_radius <= f32::EPSILON
         {
             return Err(BadCalibration::Unsolveable {
                 message: "sample normalization is non-finite or zero",
@@ -1301,9 +1298,8 @@ impl<const N: usize> MagCalibrator<N> {
         );
         let correction =
             shape_eigen.eigenvectors * square_root * shape_eigen.eigenvectors.transpose()
-                / self.model.normalization_radius;
-        let offset =
-            self.model.normalization_mean + self.model.normalization_radius * normalized_offset;
+                / self.model.sample_rms_radius;
+        let offset = self.model.sample_mean + self.model.sample_rms_radius * normalized_offset;
         if !offset.iter().all(|value| value.is_finite())
             || !correction.iter().all(|value| value.is_finite())
         {
@@ -1394,17 +1390,15 @@ impl<const N: usize> MagCalibrator<N> {
         // or carried by no retained row.
         let mut gravity_square_sum = 0.0f32;
         let mut gravity_count = 0usize;
-        let gravity_mean_square = if self.model.gravity_projection_initialized
+        let gravity_mean_square = if self.model.learned_gravity_projection_initialized
             && self.model.gravity_weight > 0.0
         {
             for row in 0..self.model.sample_row_count {
                 if let Some(gravity) = self.model.gravity_directions[row] {
-                    let residual = Self::gravity_features(
-                        self.normalized_sample(self.sample(row)),
-                        gravity,
-                    )
-                    .dot(&self.model.parameters)
-                        - self.model.gravity_projection;
+                    let residual =
+                        Self::gravity_features(self.normalized_sample(self.sample(row)), gravity)
+                            .dot(&self.model.parameters)
+                            - self.model.learned_gravity_projection;
                     gravity_square_sum += residual * residual;
                     gravity_count += 1;
                 }
@@ -1416,8 +1410,7 @@ impl<const N: usize> MagCalibrator<N> {
         let coverage = self.mean_centered_coverage();
         let radial_fitness = Self::radial_fitness_score(Some(radial_mean_square));
         let gravity_fitness = Self::gravity_fitness_score(gravity_mean_square);
-        self.model.quality =
-            CalibrationQuality::new(coverage, radial_fitness, gravity_fitness);
+        self.model.quality = CalibrationQuality::new(coverage, radial_fitness, gravity_fitness);
         Some(candidate)
     }
 
