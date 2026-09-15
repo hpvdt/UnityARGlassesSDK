@@ -15,29 +15,31 @@ impl<const N: usize> MagCalibrator<N> {
     fn radial_mean_square_for_test(&self) -> Option<f32> {
         let candidate = self.working_candidate().ok()?;
         let mut sum = 0.0f32;
-        for row in 0..self.sample_row_count {
+        for row in 0..self.model.sample_row_count {
             let residual =
                 (candidate.correction * (self.sample(row) - candidate.offset)).norm() - 1.0;
             sum += residual * residual;
         }
-        Some(sum / self.sample_row_count as f32)
+        Some(sum / self.model.sample_row_count as f32)
     }
 
     /// Independently recomputes the gravity mean square of the current
     /// working parameters over the retained rows carrying a gravity
     /// direction, mirroring the gating in `update_quality`.
     fn gravity_mean_square_for_test(&self) -> Option<f32> {
-        if !(self.gravity_projection_initialized && self.gravity_weight > 0.0) {
+        if !(self.model.gravity_projection_initialized && self.model.gravity_weight > 0.0) {
             return None;
         }
         let mut sum = 0.0f32;
         let mut count = 0usize;
-        for row in 0..self.sample_row_count {
-            if let Some(gravity) = self.gravity_directions[row] {
-                let residual =
-                    Self::gravity_features(self.normalized_sample(self.sample(row)), gravity)
-                        .dot(&self.parameters)
-                        - self.gravity_projection;
+        for row in 0..self.model.sample_row_count {
+            if let Some(gravity) = self.model.gravity_directions[row] {
+                let residual = Self::gravity_features(
+                    self.normalized_sample(self.sample(row)),
+                    gravity,
+                )
+                .dot(&self.model.parameters)
+                    - self.model.gravity_projection;
                 sum += residual * residual;
                 count += 1;
             }
@@ -89,7 +91,7 @@ impl<const N: usize> MagCalibrator<N> {
 
     fn raw_moments_for_test(&self) -> (usize, Vector3<f64>, Matrix3<f64>) {
         (
-            self.sample_row_count,
+            self.model.sample_row_count,
             self.raw_sample_sum,
             self.raw_outer_product_sum,
         )
@@ -97,7 +99,7 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Verifies maintained raw moments against a direct current-cache sum.
     fn check_raw_moments(&self) -> Result<(), String> {
-        let (sum, outer_sum) = (0..self.sample_row_count).fold(
+        let (sum, outer_sum) = (0..self.model.sample_row_count).fold(
             (Vector3::<f64>::zeros(), Matrix3::<f64>::zeros()),
             |(sum, outer_sum), row| {
                 let sample = self.sample(row).cast::<f64>();
@@ -122,10 +124,10 @@ impl<const N: usize> MagCalibrator<N> {
     /// true distances to the row's other buffered rows. Read-only; used by
     /// tests to cross-check the incremental cache maintenance.
     fn check_neighbor_cache(&self) -> Result<(), String> {
-        for row in 0..self.sample_row_count {
+        for row in 0..self.model.sample_row_count {
             let len = self.neighbor_cache_len[row] as usize;
             let cache = &self.neighbor_cache[row][..len];
-            let mut true_dists: Vec<f32> = (0..self.sample_row_count)
+            let mut true_dists: Vec<f32> = (0..self.model.sample_row_count)
                 .filter(|&j| j != row)
                 .map(|j| {
                     let diff = self.sample(row) - self.sample(j);
@@ -134,7 +136,9 @@ impl<const N: usize> MagCalibrator<N> {
                 .collect();
             true_dists.sort_unstable_by(|a, b| a.total_cmp(b));
             for (i, entry) in cache.iter().enumerate() {
-                if entry.row as usize >= self.sample_row_count || entry.row as usize == row {
+                if entry.row as usize >= self.model.sample_row_count
+                    || entry.row as usize == row
+                {
                     return Err(format!("row {row}: entry {i} references row {}", entry.row));
                 }
                 if i > 0 && cache[i - 1].squared_distance > entry.squared_distance {
@@ -463,7 +467,7 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
 
     // The expired prefix is gone from A's cache: both caches hold exactly
     // the surviving rows in stable insertion order.
-    assert_eq!(lifespan_a.sample_row_count, 19);
+    assert_eq!(lifespan_a.model.sample_row_count, 19);
     assert_caches_identical(&lifespan_a, &survivors_only);
 
     // A shared suffix at a fixed timestamp (no further expiry) lets both
@@ -504,16 +508,16 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
 /// Asserts that two calibrators retain exactly the same rows with the same
 /// timestamps and gravity directions, in the same order.
 fn assert_caches_identical<const N: usize>(first: &MagCalibrator<N>, second: &MagCalibrator<N>) {
-    assert_eq!(first.sample_row_count, second.sample_row_count);
-    for row in 0..first.sample_row_count {
+    assert_eq!(first.model.sample_row_count, second.model.sample_row_count);
+    for row in 0..first.model.sample_row_count {
         assert_eq!(first.sample(row), second.sample(row));
         assert_eq!(
             first.sample_timestamps_us[row],
             second.sample_timestamps_us[row]
         );
         assert_eq!(
-            first.gravity_directions[row],
-            second.gravity_directions[row]
+            first.model.gravity_directions[row],
+            second.model.gravity_directions[row]
         );
     }
 }

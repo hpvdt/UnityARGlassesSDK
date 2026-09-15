@@ -29,6 +29,7 @@ pub use bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
 mod mag_calibrator;
 pub use mag_calibrator::{CalibrationQuality, MagCalibrationResult, MagCalibrator};
+mod mag_model;
 mod naive_cf;
 #[cfg(test)]
 mod naive_cf_test;
