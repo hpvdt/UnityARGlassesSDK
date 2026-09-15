@@ -1,6 +1,7 @@
 use nalgebra::{Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
 
 use super::bad_mag_cause::BadCalibration;
+use super::mag_samples::MagSamples;
 use super::CalibrationQuality;
 
 /// Number of ellipsoid coefficients fitted by the magnetometer calibration
@@ -53,8 +54,9 @@ pub(super) struct CalibrationCandidate {
 /// and separate from the optimizer bookkeeping, diversity neighbor cache,
 /// and publication state that the calibrator owns itself.
 pub(super) struct MagModel<const N: usize> {
-    pub(super) sample_matrix: SMatrix<f32, N, 3>,
-    pub(super) gravity_directions: [Option<Vector3<f32>>; N],
+    /// Retained magnetometer sample cache: the raw samples and the optional
+    /// gravity direction carried by each row.
+    pub(super) samples: MagSamples<N>,
     pub(super) sample_row_count: usize,
     pub(super) parameters: SVector<f32, CALIBRATION_PARAMETER_COUNT>,
     /// Sample mean $\mu$ of the retained magnetometer samples: the center of
@@ -86,11 +88,6 @@ pub(super) struct MagModel<const N: usize> {
 }
 
 impl<const N: usize> MagModel<N> {
-    /// Returns the magnetometer sample stored at `row` of the sample cache.
-    pub(super) fn sample(&self, row: usize) -> Vector3<f32> {
-        self.sample_matrix.row(row).transpose().into_owned()
-    }
-
     pub(super) fn normalized_sample(&self, sample: Vector3<f32>) -> Vector3<f32> {
         (sample - self.sample_mean) / self.sample_rms_radius
     }
@@ -187,7 +184,7 @@ impl<const N: usize> MagModel<N> {
     pub(super) fn mean_centered_coverage(&self) -> f32 {
         let mut gram_sum = CoverageGramMatrix::zeros();
         for row in 0..self.sample_row_count {
-            let centered = self.sample(row) - self.sample_mean;
+            let centered = self.samples.sample(row) - self.sample_mean;
             if let Some(direction) = centered.try_normalize(f32::EPSILON) {
                 let feature = Self::coverage_feature(direction);
                 gram_sum += feature * feature.transpose();
@@ -334,7 +331,7 @@ impl<const N: usize> MagModel<N> {
         let mut radial_square_sum = 0.0f32;
         for row in 0..self.sample_row_count {
             let residual =
-                (candidate.correction * (self.sample(row) - candidate.offset)).norm() - 1.0;
+                (candidate.correction * (self.samples.sample(row) - candidate.offset)).norm() - 1.0;
             radial_square_sum += residual * residual;
         }
         let radial_mean_square = radial_square_sum / self.sample_row_count as f32;
@@ -348,23 +345,23 @@ impl<const N: usize> MagModel<N> {
         // or carried by no retained row.
         let mut gravity_square_sum = 0.0f32;
         let mut gravity_count = 0usize;
-        let gravity_mean_square = if self.learned_gravity_projection_initialized
-            && self.gravity_weight > 0.0
-        {
-            for row in 0..self.sample_row_count {
-                if let Some(gravity) = self.gravity_directions[row] {
-                    let residual =
-                        Self::gravity_features(self.normalized_sample(self.sample(row)), gravity)
-                            .dot(&self.parameters)
-                            - self.learned_gravity_projection;
-                    gravity_square_sum += residual * residual;
-                    gravity_count += 1;
+        let gravity_mean_square =
+            if self.learned_gravity_projection_initialized && self.gravity_weight > 0.0 {
+                for row in 0..self.sample_row_count {
+                    let row = self.samples.row(row);
+                    if let Some(gravity) = row.gravity {
+                        let residual =
+                            Self::gravity_features(self.normalized_sample(row.sample), gravity)
+                                .dot(&self.parameters)
+                                - self.learned_gravity_projection;
+                        gravity_square_sum += residual * residual;
+                        gravity_count += 1;
+                    }
                 }
-            }
-            (gravity_count > 0).then_some(gravity_square_sum / gravity_count as f32)
-        } else {
-            None
-        };
+                (gravity_count > 0).then_some(gravity_square_sum / gravity_count as f32)
+            } else {
+                None
+            };
         let coverage = self.mean_centered_coverage();
         let radial_fitness = Self::radial_fitness_score(Some(radial_mean_square));
         let gravity_fitness = Self::gravity_fitness_score(gravity_mean_square);
