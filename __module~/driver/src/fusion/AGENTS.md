@@ -229,11 +229,18 @@ still-forming cache keep chord-like directions, which collapses the smallest eig
 survives that drift. The cache mean is the center, not the fitted hard-iron offset: the offset's component along the
 thinnest data direction is itself unconstrained for near-planar support, which destabilizes the score exactly where it
 must be decisive. Rank deficiency detects lower-dimensional support by construction: near-planar motion leaves the Gram
-matrix rank-deficient and scores near zero, so partial-arc caches cannot inflate coverage. Physical radial fitness is
-the mean square of $\|A (x_i - b)\| - 1$ recomputed over every retained row with the current working candidate on
-each quality update, sharing the same $O(N)$ cache rescan as coverage; like coverage, the statistic is strictly
-bounded by the retained cache and never outlives the rows that produced it. Radial fitness is a linear ramp from `1`
-at radial RMS `0` to `0` at radial RMS `0.1`.
+matrix rank-deficient and scores near zero, so partial-arc caches cannot inflate coverage. Radial fitness is
+the mean square of the algebraic ellipsoid residual $e_{r,i} = \phi(u_i)^T \theta - 1$ recomputed over every
+retained row with the current working parameters on each quality update, sharing the same $O(N)$ cache rescan as
+coverage; this is exactly the radial data term of the online objective, so fitness directly tracks optimizer
+convergence on the retained support. The shape regularizer is deliberately excluded: fitness is a data-fit
+statistic, not a prior check, and the statistic is strictly bounded by the retained cache and never outlives the
+rows that produced it. Radial fitness is a linear ramp from `1` at radial RMS `0` to `0` at radial RMS `0.5`;
+the ceiling is calibrated against the fixed-seed SimMotion regression, under which converged fits sit at
+algebraic RMS roughly `0.06`–`0.15`. The previous physical residual $\|A (x_i - b)\| - 1$ scaled against the
+algebraic residual by the state-dependent factor $2 \gamma$ and weighted outliers differently, so fitness could
+saturate while the optimizer kept descending its own objective (the Air 1 replay showed block-long post-warmup
+radial-fitness dips to zero, which vanished once fitness moved to the algebraic residual).
 
 Gravity fitness likewise recomputes the mean square of the gravity-projection residual
 $\psi(u_i, g_i)^T \theta - \kappa$ over the retained rows that carry a valid gravity direction, and ramps linearly

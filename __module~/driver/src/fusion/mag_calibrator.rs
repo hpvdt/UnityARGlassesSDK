@@ -109,8 +109,10 @@ pub struct CalibrationQuality {
     /// Directional coverage factor of the confidence in `[0, 1]`: the
     /// E-optimality score of the retained mean-centered unit directions.
     pub coverage: f32,
-    /// Radial fitness sub-factor in `[0, 1]`: the bounded fit of the
-    /// working correction over the retained cache rows.
+    /// Radial fitness sub-factor in `[0, 1]`: the bounded mean-square
+    /// algebraic ellipsoid residual `phi(u_i)^T theta - 1` of the working
+    /// parameters over the retained cache rows — the same data term the
+    /// online optimizer minimizes.
     pub radial_fitness: f32,
     /// Gravity-consistency fitness sub-factor in `[0, 1]`: the bounded fit
     /// of the gravity-projection surrogate over the retained rows carrying

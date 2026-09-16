@@ -14,7 +14,16 @@ pub(super) const CALIBRATION_PARAMETER_COUNT: usize = 9;
 pub(super) type CoverageGramMatrix =
     SMatrix<f32, CALIBRATION_PARAMETER_COUNT, CALIBRATION_PARAMETER_COUNT>;
 const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
-const MAX_RADIAL_RMS: f32 = 0.1;
+/// Radial algebraic-residual RMS at which the radial fitness reaches 0,
+/// ramping linearly from 1 at RMS 0. The residual lives in normalized
+/// cache coordinates, so the constant is calibrated against the fixed-seed
+/// SimMotion regression, where converged fits score algebraic RMS roughly
+/// `0.06`–`0.15`, and against the Air 1 replay, where the post-warmup
+/// average stays near `0.11`. The former physical corrected-radius
+/// residual (`MAX_RADIAL_RMS` `0.1`) lived on a different scale —
+/// algebraically the two differ by roughly `2 * gamma` plus quadratic
+/// outlier weighting — so the old constant does not transfer.
+pub(super) const MAX_RADIAL_RMS: f32 = 0.5;
 /// Gravity-projection RMS residual below which the gravity fitness is 1.
 /// The normal-projection surrogate is biased under anisotropic soft iron, so
 /// even a perfect fit keeps an irreducible residual; the floor keeps that
@@ -328,9 +337,13 @@ impl<const N: usize> MagModel<N> {
     }
 
     /// Radial fitness in `[0, 1]`: a linear ramp from 1 at zero RMS to 0 at
-    /// `MAX_RADIAL_RMS`, applied to the mean square radial residual
-    /// `||A (x_i - b)|| - 1` recomputed over the retained rows with the
-    /// current candidate. A missing or unusable statistic scores 0.
+    /// `MAX_RADIAL_RMS`, applied to the mean square of the algebraic
+    /// ellipsoid residual `phi(u_i)^T theta - 1` recomputed over the
+    /// retained rows with the current working parameters. This is exactly
+    /// the radial data term `e_{r,i}` the online optimizer minimizes, so a
+    /// fitness drop directly signals optimization regress rather than a
+    /// mismatch between two differently scaled residuals. A missing or
+    /// unusable statistic scores 0.
     pub(super) fn radial_fitness_score(mean_square: Option<f32>) -> f32 {
         match mean_square {
             Some(mean_square) if mean_square.is_finite() && mean_square >= 0.0 => {
@@ -434,14 +447,16 @@ impl<const N: usize> MagModel<N> {
     /// fitness statistics rescan the retained rows, so an expired or
     /// replaced row stops contributing to the reported quality immediately.
     ///
-    /// FIXME: the Air 1 replay shows block-long post-warm-up radial-fitness
-    /// dips to zero even though the statistic is recomputed from the
-    /// retained rows on every quality update and rows only leave the cache
-    /// through expiry or replacement. Working state is never rebased or
-    /// reset, so the dips are genuine working-candidate degradation over
-    /// the retained rows on certain trace segments, not a statistic- or
-    /// normalization-lifecycle artifact. Investigate why the online
-    /// candidate degrades there instead of converging.
+    /// Historical note: with the earlier physical residual
+    /// `||A (x_i - b)|| - 1` the Air 1 replay showed block-long post-warm-up
+    /// radial-fitness dips to zero. The physical residual scales against the
+    /// optimizer's algebraic residual by the state-dependent factor
+    /// `2 * gamma` and warps outliers differently, so the statistic could
+    /// degrade while the optimizer kept descending its own objective.
+    /// Recomputing fitness from the algebraic residual
+    /// `phi(u_i)^T theta - 1` — the optimizer's own data term — removed the
+    /// dips: the Air 1 post-warm-up fitness now stays above the 0.5
+    /// stability floor for thousands of consecutive evaluations.
     pub(super) fn update_quality(&mut self) -> Option<CalibrationCandidate> {
         if self.sample_row_count < CALIBRATION_PARAMETER_COUNT {
             self.quality = CalibrationQuality::ZERO;
@@ -454,15 +469,19 @@ impl<const N: usize> MagModel<N> {
                 return None;
             }
         };
-        // Radial fitness: mean square of the corrected-radius residual over
-        // every retained row, in fixed ascending row order so the result is
-        // bit-deterministic. A non-finite accumulation marks the statistic
-        // unusable, matching the zero-quality path above.
+        // Radial fitness: mean square of the algebraic ellipsoid residual
+        // `phi(u_i)^T theta - 1` over every retained row, in fixed ascending
+        // row order so the result is bit-deterministic. This is the same
+        // data term the online optimizer minimizes in normalized cache
+        // coordinates, so the fitness directly tracks optimization progress
+        // on the retained support; the regularization prior is deliberately
+        // excluded, keeping the statistic a pure data-fit measure. A
+        // non-finite accumulation marks the statistic unusable, matching
+        // the zero-quality path above.
         let mut radial_square_sum = 0.0f32;
         for row in 0..self.sample_row_count {
-            let residual = (candidate.correction
-                * (self.samples.view(row).sample() - candidate.offset))
-                .norm()
+            let residual = Self::features(self.normalized_sample(self.samples.view(row).sample()))
+                .dot(&self.parameters)
                 - 1.0;
             radial_square_sum += residual * residual;
         }

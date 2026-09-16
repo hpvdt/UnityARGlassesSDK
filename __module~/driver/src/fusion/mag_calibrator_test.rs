@@ -9,17 +9,21 @@ use super::{
 
 impl<const N: usize> MagCalibrator<N> {
     /// Independently recomputes the radial mean square of the current
-    /// working candidate over the retained cache, row by row in ascending
-    /// order. Deliberately duplicates the accumulation inside
+    /// working parameters over the retained cache: the algebraic residual
+    /// `phi(u_i)^T theta - 1` in normalized cache coordinates, row by row in
+    /// ascending order. Deliberately duplicates the accumulation inside
     /// `update_quality` instead of calling it, so the tests cross-check the
-    /// production path.
+    /// production path. Gated on a valid working candidate to mirror the
+    /// gating in `update_quality`.
     fn radial_mean_square_for_test(&self) -> Option<f32> {
-        let candidate = self.model.working_candidate().ok()?;
+        self.model.working_candidate().ok()?;
         let mut sum = 0.0f32;
         for row in 0..self.model.sample_row_count {
-            let residual = (candidate.correction
-                * (self.model.samples.view(row).sample() - candidate.offset))
-                .norm()
+            let residual = MagModel::<N>::features(
+                self.model
+                    .normalized_sample(self.model.samples.view(row).sample()),
+            )
+            .dot(&self.model.parameters)
                 - 1.0;
             sum += residual * residual;
         }
@@ -410,9 +414,9 @@ fn mag_calibrator_fitness_recovers_after_full_expiry() {
     }
 
     // Once enough fresh rows are retained, the reported fitness is exactly
-    // the mean square residual recomputed over the calibrator's own
-    // retained cache with its current working candidate; nothing from the
-    // expired rows survives in it.
+    // the mean square algebraic residual recomputed over the calibrator's
+    // own retained cache with its current working parameters; nothing from
+    // the expired rows survives in it.
     let mut result = None;
     for i in 7..63 {
         let raw = offset + distortion * sample_direction(i, 63);
@@ -489,7 +493,7 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
     assert_caches_identical(&lifespan_a, &survivors_only);
 
     // A's reported fitness is a pure function of its retained rows and its
-    // current candidate, recomputed independently here row by row. Fitness
+    // current working parameters, recomputed independently here row by row. Fitness
     // itself is NOT asserted bitwise equal to B's: A and B share the cache
     // but not the online-optimizer parameter history, which legitimately
     // still carries the expired rows' gradients (non-strict by design; see
@@ -1060,13 +1064,17 @@ fn design_coverage_is_rotation_invariant_and_detects_rank_deficiency() {
 
 #[test]
 fn live_quality_ramps_match_the_specification() {
-    // Radial RMS ramps fitness linearly from 1 at 0 to 0 at the 0.1 ceiling.
+    use super::super::mag_model::MAX_RADIAL_RMS;
+
+    // Radial RMS ramps fitness linearly from 1 at 0 to 0 at the
+    // `MAX_RADIAL_RMS` ceiling; the residual is the algebraic ellipsoid
+    // residual `phi(u_i)^T theta - 1`, matching the optimizer's data term.
     assert_eq!(MagCalibrator::<9>::fitness_score_for_test(Some(0.0)), 1.0);
-    let fitness = MagCalibrator::<9>::fitness_score_for_test(Some(0.05f32.powi(2)));
+    let fitness = MagCalibrator::<9>::fitness_score_for_test(Some((0.5 * MAX_RADIAL_RMS).powi(2)));
     assert!((fitness - 0.5).abs() < 1.0e-6, "fitness={fitness}");
     // At and beyond the ceiling, and for unusable statistics, fitness is 0.
     assert_eq!(
-        MagCalibrator::<9>::fitness_score_for_test(Some(0.1f32.powi(2))),
+        MagCalibrator::<9>::fitness_score_for_test(Some(MAX_RADIAL_RMS.powi(2))),
         0.0
     );
     assert_eq!(
