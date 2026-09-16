@@ -448,14 +448,14 @@ impl<const N: usize> MagModel<N> {
     /// replaced row stops contributing to the reported quality immediately.
     ///
     /// Historical note: with the earlier physical residual
-    /// `||A (x_i - b)|| - 1` the Air 1 replay showed block-long post-warm-up
+    /// `||A (x_i - b)|| - 1` the Air 1 replay showed block-long post-warmup
     /// radial-fitness dips to zero. The physical residual scales against the
     /// optimizer's algebraic residual by the state-dependent factor
     /// `2 * gamma` and warps outliers differently, so the statistic could
     /// degrade while the optimizer kept descending its own objective.
     /// Recomputing fitness from the algebraic residual
     /// `phi(u_i)^T theta - 1` — the optimizer's own data term — removed the
-    /// dips: the Air 1 post-warm-up fitness now stays above the 0.5
+    /// dips: the Air 1 post-warmup fitness now stays above the 0.5
     /// stability floor for thousands of consecutive evaluations.
     pub(super) fn update_quality(&mut self) -> Option<CalibrationCandidate> {
         if self.sample_row_count < CALIBRATION_PARAMETER_COUNT {
