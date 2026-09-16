@@ -71,25 +71,17 @@ pub(super) struct MagModel<const N: usize> {
     /// the sample normalization $u_i = (x_i - \mu) / r$.
     pub(super) sample_mean: Vector3<f32>,
     /// RMS radius $r$ of the retained magnetometer samples: the scale of the
-    /// sample normalization $u_i = (x_i - \mu) / r$.
+    /// sample normalization $u_i = (x_i - \mu) / r$. Zero on an empty or
+    /// single-point cache, which makes the normalization unusable; see
+    /// `sample_normalization_usable`.
     pub(super) sample_rms_radius: f32,
-    //FIXME, both sample_normalization_initialized and learned_gravity_projection_initialized are major vulnerability and should be removed
-    // since Quality/confidence estimation relies on them. An uninitialised state entails a defective confidence score and premature output of corrected data, leading to aircraft crash
-    // revise the code such that they are initialised from the beginning
-    // run mag_calibrator_sim_motion test, make sure that any post-warmup confidence score contains a valid gravity fitness score
-    /// Whether the sample normalization $(\mu, r)$ of the retained
-    /// magnetometer samples is usable: both finite and the radius above
-    /// `f32::EPSILON`, which requires two distinct samples.
-    pub(super) sample_normalization_initialized: bool,
     /// Learned scalar $\kappa$ of the gravity surrogate: the projection of
     /// the normalized gravity direction $g_i$ onto the ellipsoid normal
     /// $n_i = Q u_i + q / 2$ at a retained row, $\kappa = \psi(u_i, g_i)^T
     /// \theta$, which the surrogate keeps approximately constant across
-    /// rows. Initialized once from the first usable observation and then
-    /// refined by the optimizer gradient steps.
-    pub(super) learned_gravity_projection: f32,
-    /// Whether `learned_gravity_projection` holds a usable finite value.
-    pub(super) learned_gravity_projection_initialized: bool,
+    /// rows. `None` until seeded once from the first usable gravity
+    /// observation, then refined by the optimizer gradient steps.
+    pub(super) learned_gravity_projection: Option<f32>,
     pub(super) gravity_weight: f32,
     /// Live calibration quality factors of the current working candidate,
     /// reset together with the model minimum and recomputed by
@@ -100,6 +92,17 @@ pub(super) struct MagModel<const N: usize> {
 impl<const N: usize> MagModel<N> {
     pub(super) fn normalized_sample(&self, sample: Vector3<f32>) -> Vector3<f32> {
         (sample - self.sample_mean) / self.sample_rms_radius
+    }
+
+    /// Whether the sample normalization $(\mu, r)$ of the retained
+    /// magnetometer samples is usable: both finite and the radius above
+    /// `f32::EPSILON`, which requires two distinct samples. Derived from the
+    /// normalization fields at point of use, so usability can never disagree
+    /// with the state it describes.
+    pub(super) fn sample_normalization_usable(&self) -> bool {
+        self.sample_mean.iter().all(|value| value.is_finite())
+            && self.sample_rms_radius.is_finite()
+            && self.sample_rms_radius > f32::EPSILON
     }
 
     pub(super) fn add_raw_moment(&mut self, sample: Vector3<f32>) {
@@ -146,22 +149,17 @@ impl<const N: usize> MagModel<N> {
     /// is already designed to track the moving convex optimum as cache
     /// replacements improve coverage. Working state is therefore never
     /// rebased or reset: only a zero-radius (empty or single-point) cache
-    /// marks the normalization uninitialized, which keeps the optimizer
+    /// makes the normalization unusable, which keeps the optimizer
     /// idle until two distinct samples exist and reports quality zero
     /// through the usual unusable-candidate path.
     pub(super) fn refresh_normalization(&mut self) {
         let Some((sample_mean, covariance)) = self.raw_mean_and_covariance() else {
             self.sample_mean = Vector3::zeros();
             self.sample_rms_radius = 0.0;
-            self.sample_normalization_initialized = false;
             return;
         };
-        let radius = covariance.trace().sqrt();
-        self.sample_normalization_initialized = sample_mean.iter().all(|value| value.is_finite())
-            && radius.is_finite()
-            && radius > f32::EPSILON;
         self.sample_mean = sample_mean;
-        self.sample_rms_radius = radius;
+        self.sample_rms_radius = covariance.trace().sqrt();
     }
 
     /// Prior coefficient vector of the working ellipsoid state: the
@@ -208,7 +206,7 @@ impl<const N: usize> MagModel<N> {
         current_sample: Vector3<f32>,
         current_gravity: Option<Vector3<f32>>,
     ) {
-        if self.learned_gravity_projection_initialized || self.gravity_weight == 0.0 {
+        if self.learned_gravity_projection.is_some() || self.gravity_weight == 0.0 {
             return;
         }
         let observation = current_gravity
@@ -223,8 +221,7 @@ impl<const N: usize> MagModel<N> {
             let features = Self::gravity_features(self.normalized_sample(sample), gravity);
             let projection = features.dot(&self.parameters);
             if projection.is_finite() {
-                self.learned_gravity_projection = projection;
-                self.learned_gravity_projection_initialized = true;
+                self.learned_gravity_projection = Some(projection);
             }
         }
     }
@@ -376,11 +373,7 @@ impl<const N: usize> MagModel<N> {
     /// Derives one finite SPD correction candidate from the current online
     /// ellipsoid state without scanning retained rows.
     pub(super) fn working_candidate(&self) -> Result<CalibrationCandidate, BadCalibration> {
-        if !self.sample_normalization_initialized
-            || !self.sample_mean.iter().all(|value| value.is_finite())
-            || !self.sample_rms_radius.is_finite()
-            || self.sample_rms_radius <= f32::EPSILON
-        {
+        if !self.sample_normalization_usable() {
             return Err(BadCalibration::Unsolveable {
                 message: "sample normalization is non-finite or zero",
             });
@@ -480,27 +473,27 @@ impl<const N: usize> MagModel<N> {
         }
         // Gravity fitness: mean square of the projection residual over the
         // retained rows that carry a gravity direction. The statistic stays
-        // absent (neutral 1 below) when gravity is disabled, uninitialized,
-        // or carried by no retained row.
+        // absent (neutral 1 below) when gravity is disabled, the projection
+        // is not yet seeded, or no retained row carries gravity.
         let mut gravity_square_sum = 0.0f32;
         let mut gravity_count = 0usize;
-        let gravity_mean_square =
-            if self.learned_gravity_projection_initialized && self.gravity_weight > 0.0 {
+        let gravity_mean_square = match self.learned_gravity_projection {
+            Some(kappa) if self.gravity_weight > 0.0 => {
                 for row in 0..self.sample_row_count {
                     let row = self.samples.view(row);
                     if let Some(gravity) = row.gravity() {
                         let residual =
                             Self::gravity_features(self.normalized_sample(row.sample()), gravity)
                                 .dot(&self.parameters)
-                                - self.learned_gravity_projection;
+                                - kappa;
                         gravity_square_sum += residual * residual;
                         gravity_count += 1;
                     }
                 }
                 (gravity_count > 0).then_some(gravity_square_sum / gravity_count as f32)
-            } else {
-                None
-            };
+            }
+            _ => None,
+        };
         let coverage = self.mean_centered_coverage();
         let radial_fitness = Self::radial_fitness_score(Some(radial_mean_square));
         let gravity_fitness = Self::gravity_fitness_score(gravity_mean_square);

@@ -243,9 +243,7 @@ impl<const N: usize> Default for MagCalibrator<N> {
                 raw_outer_product_sum: Matrix3::zeros(),
                 sample_mean: Vector3::zeros(),
                 sample_rms_radius: 0.0,
-                sample_normalization_initialized: false,
-                learned_gravity_projection: 0.0,
-                learned_gravity_projection_initialized: false,
+                learned_gravity_projection: None,
                 gravity_weight: DEFAULT_GRAVITY_WEIGHT,
                 quality: CalibrationQuality::ZERO,
             },
@@ -409,7 +407,7 @@ impl<const N: usize> MagCalibrator<N> {
             let normalized = self.model.normalized_sample(sample);
             radial_rows.push(MagModel::<N>::features(normalized));
             if let Some(gravity) =
-                gravity.filter(|_| self.model.learned_gravity_projection_initialized)
+                gravity.filter(|_| self.model.learned_gravity_projection.is_some())
             {
                 gravity_rows.push(MagModel::<N>::gravity_features(normalized, gravity));
             }
@@ -450,7 +448,7 @@ impl<const N: usize> MagCalibrator<N> {
         current_gravity: Option<Vector3<f32>>,
         accepted_row: Option<usize>,
     ) {
-        if !self.model.sample_normalization_initialized {
+        if !self.model.sample_normalization_usable() {
             return;
         }
         self.model
@@ -511,7 +509,8 @@ impl<const N: usize> MagCalibrator<N> {
         }
 
         let parameters = self.model.parameters;
-        let kappa = self.model.learned_gravity_projection;
+        // Gravity rows exist only once the projection is seeded.
+        let kappa = self.model.learned_gravity_projection.unwrap_or(0.0);
         let residuals = &features * parameters - DVector::from_element(features.nrows(), 1.0);
         let mut gradient =
             Self::parameter_vector(features.tr_mul(&residuals)) / features.nrows() as f32;
@@ -568,7 +567,13 @@ impl<const N: usize> MagCalibrator<N> {
                 && objective < old_objective
             {
                 self.model.parameters = trial_parameters;
-                self.model.learned_gravity_projection = trial_kappa;
+                // A gravity-free update leaves `trial_kappa` at the 0.0
+                // placeholder; only an already seeded projection may be
+                // refined, otherwise the placeholder would be planted as a
+                // seed ahead of any gravity observation.
+                if self.model.learned_gravity_projection.is_some() {
+                    self.model.learned_gravity_projection = Some(trial_kappa);
+                }
                 return true;
             }
             step_size *= 0.5;

@@ -241,9 +241,10 @@ from `1` at the `0.1` RMS floor to `0` at the `0.35` ceiling (the cache-wide mea
 trailing-window estimate the original `0.3` ceiling was tuned against). The floor absorbs the surrogate's known
 anisotropic soft-iron bias: even a perfect fit keeps an irreducible residual, and it must not drag down a good
 calibration. A
-missing statistic — gravity disabled (`gravity_weight(0)`), uninitialized, or carried by no retained row — maps to a
-neutral `1` rather than `0`: gravity is optional, so an absent or disabled gravity term never penalizes a
-magnetometer-only calibration, unlike the mandatory radial statistic whose absence scores `0`.
+missing statistic — gravity disabled (`gravity_weight(0)`), the projection $\kappa$ not yet seeded from a gravity
+observation, or carried by no retained row — maps to a neutral `1` rather than `0`: gravity is optional, so an absent
+or disabled gravity term never penalizes a magnetometer-only calibration, unlike the mandatory radial statistic whose
+absence scores `0`.
 
 Live fitness is the product of the radial and gravity factors, and live confidence is coverage times fitness, clamped
 to $[0, 1]$. `MagCalibrationResult` reports every factor: `confidence`, `coverage`, `fitness`, `radial_fitness`, and

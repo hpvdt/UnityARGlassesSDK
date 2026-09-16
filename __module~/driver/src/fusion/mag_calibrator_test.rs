@@ -30,7 +30,8 @@ impl<const N: usize> MagCalibrator<N> {
     /// working parameters over the retained rows carrying a gravity
     /// direction, mirroring the gating in `update_quality`.
     fn gravity_mean_square_for_test(&self) -> Option<f32> {
-        if !(self.model.learned_gravity_projection_initialized && self.model.gravity_weight > 0.0) {
+        let kappa = self.model.learned_gravity_projection?;
+        if self.model.gravity_weight <= 0.0 {
             return None;
         }
         let mut sum = 0.0f32;
@@ -43,7 +44,7 @@ impl<const N: usize> MagCalibrator<N> {
                     gravity,
                 )
                 .dot(&self.model.parameters)
-                    - self.model.learned_gravity_projection;
+                    - kappa;
                 sum += residual * residual;
                 count += 1;
             }
