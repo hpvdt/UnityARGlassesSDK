@@ -1142,7 +1142,7 @@ fn mag_calibrator_reports_confidence_factors() {
     );
 
     // With a consistent co-rotating gravity direction the gravity factor is
-    // live in [0, 1] and confidence is the three-factor product. Gravity
+    // live in [0, 1] and confidence combines the three factors. Gravity
     // fixed in the body frame while the attitude rotates is physically
     // contradictory: no constant dip angle exists, the projection residual
     // stays large, and the factor drops.
@@ -1181,9 +1181,15 @@ fn mag_calibrator_reports_confidence_factors() {
         "gravity_fitness={}",
         refined.gravity_fitness
     );
+    // The combined fitness is the weighted power mean with the gravity
+    // term's effective weight: `gravity_weight` (0.01) while the gravity
+    // statistic is live, matching the objective's term ratio `1 : w_g`.
+    assert_eq!(refined.gravity_term_weight, 0.01);
+    let radial_exponent = 1.0f32 / (1.0 + 0.01);
     assert_eq!(
         refined.fitness(),
-        refined.radial_fitness * refined.gravity_fitness
+        refined.radial_fitness.powf(radial_exponent)
+            * refined.gravity_fitness.powf(0.01 * radial_exponent)
     );
     assert_eq!(
         refined.confidence(),

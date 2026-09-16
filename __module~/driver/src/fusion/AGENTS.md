@@ -253,9 +253,20 @@ observation, or carried by no retained row — maps to a neutral `1` rather than
 or disabled gravity term never penalizes a magnetometer-only calibration, unlike the mandatory radial statistic whose
 absence scores `0`.
 
-Live fitness is the product of the radial and gravity factors, and live confidence is coverage times fitness, clamped
-to $[0, 1]$. `MagCalibrationResult` reports every factor: `confidence`, `coverage`, `fitness`, `radial_fitness`, and
-`gravity_fitness`.
+Live fitness is the weighted power mean
+
+$$
+\mathrm{fitness} = \mathrm{radial}^{1/(1+w_g)} \cdot \mathrm{gravity}^{w_g/(1+w_g)}
+$$
+
+of the two fitness factors, mirroring the objective's total-loss ratio $J = J_r + w_g J_g$: because the objective
+normalizes each data term by its own observation count, the counts cancel and the relative weight is $w_g$ itself
+(the code stores it as `CalibrationQuality::gravity_term_weight`). The per-statistic ramps — including the gravity
+bias floor — apply before the combination, so the surrogate's anisotropic bias never leaks into the radial
+assessment the way a single combined ramp would. When the gravity statistic is absent the effective weight is `0`
+and fitness reduces exactly to the radial factor. Live confidence is coverage times fitness, clamped to $[0, 1]$.
+`MagCalibrationResult` reports every factor: `confidence`, `coverage`, `fitness`, `radial_fitness`, `gravity_fitness`,
+and `gravity_term_weight`.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
 change only after 55 valid updates at confidence at least `0.0125`, including while the cache is partial. Confidence in

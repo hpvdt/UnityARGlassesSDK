@@ -120,6 +120,12 @@ pub struct CalibrationQuality {
     /// the gravity term is disabled, so a magnetometer-only stream is never
     /// penalized.
     pub gravity_fitness: f32,
+    /// Effective relative weight of the gravity fitness factor in
+    /// [`CalibrationQuality::fitness`]: the configured `gravity_weight`
+    /// while the gravity-projection statistic is live, `0.0` otherwise.
+    /// Zero reduces the combination to `radial_fitness` exactly, matching
+    /// the objective with the surrogate disabled.
+    pub gravity_term_weight: f32,
 }
 
 impl CalibrationQuality {
@@ -127,20 +133,43 @@ impl CalibrationQuality {
         coverage: 0.0,
         radial_fitness: 0.0,
         gravity_fitness: 0.0,
+        gravity_term_weight: 0.0,
     };
 
-    pub(super) fn new(coverage: f32, radial_fitness: f32, gravity_fitness: f32) -> Self {
+    pub(super) fn new(
+        coverage: f32,
+        radial_fitness: f32,
+        gravity_fitness: f32,
+        gravity_term_weight: f32,
+    ) -> Self {
         Self {
             coverage,
             radial_fitness,
             gravity_fitness,
+            gravity_term_weight,
         }
     }
 
-    /// Combined fitness factor of the confidence in `[0, 1]`:
-    /// `radial_fitness * gravity_fitness`.
+    /// Combined fitness factor of the confidence in `[0, 1]`: the weighted
+    /// power mean
+    /// `radial_fitness^(1/(1+w)) * gravity_fitness^(w/(1+w))` with
+    /// `w = gravity_term_weight`, mirroring the ratio in which the online
+    /// objective totals the two data terms (`1 : w_g`): the objective
+    /// normalizes each term by its own observation count, so counts cancel
+    /// and the relative weight is `w_g` itself. The per-factor ramps (and
+    /// hence the gravity bias floor) stay applied per statistic before
+    /// combination, so the surrogate's known anisotropic bias never leaks
+    /// into the radial assessment. `w = 0` — gravity disabled, unseeded,
+    /// or absent from the cache — reduces the combination to
+    /// `radial_fitness`, and a gravity-free stream is never penalized.
     pub fn fitness(&self) -> f32 {
-        self.radial_fitness * self.gravity_fitness
+        let weight = self.gravity_term_weight;
+        if !(weight > 0.0) || !weight.is_finite() {
+            return self.radial_fitness;
+        }
+        let radial_exponent = 1.0 / (1.0 + weight);
+        self.radial_fitness.powf(radial_exponent)
+            * self.gravity_fitness.powf(weight * radial_exponent)
     }
 
     /// Current bounded calibration quality in `[0, 1]`: the clamped product
