@@ -1,7 +1,7 @@
 use nalgebra::{Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
 
 use super::bad_mag_cause::BadCalibration;
-use super::mag_samples::{MagSampleAccess, MagSamples};
+use super::mag_samples::{MagSamples, Row};
 use super::CalibrationQuality;
 
 /// Number of ellipsoid coefficients fitted by the magnetometer calibration

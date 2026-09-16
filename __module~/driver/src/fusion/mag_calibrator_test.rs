@@ -1,7 +1,7 @@
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
 use super::super::mag_model::{CoverageGramMatrix, MagModel};
-use super::super::mag_samples::MagSampleAccess;
+use super::super::mag_samples::Row;
 use super::super::BadMagCause;
 use super::{
     MagCalibrationResult, MagCalibrator, MIN_PUBLICATION_CONFIDENCE, MIN_PUBLICATION_STREAK,

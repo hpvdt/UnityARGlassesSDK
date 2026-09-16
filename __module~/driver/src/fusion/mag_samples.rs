@@ -1,9 +1,9 @@
 use nalgebra::{SMatrix, Vector3};
 
 /// Read access to the magnetometer sample and the optional gravity direction
-/// of one retained cache row, shared by the owned [`MagSampleRow`] and the
-/// borrowed [`MagSampleView`].
-pub(super) trait MagSampleAccess {
+/// of one retained cache row, shared by the owned [`ConcreteRow`] and the
+/// borrowed [`Slice`].
+pub(super) trait Row {
     /// The raw FRD magnetometer sample of the row.
     fn sample(&self) -> Vector3<f32>;
     /// The optional normalized, co-timestamped body-frame FRD gravity
@@ -16,12 +16,12 @@ pub(super) trait MagSampleAccess {
 /// FRD gravity direction carried by that row. The two columns always move
 /// together through append, replacement, and expiry compaction.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct MagSampleRow {
+pub(super) struct ConcreteRow {
     sample: Vector3<f32>,
     gravity: Option<Vector3<f32>>,
 }
 
-impl MagSampleRow {
+impl ConcreteRow {
     /// Bundles one raw FRD magnetometer sample with its optional normalized,
     /// co-timestamped FRD gravity direction.
     pub(super) fn new(sample: Vector3<f32>, gravity: Option<Vector3<f32>>) -> Self {
@@ -29,7 +29,7 @@ impl MagSampleRow {
     }
 }
 
-impl MagSampleAccess for MagSampleRow {
+impl Row for ConcreteRow {
     fn sample(&self) -> Vector3<f32> {
         self.sample
     }
@@ -41,14 +41,14 @@ impl MagSampleAccess for MagSampleRow {
 
 /// Borrowed, zero-copy view of one retained row of a [`MagSamples`] cache:
 /// each column is materialized from the backing arrays only when its
-/// [`MagSampleAccess`] accessor runs, so reading just the sample or just the
+/// [`Row`] accessor runs, so reading just the sample or just the
 /// gravity of a row never touches the other column.
-pub(super) struct MagSampleView<'a, const N: usize> {
+pub(super) struct Slice<'a, const N: usize> {
     samples: &'a MagSamples<N>,
     index: usize,
 }
 
-impl<const N: usize> MagSampleAccess for MagSampleView<'_, N> {
+impl<const N: usize> Row for Slice<'_, N> {
     fn sample(&self) -> Vector3<f32> {
         self.samples
             .sample_matrix
@@ -62,11 +62,11 @@ impl<const N: usize> MagSampleAccess for MagSampleView<'_, N> {
     }
 }
 
-impl<const N: usize> MagSampleView<'_, N> {
-    /// Copies the viewed row into an owned [`MagSampleRow`], releasing the
+impl<const N: usize> Slice<'_, N> {
+    /// Copies the viewed row into an owned [`ConcreteRow`], releasing the
     /// borrow on the cache so the row can be written back to another index.
-    pub(super) fn copied(&self) -> MagSampleRow {
-        MagSampleRow::new(self.sample(), self.gravity())
+    pub(super) fn copied(&self) -> ConcreteRow {
+        ConcreteRow::new(self.sample(), self.gravity())
     }
 }
 
@@ -89,16 +89,16 @@ impl<const N: usize> Default for MagSamples<N> {
 }
 
 impl<const N: usize> MagSamples<N> {
-    /// Borrows row `index` as a zero-copy [`MagSampleView`].
-    pub(super) fn view(&self, index: usize) -> MagSampleView<'_, N> {
-        MagSampleView {
+    /// Borrows row `index` as a zero-copy [`Slice`].
+    pub(super) fn view(&self, index: usize) -> Slice<'_, N> {
+        Slice {
             samples: self,
             index,
         }
     }
 
     /// Writes `row` into the sample matrix and gravity array at `index`.
-    pub(super) fn set_row(&mut self, index: usize, row: MagSampleRow) {
+    pub(super) fn set_row(&mut self, index: usize, row: ConcreteRow) {
         self.sample_matrix.set_row(index, &row.sample.transpose());
         self.gravity_directions[index] = row.gravity;
     }

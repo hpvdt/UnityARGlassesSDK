@@ -2,7 +2,7 @@ use nalgebra::{DMatrix, DVector, Matrix3, SVector, Vector3};
 
 use super::bad_mag_cause::{BadMagCause, BadReading};
 use super::mag_model::{MagModel, CALIBRATION_PARAMETER_COUNT};
-use super::mag_samples::{MagSampleAccess, MagSampleRow, MagSamples};
+use super::mag_samples::{ConcreteRow, MagSamples, Row};
 const SHAPE_REGULARIZATION: f32 = 1.0e-3;
 /// Scale of the regularization target shape, in units of the identity.
 /// Algebraic ellipsoid fits under noise systematically inflate the ellipsoid
@@ -1050,7 +1050,7 @@ impl<const N: usize> MagCalibrator<N> {
         if index < N {
             self.model
                 .samples
-                .set_row(index, MagSampleRow::new(sample, gravity_direction));
+                .set_row(index, ConcreteRow::new(sample, gravity_direction));
             self.sample_timestamps_us[index] = timestamp_us;
         }
     }
