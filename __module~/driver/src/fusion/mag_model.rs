@@ -73,8 +73,10 @@ pub(super) struct MagModel<const N: usize> {
     /// RMS radius $r$ of the retained magnetometer samples: the scale of the
     /// sample normalization $u_i = (x_i - \mu) / r$.
     pub(super) sample_rms_radius: f32,
-    //FIXME, both sample_normalization_initialized and learned_gravity_projection_initialized are not required
-    // whether the calibration is initialised should be totally determined by the confidence score of CalibrationQuality
+    //FIXME, both sample_normalization_initialized and learned_gravity_projection_initialized are major vulnerability and should be removed
+    // since Quality/confidence estimation relies on them. An uninitialised state entails a defective confidence score and premature output of corrected data, leading to aircraft crash
+    // revise the code such that they are initialised from the beginning
+    // run mag_calibrator_sim_motion test, make sure that any post-warmup confidence score contains a valid gravity fitness score
     /// Whether the sample normalization $(\mu, r)$ of the retained
     /// magnetometer samples is usable: both finite and the radius above
     /// `f32::EPSILON`, which requires two distinct samples.
