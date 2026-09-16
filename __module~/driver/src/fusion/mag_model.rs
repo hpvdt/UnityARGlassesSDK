@@ -1,6 +1,7 @@
 use nalgebra::{Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
 
 use super::bad_mag_cause::BadCalibration;
+use super::mag_calibrator::SHAPE_PRIOR_SCALE;
 use super::mag_samples::{MagSamples, Row};
 use super::CalibrationQuality;
 
@@ -59,6 +60,13 @@ pub(super) struct MagModel<const N: usize> {
     pub(super) samples: MagSamples<N>,
     pub(super) sample_row_count: usize,
     pub(super) parameters: SVector<f32, CALIBRATION_PARAMETER_COUNT>,
+    /// Raw first moment of the retained magnetometer samples, maintained
+    /// incrementally on append, replacement, and expiry. Backs
+    /// `raw_mean_and_covariance` and thus `refresh_normalization`.
+    pub(super) raw_sample_sum: Vector3<f64>,
+    /// Raw second outer-product moment of the retained magnetometer
+    /// samples; see `raw_sample_sum`.
+    pub(super) raw_outer_product_sum: Matrix3<f64>,
     /// Sample mean $\mu$ of the retained magnetometer samples: the center of
     /// the sample normalization $u_i = (x_i - \mu) / r$.
     pub(super) sample_mean: Vector3<f32>,
@@ -90,6 +98,133 @@ pub(super) struct MagModel<const N: usize> {
 impl<const N: usize> MagModel<N> {
     pub(super) fn normalized_sample(&self, sample: Vector3<f32>) -> Vector3<f32> {
         (sample - self.sample_mean) / self.sample_rms_radius
+    }
+
+    pub(super) fn add_raw_moment(&mut self, sample: Vector3<f32>) {
+        let sample = sample.cast::<f64>();
+        self.raw_sample_sum += sample;
+        self.raw_outer_product_sum += sample * sample.transpose();
+    }
+
+    pub(super) fn remove_raw_moment(&mut self, sample: Vector3<f32>) {
+        let sample = sample.cast::<f64>();
+        self.raw_sample_sum -= sample;
+        self.raw_outer_product_sum -= sample * sample.transpose();
+    }
+
+    pub(super) fn clear_raw_moments(&mut self) {
+        self.raw_sample_sum = Vector3::zeros();
+        self.raw_outer_product_sum = Matrix3::zeros();
+    }
+
+    pub(super) fn raw_mean_and_covariance(&self) -> Option<(Vector3<f32>, Matrix3<f32>)> {
+        if self.sample_row_count == 0 {
+            return None;
+        }
+        let count = self.sample_row_count as f64;
+        let mean = self.raw_sample_sum / count;
+        let covariance = self.raw_outer_product_sum / count - mean * mean.transpose();
+        let covariance = 0.5 * (covariance + covariance.transpose());
+        let mean = mean.cast::<f32>();
+        let covariance = covariance.cast::<f32>();
+        if mean.iter().all(|value| value.is_finite())
+            && covariance.iter().all(|value| value.is_finite())
+        {
+            Some((mean, covariance))
+        } else {
+            None
+        }
+    }
+
+    /// Recomputes the current cache normalization from the raw moments
+    /// without touching the working state. Every append, replacement, and
+    /// expiry drift the mean and radius; the working coefficients keep
+    /// their meaning in the new normalization directly, because the drift
+    /// per cache mutation is `O(1 / sample_row_count)` and the online optimizer
+    /// is already designed to track the moving convex optimum as cache
+    /// replacements improve coverage. Working state is therefore never
+    /// rebased or reset: only a zero-radius (empty or single-point) cache
+    /// marks the normalization uninitialized, which keeps the optimizer
+    /// idle until two distinct samples exist and reports quality zero
+    /// through the usual unusable-candidate path.
+    pub(super) fn refresh_normalization(&mut self) {
+        let Some((sample_mean, covariance)) = self.raw_mean_and_covariance() else {
+            self.sample_mean = Vector3::zeros();
+            self.sample_rms_radius = 0.0;
+            self.sample_normalization_initialized = false;
+            return;
+        };
+        let radius = covariance.trace().sqrt();
+        self.sample_normalization_initialized = sample_mean.iter().all(|value| value.is_finite())
+            && radius.is_finite()
+            && radius > f32::EPSILON;
+        self.sample_mean = sample_mean;
+        self.sample_rms_radius = radius;
+    }
+
+    /// Prior coefficient vector of the working ellipsoid state: the
+    /// shape-prior scale on the `Q` diagonal and zero elsewhere. It is both
+    /// the initial value of `parameters` and the center of the shape
+    /// regularizer.
+    pub(super) fn parameter_prior() -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
+        SVector::from_row_slice(&[
+            SHAPE_PRIOR_SCALE,
+            SHAPE_PRIOR_SCALE,
+            SHAPE_PRIOR_SCALE,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ])
+    }
+
+    /// Radial feature vector of the normalized ellipsoid equation: the
+    /// quadratic and linear terms whose dot product with `parameters` is the
+    /// algebraic residual `phi^T theta - 1`.
+    pub(super) fn features(sample: Vector3<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
+        // TODO: use nalgebra outer-product and vector-view operations instead of elementwise feature construction
+        SVector::from_row_slice(&[
+            sample.x * sample.x,
+            sample.y * sample.y,
+            sample.z * sample.z,
+            2.0 * sample.x * sample.y,
+            2.0 * sample.x * sample.z,
+            2.0 * sample.y * sample.z,
+            sample.x,
+            sample.y,
+            sample.z,
+        ])
+    }
+
+    /// Initializes the learned gravity projection once from the first usable
+    /// observation: the current one when it carries a gravity direction,
+    /// otherwise the first retained row that does.
+    pub(super) fn initialize_gravity_projection(
+        &mut self,
+        current_sample: Vector3<f32>,
+        current_gravity: Option<Vector3<f32>>,
+    ) {
+        if self.learned_gravity_projection_initialized || self.gravity_weight == 0.0 {
+            return;
+        }
+        let observation = current_gravity
+            .map(|gravity| (current_sample, gravity))
+            .or_else(|| {
+                (0..self.sample_row_count).find_map(|row| {
+                    let row = self.samples.view(row);
+                    row.gravity().map(|gravity| (row.sample(), gravity))
+                })
+            });
+        if let Some((sample, gravity)) = observation {
+            let features = Self::gravity_features(self.normalized_sample(sample), gravity);
+            let projection = features.dot(&self.parameters);
+            if projection.is_finite() {
+                self.learned_gravity_projection = projection;
+                self.learned_gravity_projection_initialized = true;
+            }
+        }
     }
 
     /// Unpacks the packed coefficient vector `parameters` into the shape

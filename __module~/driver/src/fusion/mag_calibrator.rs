@@ -8,7 +8,7 @@ const SHAPE_REGULARIZATION: f32 = 1.0e-3;
 /// Algebraic ellipsoid fits under noise systematically inflate the ellipsoid
 /// (underestimate the eigenvalues of the shape matrix), so the prior centers
 /// on a shape larger than the ideal sphere to counter that bias.
-const SHAPE_PRIOR_SCALE: f32 = 2.0;
+pub(super) const SHAPE_PRIOR_SCALE: f32 = 2.0;
 /// Confidence required for a working candidate to advance the publication
 /// streak. This is the highest tested threshold at which every fixed SimMotion
 /// regression seed completes the 2000-evaluation budget; the rank-deficient
@@ -209,8 +209,6 @@ pub struct MagCalibrator<const N: usize> {
     replay_minibatch_size: usize,
     prng_state: u64,
     optimizer_steps: u64,
-    raw_sample_sum: Vector3<f64>,
-    raw_outer_product_sum: Matrix3<f64>,
     publication_quality_streak: usize,
     /// The calibration model whose live quality is estimated and published:
     /// the retained sample cache, the online ellipsoid coefficients with the
@@ -236,13 +234,13 @@ impl<const N: usize> Default for MagCalibrator<N> {
             replay_minibatch_size: DEFAULT_REPLAY_MINIBATCH_SIZE.min(N.max(1)),
             prng_state: ONLINE_PRNG_SEED,
             optimizer_steps: 0,
-            raw_sample_sum: Vector3::zeros(),
-            raw_outer_product_sum: Matrix3::zeros(),
             publication_quality_streak: 0,
             model: MagModel {
                 samples: MagSamples::default(),
                 sample_row_count: Default::default(),
-                parameters: Self::parameter_prior(),
+                parameters: MagModel::<N>::parameter_prior(),
+                raw_sample_sum: Vector3::zeros(),
+                raw_outer_product_sum: Matrix3::zeros(),
                 sample_mean: Vector3::zeros(),
                 sample_rms_radius: 0.0,
                 sample_normalization_initialized: false,
@@ -338,102 +336,10 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    fn parameter_prior() -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
-        SVector::from_row_slice(&[
-            SHAPE_PRIOR_SCALE,
-            SHAPE_PRIOR_SCALE,
-            SHAPE_PRIOR_SCALE,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-        ])
-    }
-
-    fn features(sample: Vector3<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
-        // TODO: use nalgebra outer-product and vector-view operations instead of elementwise feature construction
-        SVector::from_row_slice(&[
-            sample.x * sample.x,
-            sample.y * sample.y,
-            sample.z * sample.z,
-            2.0 * sample.x * sample.y,
-            2.0 * sample.x * sample.z,
-            2.0 * sample.y * sample.z,
-            sample.x,
-            sample.y,
-            sample.z,
-        ])
-    }
-
     fn regularization_loss(parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>) -> f32 {
         let (shape, _) = MagModel::<N>::unpack_ellipsoid_coefficients(parameters);
         0.5 * SHAPE_REGULARIZATION
             * (shape - Matrix3::identity() * SHAPE_PRIOR_SCALE).norm_squared()
-    }
-
-    fn add_raw_moment(&mut self, sample: Vector3<f32>) {
-        let sample = sample.cast::<f64>();
-        self.raw_sample_sum += sample;
-        self.raw_outer_product_sum += sample * sample.transpose();
-    }
-
-    fn remove_raw_moment(&mut self, sample: Vector3<f32>) {
-        let sample = sample.cast::<f64>();
-        self.raw_sample_sum -= sample;
-        self.raw_outer_product_sum -= sample * sample.transpose();
-    }
-
-    fn clear_raw_moments(&mut self) {
-        self.raw_sample_sum = Vector3::zeros();
-        self.raw_outer_product_sum = Matrix3::zeros();
-    }
-
-    fn raw_mean_and_covariance(&self) -> Option<(Vector3<f32>, Matrix3<f32>)> {
-        if self.model.sample_row_count == 0 {
-            return None;
-        }
-        let count = self.model.sample_row_count as f64;
-        let mean = self.raw_sample_sum / count;
-        let covariance = self.raw_outer_product_sum / count - mean * mean.transpose();
-        let covariance = 0.5 * (covariance + covariance.transpose());
-        let mean = mean.cast::<f32>();
-        let covariance = covariance.cast::<f32>();
-        if mean.iter().all(|value| value.is_finite())
-            && covariance.iter().all(|value| value.is_finite())
-        {
-            Some((mean, covariance))
-        } else {
-            None
-        }
-    }
-
-    /// Recomputes the current cache normalization from the raw moments
-    /// without touching the working state. Every append, replacement, and
-    /// expiry drift the mean and radius; the working coefficients keep
-    /// their meaning in the new normalization directly, because the drift
-    /// per cache mutation is `O(1 / sample_row_count)` and the online optimizer
-    /// is already designed to track the moving convex optimum as cache
-    /// replacements improve coverage. Working state is therefore never
-    /// rebased or reset: only a zero-radius (empty or single-point) cache
-    /// marks the normalization uninitialized, which keeps the optimizer
-    /// idle until two distinct samples exist and reports quality zero
-    /// through the usual unusable-candidate path.
-    fn refresh_normalization(&mut self) {
-        let Some((sample_mean, covariance)) = self.raw_mean_and_covariance() else {
-            self.model.sample_mean = Vector3::zeros();
-            self.model.sample_rms_radius = 0.0;
-            self.model.sample_normalization_initialized = false;
-            return;
-        };
-        let radius = covariance.trace().sqrt();
-        self.model.sample_normalization_initialized =
-            sample_mean.iter().all(|value| value.is_finite())
-                && radius.is_finite()
-                && radius > f32::EPSILON;
-        self.model.sample_mean = sample_mean;
-        self.model.sample_rms_radius = radius;
     }
 
     fn next_random(random_state: &mut u64) -> u64 {
@@ -458,33 +364,6 @@ impl<const N: usize> MagCalibrator<N> {
             row += 1;
         }
         Some(row)
-    }
-
-    fn initialize_gravity_projection(
-        &mut self,
-        current_sample: Vector3<f32>,
-        current_gravity: Option<Vector3<f32>>,
-    ) {
-        if self.model.learned_gravity_projection_initialized || self.model.gravity_weight == 0.0 {
-            return;
-        }
-        let observation = current_gravity
-            .map(|gravity| (current_sample, gravity))
-            .or_else(|| {
-                (0..self.model.sample_row_count).find_map(|row| {
-                    let row = self.model.samples.view(row);
-                    row.gravity().map(|gravity| (row.sample(), gravity))
-                })
-            });
-        if let Some((sample, gravity)) = observation {
-            let features =
-                MagModel::<N>::gravity_features(self.model.normalized_sample(sample), gravity);
-            let projection = features.dot(&self.model.parameters);
-            if projection.is_finite() {
-                self.model.learned_gravity_projection = projection;
-                self.model.learned_gravity_projection_initialized = true;
-            }
-        }
     }
 
     /// Stacks feature rows into a batched `B x 9` matrix.
@@ -528,7 +407,7 @@ impl<const N: usize> MagCalibrator<N> {
         let mut gravity_rows = Vec::with_capacity(minibatch.random_draws + 1);
         for (sample, gravity) in observations {
             let normalized = self.model.normalized_sample(sample);
-            radial_rows.push(Self::features(normalized));
+            radial_rows.push(MagModel::<N>::features(normalized));
             if let Some(gravity) =
                 gravity.filter(|_| self.model.learned_gravity_projection_initialized)
             {
@@ -574,7 +453,8 @@ impl<const N: usize> MagCalibrator<N> {
         if !self.model.sample_normalization_initialized {
             return;
         }
-        self.initialize_gravity_projection(current_sample, current_gravity);
+        self.model
+            .initialize_gravity_projection(current_sample, current_gravity);
 
         let random_draws = if self.model.sample_row_count > usize::from(accepted_row.is_some()) {
             self.minibatch_size.saturating_sub(1)
@@ -652,7 +532,7 @@ impl<const N: usize> MagCalibrator<N> {
                 -residuals.sum() * (self.model.gravity_weight / gravity_features.nrows() as f32);
         }
 
-        let prior = Self::parameter_prior();
+        let prior = MagModel::<N>::parameter_prior();
         let regularization_weights =
             SVector::<f32, CALIBRATION_PARAMETER_COUNT>::from_row_slice(&[
                 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0,
@@ -918,7 +798,7 @@ impl<const N: usize> MagCalibrator<N> {
                 }
                 retained_count += 1;
             } else {
-                self.remove_raw_moment(row.sample());
+                self.model.remove_raw_moment(row.sample());
             }
         }
         if retained_count != self.model.sample_row_count {
@@ -927,7 +807,7 @@ impl<const N: usize> MagCalibrator<N> {
                 // Incremental subtraction can leave round-off residue after
                 // the last retained row expires. An empty cache has exact
                 // zero moments by definition.
-                self.clear_raw_moments();
+                self.model.clear_raw_moments();
             }
             self.mean_distance = 0.0;
             self.remap_neighbor_cache(&index_map);
@@ -936,7 +816,7 @@ impl<const N: usize> MagCalibrator<N> {
 
         if !mag_sample.iter().all(|e| e.is_finite()) || mag_sample.norm_squared() <= f32::EPSILON {
             if expired {
-                self.refresh_normalization();
+                self.model.refresh_normalization();
             }
             return false;
         }
@@ -968,7 +848,7 @@ impl<const N: usize> MagCalibrator<N> {
                     complete,
                 );
             }
-            self.add_raw_moment(mag_sample);
+            self.model.add_raw_moment(mag_sample);
             self.add_sample_at(count, mag_sample, gravity_direction, timestamp_us);
             self.reset_row_cache(count, &squared_distances, count);
             self.model.sample_row_count += 1;
@@ -1025,15 +905,16 @@ impl<const N: usize> MagCalibrator<N> {
                         complete,
                     );
                 }
-                self.remove_raw_moment(self.model.samples.view(replacement_row).sample());
-                self.add_raw_moment(mag_sample);
+                self.model
+                    .remove_raw_moment(self.model.samples.view(replacement_row).sample());
+                self.model.add_raw_moment(mag_sample);
                 self.add_sample_at(replacement_row, mag_sample, gravity_direction, timestamp_us);
                 self.reset_row_cache(replacement_row, &squared_distances, N);
                 accepted_row = Some(replacement_row);
             }
         }
         if expired || accepted_row.is_some() {
-            self.refresh_normalization();
+            self.model.refresh_normalization();
         }
         self.update_online_optimizer(mag_sample, gravity_direction, accepted_row);
         true

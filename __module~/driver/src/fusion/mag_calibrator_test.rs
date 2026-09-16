@@ -98,8 +98,8 @@ impl<const N: usize> MagCalibrator<N> {
     fn raw_moments_for_test(&self) -> (usize, Vector3<f64>, Matrix3<f64>) {
         (
             self.model.sample_row_count,
-            self.raw_sample_sum,
-            self.raw_outer_product_sum,
+            self.model.raw_sample_sum,
+            self.model.raw_outer_product_sum,
         )
     }
 
@@ -113,9 +113,9 @@ impl<const N: usize> MagCalibrator<N> {
             },
         );
         let scale = sum.norm().max(outer_sum.norm()).max(1.0);
-        let error = (self.raw_sample_sum - sum)
+        let error = (self.model.raw_sample_sum - sum)
             .norm()
-            .max((self.raw_outer_product_sum - outer_sum).norm());
+            .max((self.model.raw_outer_product_sum - outer_sum).norm());
         if error <= 1.0e-12 * scale {
             Ok(())
         } else {
