@@ -259,8 +259,9 @@ $$
 \mathrm{fitness} = \mathrm{radial}^{1/(1+w_g)} \cdot \mathrm{gravity}^{w_g/(1+w_g)}
 $$
 
-of the two fitness factors, mirroring the objective's total-loss ratio $J = J_r + w_g J_g$: because the objective
-normalizes each data term by its own observation count, the counts cancel and the relative weight is $w_g$ itself
+of the two fitness factors, mirroring how the objective's totals $J_r + J_g$ combine: with the weight $w_g$
+already inside $J_g$, the radial and gravity data terms stand in the ratio $1 : w_g$, and because each term is
+normalized by its own observation count, the counts cancel and the relative weight is $w_g$ itself
 (the code stores it as `CalibrationQuality::gravity_term_weight`). The per-statistic ramps — including the gravity
 bias floor — apply before the combination, so the surrogate's anisotropic bias never leaks into the radial
 assessment the way a single combined ramp would. When the gravity statistic is absent the effective weight is `0`
