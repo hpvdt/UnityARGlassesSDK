@@ -253,21 +253,24 @@ observation, or carried by no retained row — maps to a neutral `1` rather than
 or disabled gravity term never penalizes a magnetometer-only calibration, unlike the mandatory radial statistic whose
 absence scores `0`.
 
-Live fitness is the weighted power mean
+Live fitness is the weighted arithmetic mean
 
 $$
-\mathrm{fitness} = \mathrm{radial}^{1/(1+w_g)} \cdot \mathrm{gravity}^{w_g/(1+w_g)}
+\mathrm{fitness} = \frac{\mathrm{radial} + w_g \cdot \mathrm{gravity}}{1 + w_g}
 $$
 
-of the two fitness factors, mirroring how the objective's totals $J_r + J_g$ combine: with the weight $w_g$
-already inside $J_g$, the radial and gravity data terms stand in the ratio $1 : w_g$, and because each term is
-normalized by its own observation count, the counts cancel and the relative weight is $w_g$ itself
-(the code stores it as `CalibrationQuality::gravity_term_weight`). The per-statistic ramps — including the gravity
-bias floor — apply before the combination, so the surrogate's anisotropic bias never leaks into the radial
-assessment the way a single combined ramp would. When the gravity statistic is absent the effective weight is `0`
-and fitness reduces exactly to the radial factor. Live confidence is coverage times fitness, clamped to $[0, 1]$.
-`MagCalibrationResult` reports every factor: `confidence`, `coverage`, `fitness`, `radial_fitness`, `gravity_fitness`,
-and `gravity_term_weight`.
+of the two fitness factors, mirroring how the objective's totals $J_r + J_g$ combine additively: with the weight
+$w_g$ already inside $J_g$, the radial and gravity data terms stand in the ratio $1 : w_g$, and because each term
+is normalized by its own observation count, the counts cancel and the relative weight is $w_g$ itself (the code
+stores it as `CalibrationQuality::gravity_term_weight`). The combination must be additive rather than
+multiplicative: a product or power mean gives each factor a veto the objective does not have — at the typical
+$w_g = 0.01$, a completely broken gravity surrogate costs the objective about one percent, yet geometrically it
+would zero the fitness. The per-statistic ramps — including the gravity bias floor — apply before the
+combination, so the surrogate's anisotropic bias never leaks into the radial assessment the way a single combined
+ramp would. When the gravity statistic is absent the effective weight is `0` and fitness reduces exactly to the
+radial factor. Live confidence is coverage times fitness, clamped to $[0, 1]$. `MagCalibrationResult` reports
+every factor: `confidence`, `coverage`, `fitness`, `radial_fitness`, `gravity_fitness`, and
+`gravity_term_weight`.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
 change only after 55 valid updates at confidence at least `0.0125`, including while the cache is partial. Confidence in

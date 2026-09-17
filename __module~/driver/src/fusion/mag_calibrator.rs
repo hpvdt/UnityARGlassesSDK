@@ -151,25 +151,28 @@ impl CalibrationQuality {
     }
 
     /// Combined fitness factor of the confidence in `[0, 1]`: the weighted
-    /// power mean
-    /// `radial_fitness^(1/(1+w)) * gravity_fitness^(w/(1+w))` with
-    /// `w = gravity_term_weight`, mirroring the ratio in which the online
-    /// objective totals the two data terms (`1 : w_g`): the objective
-    /// normalizes each term by its own observation count, so counts cancel
-    /// and the relative weight is `w_g` itself. The per-factor ramps (and
-    /// hence the gravity bias floor) stay applied per statistic before
-    /// combination, so the surrogate's known anisotropic bias never leaks
-    /// into the radial assessment. `w = 0` — gravity disabled, unseeded,
-    /// or absent from the cache — reduces the combination to
-    /// `radial_fitness`, and a gravity-free stream is never penalized.
+    /// arithmetic mean
+    /// `(radial_fitness + w * gravity_fitness) / (1 + w)` with
+    /// `w = gravity_term_weight`. The online objective *adds* its two data
+    /// terms with relative weight `w_g` (each normalized by its own
+    /// observation count, so counts cancel), so the combination must add
+    /// too: any multiplicative form — a plain product or a weighted power
+    /// mean — gives each factor a veto the objective does not have (at
+    /// `w_g = 0.01` a completely broken gravity surrogate costs the
+    /// objective about 1%, while geometrically it would zero the fitness).
+    /// The per-factor ramps (and hence the gravity bias floor) stay applied
+    /// per statistic before combination, so the surrogate's known
+    /// anisotropic bias never leaks into the radial assessment. `w = 0` —
+    /// gravity disabled, unseeded, or absent from the cache — reduces the
+    /// combination to `radial_fitness`, and a gravity-free stream is never
+    /// penalized.
     pub fn fitness(&self) -> f32 {
         let weight = self.gravity_term_weight;
-        if !(weight > 0.0) || !weight.is_finite() {
-            return self.radial_fitness;
+        if weight.is_finite() && weight > 0.0 {
+            (self.radial_fitness + weight * self.gravity_fitness) / (1.0 + weight)
+        } else {
+            self.radial_fitness
         }
-        let radial_exponent = 1.0 / (1.0 + weight);
-        self.radial_fitness.powf(radial_exponent)
-            * self.gravity_fitness.powf(weight * radial_exponent)
     }
 
     /// Current bounded calibration quality in `[0, 1]`: the clamped product
