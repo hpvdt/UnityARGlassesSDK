@@ -17,6 +17,16 @@ const EVENT_PERIOD_US: u64 = 20_001;
 /// evaluations with the 55-update publication streak).
 const MAX_EVAL_COUNT: u64 = 2_000;
 /// Magnetometer evaluations to wait after the first successful correction.
+/*
+FIXME: current integration tests wait for 125 iterations (2.5 seconds if packet packing is 20ms) after calibrator initialisation (first successful correction)
+ this is good enough to assert that mean stats (posterior error to ground truth, confidence) always improve after warmup
+ unfortunately, it's not enough to assert that mean stats will stay stable (instead of degrading over time)
+
+As an improvement, the single 125 iterations latency should be replaced with a series of latencies (e.g. 500/1000/1500 .. at an interval of 500 iterations/10 seconds)
+ mean stats after each latency can be tracked & reported independently (e.g. 0.1 after 500 - 0.2 after 1000 - 0.3 after 1500)
+
+This improvement should affect this test & xreal_air_replay, which uses a similar reporting format (albeit without ground truth)
+ */
 const WARMUP_EVAL_COUNT: u64 = 125;
 /// Magnetometer evaluations to validate before the run can end early.
 const REQUIRED_VALIDATION_EVAL_COUNT: u64 = 125;
