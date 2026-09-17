@@ -12,36 +12,54 @@ const CONFIDENCE_THRESHOLD: f32 = 0.4;
 /// as fast as the hardware allows. Zero would freeze the attitude simulation
 /// (dt = `event_period_us` seconds), so it must stay positive.
 const EVENT_PERIOD_US: u64 = 20_001;
-/// Hang guard bounding the whole benchmark in magnetometer evaluations.
-/// Leaves headroom over the slowest observed fixed-seed run (under 1800
-/// evaluations with the 55-update publication streak).
-const MAX_EVAL_COUNT: u64 = 2_000;
-/// Magnetometer evaluations to wait after the first successful correction.
-/*
-FIXME: current integration tests wait for 125 iterations (2.5 seconds if packet packing is 20ms) after calibrator initialisation (first successful correction)
- this is good enough to assert that mean stats (posterior error to ground truth, confidence) always improve after warmup
- unfortunately, it's not enough to assert that mean stats will stay stable (instead of degrading over time)
+/// Total magnetometer evaluations per run. The loop always runs for exactly
+/// this many evaluations (doubling as the hang guard), so the post-correction
+/// phase holds several checkpoints even when the first successful correction
+/// arrives late (slowest observed: ~1200 evaluations).
+const MAX_EVAL_COUNT: u64 = 3_000;
+/// Interval, in evaluations after the first successful correction, at which
+/// cumulative post-correction stats (error, confidence, fitness components,
+/// worst error) are snapshotted and reported as an open-ended
+/// 500/1000/1500/... series, showing whether the means stay stable instead of
+/// degrading over time.
+const CHECKPOINT_INTERVAL: u64 = 500;
 
-As an improvement, the single 125 iterations latency should be replaced with a series of latencies (e.g. 500/1000/1500 .. at an interval of 500 iterations/10 seconds)
- mean stats after each latency can be tracked & reported independently (e.g. 0.1 after 500 - 0.2 after 1000 - 0.3 after 1500)
-
-This improvement should affect this test & xreal_air_replay, which uses a similar reporting format (albeit without ground truth)
- */
-const WARMUP_EVAL_COUNT: u64 = 125;
-/// Magnetometer evaluations to validate before the run can end early.
-const REQUIRED_VALIDATION_EVAL_COUNT: u64 = 125;
-/// Magnetometer evaluations to validate in total, ending the run.
-const VALIDATION_EVAL_COUNT: u64 = 500;
-
+/// Worst single correction error allowed beyond the first checkpoint.
 const WORST_VALIDATION_ERROR_CRITERION: f32 = 25.0;
 
+/// Highest average correction error allowed beyond the first checkpoint.
 const AVG_VALIDATION_ERROR_AFTER_CRITERION: f64 = 10.0;
+
+/// How far the cumulative post-correction mean error may drift up between the
+/// first checkpoint and any later one before the run counts as unstable.
+const ERROR_DEGRADATION_MARGIN_DEGREES: f64 = 5.0;
+
+/// How far the cumulative post-correction mean confidence may drift down
+/// between the first checkpoint and any later one.
+const CONFIDENCE_DEGRADATION_MARGIN: f64 = 0.1;
 
 /// Whether the calibrator is fed a co-timestamped simulated accelerometer reading with each sample.
 #[derive(Clone, Copy)]
 enum AttitudeMode {
     Always,
     Never,
+}
+
+/// Cumulative post-correction stats snapshot at a checkpoint (a multiple of
+/// `CHECKPOINT_INTERVAL` evaluations after the first successful correction).
+/// Every field covers the whole post-correction span up to that checkpoint.
+struct CheckpointStats {
+    evals_after_first_success: u64,
+    mean_error_degrees: f64,
+    worst_error_degrees: f32,
+    mean_confidence: f64,
+    mean_radial: f64,
+    mean_gravity: f64,
+    mean_coverage: f64,
+    min_confidence: f32,
+    min_confidence_radial: f32,
+    min_confidence_gravity: f32,
+    min_confidence_coverage: f32,
 }
 
 #[derive(Default)]
@@ -59,17 +77,22 @@ struct RunStats {
     validation_error_count: u64,
     validation_confidence_sum: f64,
     validation_confidence_count: u64,
-    validation_radial_sum: f64,
-    validation_gravity_sum: f64,
-    validation_coverage_sum: f64,
-    min_validation_confidence: f32,
-    max_validation_confidence: f32,
-    min_confidence_radial: f32,
-    min_confidence_gravity: f32,
-    min_confidence_coverage: f32,
     count_until_first_success: u64,
-    warmup_count: u64,
-    verified_count: u64,
+    checkpoints: Vec<CheckpointStats>,
+}
+
+/// Formats one checkpoint field of each snapshot as a `500/1000/...`-style
+/// series matching the checkpoint header row.
+fn checkpoint_series(
+    checkpoints: &[CheckpointStats],
+    field: fn(&CheckpointStats) -> f64,
+    precision: usize,
+) -> String {
+    checkpoints
+        .iter()
+        .map(|checkpoint| format!("{:.*}", precision, field(checkpoint)))
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
@@ -88,14 +111,23 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     let mut sim_motion = SimMotion::with_config(config);
     let mut fusion = FusionState::new(Box::new(SimMotion::new()));
     let mut first_success_count = None;
-    let mut validation_start_count = None;
-    let mut completed_required_validation = false;
+    // cumulative accumulators over the whole post-correction span, snapshotted
+    // at every checkpoint into `stats.checkpoints`
+    let mut post_correction_count = 0u64;
+    let mut post_correction_error_sum = 0.0f64;
+    let mut post_correction_error_count = 0u64;
+    let mut post_correction_worst_error = 0.0f32;
+    let mut post_correction_confidence_sum = 0.0f64;
+    let mut post_correction_min_confidence = f32::INFINITY;
+    let mut min_confidence_radial = 0.0f32;
+    let mut min_confidence_gravity = 0.0f32;
+    let mut min_confidence_coverage = 0.0f32;
+    let mut post_correction_radial_sum = 0.0f64;
+    let mut post_correction_gravity_sum = 0.0f64;
+    let mut post_correction_coverage_sum = 0.0f64;
 
-    let mut stats = RunStats {
-        min_validation_confidence: f32::INFINITY,
-        ..RunStats::default()
-    };
-    // locals below back up assert messages and warmup/first-success tracking only
+    let mut stats = RunStats::default();
+    // locals below back up assert messages and first-success tracking only
     let mut max_confidence = 0.0f32;
     let mut quality_streak = 0usize;
     let mut max_quality_streak = 0usize;
@@ -104,19 +136,8 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     let mut timestamp_at_worst_validation_error = 0u64;
     let mut count_until_first_success = None;
     let mut first_success_confidence = None;
-    let mut warmup_count = None;
     loop {
-        assert!(
-            stats.eval_count <= MAX_EVAL_COUNT,
-            "magnetometer calibration never succeeded within {MAX_EVAL_COUNT} evaluations: \
-             seed={seed}, mode={mode_label}, timestamp={last_timestamp}, \
-             current_confidence={}, max_confidence={max_confidence}, \
-             quality_streak={quality_streak}, max_quality_streak={max_quality_streak}",
-            fusion.magCalibrator.get_confidence(),
-        );
-        if validation_start_count
-            .is_some_and(|start| stats.eval_count - start >= VALIDATION_EVAL_COUNT)
-        {
+        if stats.eval_count >= MAX_EVAL_COUNT {
             break;
         }
         let ground_truth = sim_motion.snapshot();
@@ -180,21 +201,62 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
             stats.worst_error = stats.worst_error.max(angle_degrees);
         }
 
-        let warmed_up =
-            first_success_count.is_some_and(|count| stats.eval_count - count >= WARMUP_EVAL_COUNT);
-        if !warmed_up {
-            if corrected.is_some() && first_success_count.is_none() {
-                first_success_count = Some(stats.eval_count);
-                count_until_first_success = Some(stats.eval_count);
-                first_success_confidence = Some(confidence);
-            }
-            continue;
+        if corrected.is_some() && first_success_count.is_none() {
+            first_success_count = Some(stats.eval_count);
+            count_until_first_success = Some(stats.eval_count);
+            first_success_confidence = Some(confidence);
         }
-        if warmup_count.is_none() {
-            let count_at_first_success = first_success_count.unwrap();
-            warmup_count = Some(stats.eval_count - count_at_first_success);
+        let Some(count_at_first_success) = first_success_count else {
+            continue;
+        };
+        let latency = stats.eval_count - count_at_first_success;
+
+        // failed evaluations carry no quality sample (the tuple above falls
+        // back to zeroed components for them); exclude them from the
+        // post-correction stats. They can only occur before the first
+        // checkpoint — the strict phase beyond it panics on them.
+        if result.is_ok() {
+            if let Some(angle_degrees) = angle_degrees {
+                post_correction_error_sum += f64::from(angle_degrees);
+                post_correction_error_count += 1;
+                post_correction_worst_error = post_correction_worst_error.max(angle_degrees);
+            }
+            post_correction_confidence_sum += f64::from(confidence);
+            post_correction_count += 1;
+            post_correction_radial_sum += f64::from(radial_fitness);
+            post_correction_gravity_sum += f64::from(gravity_fitness);
+            post_correction_coverage_sum += f64::from(coverage);
+            if confidence < post_correction_min_confidence {
+                post_correction_min_confidence = confidence;
+                min_confidence_radial = radial_fitness;
+                min_confidence_gravity = gravity_fitness;
+                min_confidence_coverage = coverage;
+            }
         }
 
+        if latency >= CHECKPOINT_INTERVAL && latency.is_multiple_of(CHECKPOINT_INTERVAL) {
+            let count = post_correction_count as f64;
+            stats.checkpoints.push(CheckpointStats {
+                evals_after_first_success: latency,
+                mean_error_degrees: post_correction_error_sum
+                    / post_correction_error_count.max(1) as f64,
+                worst_error_degrees: post_correction_worst_error,
+                mean_confidence: post_correction_confidence_sum / count,
+                mean_radial: post_correction_radial_sum / count,
+                mean_gravity: post_correction_gravity_sum / count,
+                mean_coverage: post_correction_coverage_sum / count,
+                min_confidence: post_correction_min_confidence,
+                min_confidence_radial,
+                min_confidence_gravity,
+                min_confidence_coverage,
+            });
+        }
+
+        // strict validation (worst/average error criteria and panics on
+        // failed/pending corrections) applies only beyond the first checkpoint
+        if latency <= CHECKPOINT_INTERVAL {
+            continue;
+        }
         if let Err(error) = result {
             panic!(
                 "magnetometer calibration failed for seed={seed}, mode={mode_label}, \
@@ -211,42 +273,71 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         stats.validation_error_count += 1;
         stats.validation_confidence_sum += f64::from(confidence);
         stats.validation_confidence_count += 1;
-        stats.validation_radial_sum += f64::from(radial_fitness);
-        stats.validation_gravity_sum += f64::from(gravity_fitness);
-        stats.validation_coverage_sum += f64::from(coverage);
-        if confidence < stats.min_validation_confidence {
-            stats.min_validation_confidence = confidence;
-            stats.min_confidence_radial = radial_fitness;
-            stats.min_confidence_gravity = gravity_fitness;
-            stats.min_confidence_coverage = coverage;
-        }
-        stats.max_validation_confidence = stats.max_validation_confidence.max(confidence);
-        let start = *validation_start_count.get_or_insert(stats.eval_count);
         if angle_degrees > stats.worst_validation_error_after_warmup {
             stats.worst_validation_error_after_warmup = angle_degrees;
             confidence_at_worst_validation_error = confidence;
             timestamp_at_worst_validation_error = timestamp;
         }
-        if stats.eval_count - start >= REQUIRED_VALIDATION_EVAL_COUNT {
-            completed_required_validation = true;
-        }
     }
 
-    assert!(
-        completed_required_validation,
-        "corrected magnetometer did not complete the required {REQUIRED_VALIDATION_EVAL_COUNT}-evaluation \
-         validation; worst_error_after_warmup={}",
-        stats.worst_validation_error_after_warmup,
-    );
-
-    let count_until_first_success = count_until_first_success.expect("no successful correction");
-    let warmup_count = warmup_count.expect("warm-up never completed");
-    stats.verified_count = stats.eval_count - count_until_first_success - warmup_count;
+    let count_until_first_success = count_until_first_success.unwrap_or_else(|| {
+        panic!(
+            "magnetometer calibration never succeeded within {MAX_EVAL_COUNT} evaluations: \
+             seed={seed}, mode={mode_label}, timestamp={last_timestamp}, \
+             current_confidence={}, max_confidence={max_confidence}, \
+             quality_streak={quality_streak}, max_quality_streak={max_quality_streak}",
+            fusion.magCalibrator.get_confidence(),
+        )
+    });
     stats.count_until_first_success = count_until_first_success;
-    stats.warmup_count = warmup_count;
     stats.first_success_confidence = first_success_confidence.unwrap();
+    assert!(
+        !stats.checkpoints.is_empty(),
+        "magnetometer calibration recorded no checkpoints: seed={seed}, mode={mode_label}, \
+         first success at evaluation {count_until_first_success} of {MAX_EVAL_COUNT}"
+    );
+    assert!(
+        stats.validation_error_count > 0,
+        "magnetometer calibration recorded no evaluations beyond the first checkpoint: \
+         seed={seed}, mode={mode_label}, \
+         first success at evaluation {count_until_first_success} of {MAX_EVAL_COUNT}"
+    );
+    // stability: cumulative post-correction means must not keep degrading
+    // after the first checkpoint
+    let first_checkpoint = &stats.checkpoints[0];
+    for checkpoint in &stats.checkpoints[1..] {
+        assert!(
+            checkpoint.mean_error_degrees
+                <= first_checkpoint.mean_error_degrees + ERROR_DEGRADATION_MARGIN_DEGREES,
+            "post-correction mean error degraded from {:.3} deg after {} evaluations \
+             to {:.3} deg after {} evaluations: seed={seed}, mode={mode_label}",
+            first_checkpoint.mean_error_degrees,
+            first_checkpoint.evals_after_first_success,
+            checkpoint.mean_error_degrees,
+            checkpoint.evals_after_first_success,
+        );
+        assert!(
+            checkpoint.mean_confidence
+                >= first_checkpoint.mean_confidence - CONFIDENCE_DEGRADATION_MARGIN,
+            "post-correction mean confidence degraded from {:.6} after {} evaluations \
+             to {:.6} after {} evaluations: seed={seed}, mode={mode_label}",
+            first_checkpoint.mean_confidence,
+            first_checkpoint.evals_after_first_success,
+            checkpoint.mean_confidence,
+            checkpoint.evals_after_first_success,
+        );
+    }
 
     println!("- evaluate_correct");
+    println!(
+        "  - post-warmup checkpoints: {} (evals after first successful correction)",
+        stats
+            .checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.evals_after_first_success.to_string())
+            .collect::<Vec<_>>()
+            .join("/"),
+    );
     println!(
         "  - avg computation time: {:.3} ms over {} calls",
         stats.eval_time.as_secs_f64() * 1e3 / stats.eval_count as f64,
@@ -263,43 +354,73 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         stats.error_count,
     );
     println!(
-        "    - post-warmup: {:.3} deg over {} calls",
-        stats.sum_validation_error_after_warmup / stats.validation_error_count.max(1) as f64,
-        stats.validation_error_count,
+        "    - post-warmup: {} deg",
+        checkpoint_series(
+            &stats.checkpoints,
+            |checkpoint| checkpoint.mean_error_degrees,
+            3
+        ),
     );
     println!("  - worst error: {:.3} deg", stats.worst_error);
     println!(
-        "    - post-warmup: {:.3} deg",
-        stats.worst_validation_error_after_warmup
+        "    - post-warmup: {} deg",
+        checkpoint_series(
+            &stats.checkpoints,
+            |checkpoint| f64::from(checkpoint.worst_error_degrees),
+            3
+        ),
     );
     println!(
-        "  - avg post-warmup confidence: {:.6} over {} calls",
-        stats.validation_confidence_sum / stats.validation_confidence_count.max(1) as f64,
-        stats.validation_confidence_count,
-    );
-    let component_count = stats.validation_confidence_count.max(1) as f64;
-    println!(
-        "    - radial: {:.6}",
-        stats.validation_radial_sum / component_count
+        "  - avg post-warmup confidence: {}",
+        checkpoint_series(
+            &stats.checkpoints,
+            |checkpoint| checkpoint.mean_confidence,
+            6
+        ),
     );
     println!(
-        "    - gravity: {:.6}",
-        stats.validation_gravity_sum / component_count
+        "    - radial: {}",
+        checkpoint_series(&stats.checkpoints, |checkpoint| checkpoint.mean_radial, 6),
     );
     println!(
-        "    - coverage: {:.6}",
-        stats.validation_coverage_sum / component_count
+        "    - gravity: {}",
+        checkpoint_series(&stats.checkpoints, |checkpoint| checkpoint.mean_gravity, 6),
     );
     println!(
-        "  - worst post-warmup confidence: {:.6}",
-        stats.min_validation_confidence
+        "    - coverage: {}",
+        checkpoint_series(&stats.checkpoints, |checkpoint| checkpoint.mean_coverage, 6),
     );
-    println!("    - radial: {:.6}", stats.min_confidence_radial);
-    println!("    - gravity: {:.6}", stats.min_confidence_gravity);
-    println!("    - coverage: {:.6}", stats.min_confidence_coverage);
     println!(
-        "  - post-warmup confidence range: {:.6}..={:.6}",
-        stats.min_validation_confidence, stats.max_validation_confidence,
+        "  - worst post-warmup confidence: {}",
+        checkpoint_series(
+            &stats.checkpoints,
+            |checkpoint| f64::from(checkpoint.min_confidence),
+            6
+        ),
+    );
+    println!(
+        "    - radial: {}",
+        checkpoint_series(
+            &stats.checkpoints,
+            |checkpoint| f64::from(checkpoint.min_confidence_radial),
+            6
+        ),
+    );
+    println!(
+        "    - gravity: {}",
+        checkpoint_series(
+            &stats.checkpoints,
+            |checkpoint| f64::from(checkpoint.min_confidence_gravity),
+            6
+        ),
+    );
+    println!(
+        "    - coverage: {}",
+        checkpoint_series(
+            &stats.checkpoints,
+            |checkpoint| f64::from(checkpoint.min_confidence_coverage),
+            6
+        ),
     );
     println!("- total: {} evaluations", stats.eval_count);
     println!(
@@ -307,8 +428,11 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         count_until_first_success,
         first_success_confidence.unwrap(),
     );
-    println!("  - sampling/optimization warm-up: {warmup_count} evaluations");
-    println!("  - verification: {} evaluations", stats.verified_count);
+    println!(
+        "  - after first successful correction: {} evaluations ({} checkpoints of {CHECKPOINT_INTERVAL})",
+        stats.eval_count - count_until_first_success,
+        stats.checkpoints.len(),
+    );
 
     let avg_validation_error_after_warmup =
         stats.sum_validation_error_after_warmup / stats.validation_error_count.max(1) as f64;
@@ -342,35 +466,53 @@ fn print_avg_stats(runs: &[RunStats]) {
     let total_confidence_count: u64 = runs.iter().map(|r| r.confidence_count).sum();
     let total_error_sum: f64 = runs.iter().map(|r| r.error_sum_degrees).sum();
     let total_error_count: u64 = runs.iter().map(|r| r.error_count).sum();
-    let total_validation_error_sum: f64 = runs
-        .iter()
-        .map(|r| r.sum_validation_error_after_warmup)
-        .sum();
-    let total_validation_error_count: u64 = runs.iter().map(|r| r.validation_error_count).sum();
-    let total_validation_confidence_sum: f64 =
-        runs.iter().map(|r| r.validation_confidence_sum).sum();
-    let total_validation_confidence_count: u64 =
-        runs.iter().map(|r| r.validation_confidence_count).sum();
-    let total_validation_radial_sum: f64 = runs.iter().map(|r| r.validation_radial_sum).sum();
-    let total_validation_gravity_sum: f64 = runs.iter().map(|r| r.validation_gravity_sum).sum();
-    let total_validation_coverage_sum: f64 = runs.iter().map(|r| r.validation_coverage_sum).sum();
     let worst_error_degrees: f32 = runs.iter().map(|r| r.worst_error).fold(0.0, f32::max);
-    let worst_validation_error_degrees: f32 = runs
-        .iter()
-        .map(|r| r.worst_validation_error_after_warmup)
-        .fold(0.0, f32::max);
-    let min_validation_confidence = runs
-        .iter()
-        .map(|r| r.min_validation_confidence)
-        .fold(f32::INFINITY, f32::min);
-    let max_validation_confidence = runs
-        .iter()
-        .map(|r| r.max_validation_confidence)
-        .fold(0.0, f32::max);
+    // position-wise checkpoint aggregation: runs missing a position (first
+    // success arrived later) are excluded from that position
+    let max_checkpoints = runs.iter().map(|r| r.checkpoints.len()).max().unwrap_or(0);
+    let avg_checkpoint_series = |field: fn(&CheckpointStats) -> f64, precision: usize| {
+        (0..max_checkpoints)
+            .map(|position| {
+                let (sum, count) = runs
+                    .iter()
+                    .filter_map(|r| r.checkpoints.get(position))
+                    .fold((0.0, 0usize), |(sum, count), checkpoint| {
+                        (sum + field(checkpoint), count + 1)
+                    });
+                format!(
+                    "{:.*}",
+                    precision,
+                    if count > 0 { sum / count as f64 } else { 0.0 },
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    // per checkpoint position, the run whose snapshot holds the worst
+    // confidence (mirrors position-wise worst across runs)
+    let worst_checkpoint_series = |field: fn(&CheckpointStats) -> f64| {
+        (0..max_checkpoints)
+            .map(|position| {
+                let worst = runs
+                    .iter()
+                    .filter_map(|r| r.checkpoints.get(position))
+                    .min_by(|a, b| a.min_confidence.total_cmp(&b.min_confidence));
+                format!("{:.6}", worst.map_or(0.0, field))
+            })
+            .collect::<Vec<_>>()
+            .join("/")
+    };
 
     println!("  ======================================================================  ");
     println!("# Average stats over {} runs", runs.len());
     println!("- evaluate_correct");
+    println!(
+        "  - post-warmup checkpoints: {} (evals after first successful correction)",
+        (1..=max_checkpoints)
+            .map(|position| (position as u64 * CHECKPOINT_INTERVAL).to_string())
+            .collect::<Vec<_>>()
+            .join("/"),
+    );
     println!(
         "  - avg computation time: {:.3} ms over {} calls",
         total_eval_time * 1e3 / total_eval_count as f64,
@@ -387,46 +529,45 @@ fn print_avg_stats(runs: &[RunStats]) {
         avg_count(|r| r.error_count),
     );
     println!(
-        "    - post-warmup: {:.3} deg over {} calls",
-        total_validation_error_sum / total_validation_error_count as f64,
-        avg_count(|r| r.validation_error_count),
+        "    - post-warmup: {} deg",
+        avg_checkpoint_series(|checkpoint| checkpoint.mean_error_degrees, 3),
     );
     println!("  - worst error: {worst_error_degrees:.3} deg");
-    println!("    - post-warmup: {worst_validation_error_degrees:.3} deg");
     println!(
-        "  - avg post-warmup confidence: {:.6} over {} calls",
-        total_validation_confidence_sum / total_validation_confidence_count as f64,
-        avg_count(|r| r.validation_confidence_count),
-    );
-    let total_count = total_validation_confidence_count.max(1) as f64;
-    println!(
-        "    - radial: {:.6}",
-        total_validation_radial_sum / total_count
+        "    - post-warmup: {} deg",
+        avg_checkpoint_series(|checkpoint| f64::from(checkpoint.worst_error_degrees), 3),
     );
     println!(
-        "    - gravity: {:.6}",
-        total_validation_gravity_sum / total_count
+        "  - avg post-warmup confidence: {}",
+        avg_checkpoint_series(|checkpoint| checkpoint.mean_confidence, 6),
     );
     println!(
-        "    - coverage: {:.6}",
-        total_validation_coverage_sum / total_count
+        "    - radial: {}",
+        avg_checkpoint_series(|checkpoint| checkpoint.mean_radial, 6),
     );
-    let worst_run = runs
-        .iter()
-        .min_by(|a, b| {
-            a.min_validation_confidence
-                .total_cmp(&b.min_validation_confidence)
-        })
-        .expect("no runs");
     println!(
-        "  - worst post-warmup confidence: {:.6}",
-        worst_run.min_validation_confidence
+        "    - gravity: {}",
+        avg_checkpoint_series(|checkpoint| checkpoint.mean_gravity, 6),
     );
-    println!("    - radial: {:.6}", worst_run.min_confidence_radial);
-    println!("    - gravity: {:.6}", worst_run.min_confidence_gravity);
-    println!("    - coverage: {:.6}", worst_run.min_confidence_coverage);
     println!(
-        "  - post-warmup confidence range: {min_validation_confidence:.6}..={max_validation_confidence:.6}"
+        "    - coverage: {}",
+        avg_checkpoint_series(|checkpoint| checkpoint.mean_coverage, 6),
+    );
+    println!(
+        "  - worst post-warmup confidence: {}",
+        worst_checkpoint_series(|checkpoint| f64::from(checkpoint.min_confidence)),
+    );
+    println!(
+        "    - radial: {}",
+        worst_checkpoint_series(|checkpoint| f64::from(checkpoint.min_confidence_radial)),
+    );
+    println!(
+        "    - gravity: {}",
+        worst_checkpoint_series(|checkpoint| f64::from(checkpoint.min_confidence_gravity)),
+    );
+    println!(
+        "    - coverage: {}",
+        worst_checkpoint_series(|checkpoint| f64::from(checkpoint.min_confidence_coverage)),
     );
     println!("- total: {} evaluations", avg_count(|r| r.eval_count));
     println!(
@@ -438,12 +579,9 @@ fn print_avg_stats(runs: &[RunStats]) {
             / n,
     );
     println!(
-        "  - sampling/optimization warm-up: {} evaluations",
-        avg_count(|r| r.warmup_count),
-    );
-    println!(
-        "  - verification: {} evaluations",
-        avg_count(|r| r.verified_count),
+        "  - after first successful correction: {} evaluations ({} checkpoints of {CHECKPOINT_INTERVAL})",
+        avg_count(|r| r.eval_count - r.count_until_first_success),
+        runs.iter().map(|r| r.checkpoints.len() as u64).sum::<u64>() as f64 / n,
     );
 }
 

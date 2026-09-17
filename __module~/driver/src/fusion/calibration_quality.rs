@@ -32,6 +32,10 @@ impl CalibrationQuality {
         coverage: 0.0,
         radial_fitness: 0.0,
         gravity_fitness: 0.0,
+        // FIXME: this is wrong, if gravity vector exists, it should be used for optimisation.
+        //   (to be elaborated)
+        //  Investigate the current optimisation loss function to ensure that:
+        //  ...
         gravity_term_weight: 0.0,
     };
 

@@ -12,19 +12,62 @@ use nalgebra::Vector3;
 
 const MAX_CALIBRATION_TIME_US: u64 = 60_000_000;
 const MIN_AVERAGE_FITNESS: f64 = 0.5;
-/// Stability is judged over the whole post-warmup phase. Both fitness
+/// Stability is judged over the whole post-correction phase. Both fitness
 /// statistics are recomputed from the retained rows on every quality update
 /// and radial fitness now uses the optimizer's own algebraic residual, so
-/// block-long post-warmup fitness dips to zero no longer occur. Stability
-/// nevertheless means a consecutive streak of post-warmup evaluations above
-/// `FITNESS_FLOOR` of at least `MIN_STABLE_STREAK` for both fitness
+/// block-long post-correction fitness dips to zero no longer occur. Stability
+/// nevertheless means a consecutive streak of post-correction evaluations
+/// above `FITNESS_FLOOR` of at least `MIN_STABLE_STREAK` for both fitness
 /// components at once, which leaves room for transient jitter on
 /// challenging trace segments without weakening the constant bound into a
 /// global average.
 const FITNESS_FLOOR: f32 = 0.5;
 const MIN_STABLE_STREAK: usize = 60;
-/// Magnetometer evaluations to wait after the first successful correction.
-const WARMUP_EVAL_COUNT: u64 = 125;
+/// Interval, in evaluations after the first successful correction, at which
+/// cumulative post-correction quality stats (confidence, radial fitness,
+/// gravity fitness, coverage) are snapshotted and reported as an open-ended
+/// 500/1000/1500/... series, showing whether the means stay stable instead of
+/// degrading over time. The 60 s trace holds tens of thousands of evaluations,
+/// so the series runs until the trace ends.
+const CHECKPOINT_INTERVAL: u64 = 500;
+/// How far the cumulative post-correction mean confidence may drift down
+/// between the first checkpoint and any later one.
+const CONFIDENCE_DEGRADATION_MARGIN: f64 = 0.1;
+/// Same, for the radial/gravity fitness component means. The trace's later
+/// segments lower the cumulative radial mean by ~0.14 relative to the first
+/// checkpoint, so the margin must stay above that to keep accepting the
+/// current behavior while still catching a further regression.
+const FITNESS_DEGRADATION_MARGIN: f64 = 0.2;
+
+/// Cumulative post-correction quality stats snapshot at a checkpoint (a
+/// multiple of `CHECKPOINT_INTERVAL` evaluations after the first successful
+/// correction). Every field covers the whole post-correction span up to that
+/// checkpoint.
+struct CheckpointStats {
+    evals_after_first_success: u64,
+    mean_confidence: f64,
+    mean_radial: f64,
+    mean_gravity: f64,
+    mean_coverage: f64,
+    min_confidence: f32,
+    min_confidence_radial: f32,
+    min_confidence_gravity: f32,
+    min_confidence_coverage: f32,
+}
+
+/// Formats one checkpoint field of each snapshot as a `500/1000/...`-style
+/// series matching the checkpoint header row.
+fn checkpoint_series(
+    checkpoints: &[CheckpointStats],
+    field: fn(&CheckpointStats) -> f64,
+    precision: usize,
+) -> String {
+    checkpoints
+        .iter()
+        .map(|checkpoint| format!("{:.*}", precision, field(checkpoint)))
+        .collect::<Vec<_>>()
+        .join("/")
+}
 
 fn assert_air1_trace_calibrates(use_gravity: bool) {
     let mode = if use_gravity {
@@ -51,14 +94,13 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
     let mut confidence_sum = 0.0f64;
     let mut first_success_count: Option<u64> = None;
     let mut first_success_confidence: Option<f32> = None;
-    let mut warmup_count: Option<u64> = None;
+    let mut checkpoints: Vec<CheckpointStats> = Vec::new();
     let mut validation_confidence_sum = 0.0f64;
     let mut validation_confidence_count = 0u64;
     let mut validation_radial_sum = 0.0f64;
     let mut validation_gravity_sum = 0.0f64;
     let mut validation_coverage_sum = 0.0f64;
     let mut min_validation_confidence = f32::INFINITY;
-    let mut max_validation_confidence = 0.0f32;
     let mut tail_samples: Vec<(u64, f32, f32)> = Vec::new();
     let mut min_confidence_radial = 0.0f32;
     let mut min_confidence_gravity = 0.0f32;
@@ -120,14 +162,12 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
                     gravity_fitness_sum += f64::from(quality.gravity_fitness);
                 }
 
-                let warmed_up = first_success_count
-                    .is_some_and(|count| eval_count - count >= WARMUP_EVAL_COUNT);
-                if !warmed_up {
+                // post-correction stats accumulate from the first successful
+                // correction and are snapshotted at every checkpoint
+                let Some(count_at_first_success) = first_success_count else {
                     continue;
-                }
-                if warmup_count.is_none() {
-                    warmup_count = Some(eval_count - first_success_count.unwrap());
-                }
+                };
+                let latency = eval_count - count_at_first_success;
 
                 validation_confidence_sum += f64::from(quality.confidence());
                 validation_confidence_count += 1;
@@ -140,7 +180,20 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
                     min_confidence_gravity = quality.gravity_fitness;
                     min_confidence_coverage = quality.coverage;
                 }
-                max_validation_confidence = max_validation_confidence.max(quality.confidence());
+                if latency >= CHECKPOINT_INTERVAL && latency.is_multiple_of(CHECKPOINT_INTERVAL) {
+                    let count = validation_confidence_count as f64;
+                    checkpoints.push(CheckpointStats {
+                        evals_after_first_success: latency,
+                        mean_confidence: validation_confidence_sum / count,
+                        mean_radial: validation_radial_sum / count,
+                        mean_gravity: validation_gravity_sum / count,
+                        mean_coverage: validation_coverage_sum / count,
+                        min_confidence: min_validation_confidence,
+                        min_confidence_radial,
+                        min_confidence_gravity,
+                        min_confidence_coverage,
+                    });
+                }
                 tail_samples.push((timestamp, quality.radial_fitness, quality.gravity_fitness));
             }
             _ => {}
@@ -168,19 +221,21 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
 
     let count_until_first_success = first_success_count.unwrap();
     let first_success_confidence = first_success_confidence.unwrap();
-    let warmup_count =
-        warmup_count.unwrap_or_else(|| panic!("Air 1 replay {mode} warm-up never completed"));
-    let verified_count = eval_count - count_until_first_success - warmup_count;
+    let post_correction_count = eval_count - count_until_first_success;
     assert!(
         quality_samples > 0,
         "Air 1 replay {mode} had no post-publication quality samples"
     );
     assert!(
         validation_confidence_count > 0,
-        "Air 1 replay {mode} had no post-warmup quality samples"
+        "Air 1 replay {mode} had no post-correction quality samples"
+    );
+    assert!(
+        !checkpoints.is_empty(),
+        "Air 1 replay {mode} recorded no checkpoints: first success at evaluation \
+         {count_until_first_success} of {eval_count}"
     );
 
-    let component_count = validation_confidence_count.max(1) as f64;
     let quality_count = quality_samples.max(1) as f64;
     let radial_fitness_average = radial_fitness_sum / quality_count;
     let gravity_fitness_average = gravity_fitness_sum / quality_count;
@@ -190,6 +245,14 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
     eprintln!("  - accgyro samples: {accgyro_samples}");
     eprintln!("  - magnetic samples: {magnetic_samples}");
     eprintln!("- evaluate_correct");
+    eprintln!(
+        "  - post-warmup checkpoints: {} (evals after first successful correction)",
+        checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.evals_after_first_success.to_string())
+            .collect::<Vec<_>>()
+            .join("/"),
+    );
     eprintln!(
         "  - avg computation time: {:.3} ms over {} calls",
         eval_time.as_secs_f64() * 1e3 / eval_count as f64,
@@ -201,29 +264,53 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
         eval_count,
     );
     eprintln!(
-        "  - avg post-warmup confidence: {:.6} over {} calls",
-        validation_confidence_sum / component_count,
-        validation_confidence_count,
+        "  - avg post-warmup confidence: {}",
+        checkpoint_series(&checkpoints, |checkpoint| checkpoint.mean_confidence, 6),
     );
     eprintln!(
-        "    - radial: {:.6}",
-        validation_radial_sum / component_count
+        "    - radial: {}",
+        checkpoint_series(&checkpoints, |checkpoint| checkpoint.mean_radial, 6),
     );
     eprintln!(
-        "    - gravity: {:.6}",
-        validation_gravity_sum / component_count
+        "    - gravity: {}",
+        checkpoint_series(&checkpoints, |checkpoint| checkpoint.mean_gravity, 6),
     );
     eprintln!(
-        "    - coverage: {:.6}",
-        validation_coverage_sum / component_count
+        "    - coverage: {}",
+        checkpoint_series(&checkpoints, |checkpoint| checkpoint.mean_coverage, 6),
     );
     eprintln!(
-        "  - worst post-warmup confidence: {:.6}",
-        min_validation_confidence
+        "  - worst post-warmup confidence: {}",
+        checkpoint_series(
+            &checkpoints,
+            |checkpoint| f64::from(checkpoint.min_confidence),
+            6
+        ),
     );
-    eprintln!("    - radial: {:.6}", min_confidence_radial);
-    eprintln!("    - gravity: {:.6}", min_confidence_gravity);
-    eprintln!("    - coverage: {:.6}", min_confidence_coverage);
+    eprintln!(
+        "    - radial: {}",
+        checkpoint_series(
+            &checkpoints,
+            |checkpoint| f64::from(checkpoint.min_confidence_radial),
+            6
+        ),
+    );
+    eprintln!(
+        "    - gravity: {}",
+        checkpoint_series(
+            &checkpoints,
+            |checkpoint| f64::from(checkpoint.min_confidence_gravity),
+            6
+        ),
+    );
+    eprintln!(
+        "    - coverage: {}",
+        checkpoint_series(
+            &checkpoints,
+            |checkpoint| f64::from(checkpoint.min_confidence_coverage),
+            6
+        ),
+    );
 
     let mut longest_streak = 0usize;
     let mut current_streak = 0usize;
@@ -235,14 +322,54 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
             current_streak = 0;
         }
     }
-    eprintln!("- post-warmup stability: longest above-floor streak: {longest_streak} evaluations");
+    eprintln!(
+        "- post-correction stability: longest above-floor streak: {longest_streak} evaluations"
+    );
     eprintln!("- total: {} evaluations", eval_count);
     eprintln!(
         "  - until first successful correction: {} evaluations / confidence={:.6}",
         count_until_first_success, first_success_confidence,
     );
-    eprintln!("  - sampling/optimization warm-up: {warmup_count} evaluations");
-    eprintln!("  - verification: {} evaluations", verified_count);
+    eprintln!(
+        "  - after first successful correction: {post_correction_count} evaluations ({} checkpoints of {CHECKPOINT_INTERVAL})",
+        checkpoints.len(),
+    );
+
+    // stability: cumulative post-correction means must not keep degrading
+    // after the first checkpoint
+    let first_checkpoint = &checkpoints[0];
+    for checkpoint in &checkpoints[1..] {
+        assert!(
+            checkpoint.mean_confidence
+                >= first_checkpoint.mean_confidence - CONFIDENCE_DEGRADATION_MARGIN,
+            "Air 1 replay {mode} post-correction mean confidence degraded from {:.6} after {} \
+             evaluations to {:.6} after {} evaluations",
+            first_checkpoint.mean_confidence,
+            first_checkpoint.evals_after_first_success,
+            checkpoint.mean_confidence,
+            checkpoint.evals_after_first_success,
+        );
+        for (label, current, reference) in [
+            (
+                "radial",
+                checkpoint.mean_radial,
+                first_checkpoint.mean_radial,
+            ),
+            (
+                "gravity",
+                checkpoint.mean_gravity,
+                first_checkpoint.mean_gravity,
+            ),
+        ] {
+            assert!(
+                current >= reference - FITNESS_DEGRADATION_MARGIN,
+                "Air 1 replay {mode} post-correction mean {label} fitness degraded from \
+                 {reference:.6} after {} evaluations to {current:.6} after {} evaluations",
+                first_checkpoint.evals_after_first_success,
+                checkpoint.evals_after_first_success,
+            );
+        }
+    }
 
     assert!(
         radial_fitness_average > MIN_AVERAGE_FITNESS,
@@ -254,11 +381,11 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
     );
     assert!(
         !tail_samples.is_empty(),
-        "Air 1 replay {mode} had no post-warmup evaluations"
+        "Air 1 replay {mode} had no post-correction evaluations"
     );
     assert!(
         longest_streak >= MIN_STABLE_STREAK,
-        "Air 1 replay {mode} held both fitness components above {FITNESS_FLOOR} for at most {longest_streak} consecutive post-warmup evaluations, below {MIN_STABLE_STREAK}"
+        "Air 1 replay {mode} held both fitness components above {FITNESS_FLOOR} for at most {longest_streak} consecutive post-correction evaluations, below {MIN_STABLE_STREAK}"
     );
 }
 
