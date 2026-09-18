@@ -25,10 +25,23 @@ const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
 /// outlier weighting — so the old constant does not transfer.
 pub(super) const MAX_RADIAL_RMS: f32 = 0.5;
 /// Gravity-projection RMS residual below which the gravity fitness is 1.
-/// The normal-projection surrogate is biased under anisotropic soft iron, so
-/// even a perfect fit keeps an irreducible residual; the floor keeps that
-/// bias from dragging down a good calibration.
+/// While the preconditioner frame is still converging — and under the
+/// clamp's anisotropy bound — even a perfect fit keeps an irreducible
+/// residual; the floor keeps that transient bias from dragging down a good
+/// calibration.
 const GRAVITY_RMS_FLOOR: f32 = 0.1;
+/// Eigenvalue bounds of the gravity preconditioner `gravity_frame`
+/// ($A_w^{-1}$). While the working correction converges, preconditioning is a
+/// fixed-point iteration: each refresh retargets the surrogate at the current
+/// working anisotropy and the optimizer then moves the correction. Clamping
+/// bounds the anisotropy the iteration can inject per refresh, keeping the
+/// moving target stable. Only anisotropy matters to the surrogate — a common
+/// scale factor of the frame is absorbed by the learned projection $\kappa$ —
+/// so a well-converged frame sits comfortably inside these bounds and the
+/// clamp engages only while the working shape is still far off.
+const MIN_GRAVITY_FRAME_EIGENVALUE: f32 = 0.25;
+/// Upper eigenvalue bound of `gravity_frame`; see `MIN_GRAVITY_FRAME_EIGENVALUE`.
+const MAX_GRAVITY_FRAME_EIGENVALUE: f32 = 4.0;
 /// Gravity-projection RMS residual at which the gravity fitness reaches 0,
 /// ramping linearly down from 1 at `GRAVITY_RMS_FLOOR`. Residuals live in
 /// normalized ellipsoid-equation units; both constants are calibrated
@@ -85,12 +98,23 @@ pub(super) struct MagModel<const N: usize> {
     /// `sample_normalization_usable`.
     pub(super) sample_rms_radius: f32,
     /// Learned scalar $\kappa$ of the gravity surrogate: the projection of
-    /// the normalized gravity direction $g_i$ onto the ellipsoid normal
-    /// $n_i = Q u_i + q / 2$ at a retained row, $\kappa = \psi(u_i, g_i)^T
-    /// \theta$, which the surrogate keeps approximately constant across
-    /// rows. `None` until seeded once from the first usable gravity
-    /// observation, then refined by the optimizer gradient steps.
+    /// the preconditioned gravity direction $\tilde{g}_i = A_w^{-1} g_i$
+    /// onto the ellipsoid normal $n_i = Q u_i + q / 2$ at a retained row,
+    /// $\kappa = \psi(u_i, \tilde{g}_i)^T \theta$, which the surrogate keeps
+    /// approximately constant across rows. `None` until seeded once from the
+    /// first usable gravity observation, then refined by the optimizer
+    /// gradient steps.
     pub(super) learned_gravity_projection: Option<f32>,
+    /// Gravity preconditioner frame $A_w^{-1}$: the inverse of the current
+    /// working soft-iron correction, symmetrized with eigenvalues clamped to
+    /// [`MIN_GRAVITY_FRAME_EIGENVALUE`, `MAX_GRAVITY_FRAME_EIGENVALUE`]. The
+    /// surrogate residual uses the preconditioned direction
+    /// $\tilde{g}_i = A_w^{-1} g_i$, so it pins
+    /// $\tilde{g}_i^T n_i = \gamma r\, g_i^T A_w^{-1} A m_i$, which reduces
+    /// to the exact magnetic dip $\gamma r\, g_i^T m_i$ once the working
+    /// correction $A_w$ matches the true $A$. Identity until the first valid
+    /// working candidate refreshes it; refreshed by [`MagModel::update_quality`].
+    pub(super) gravity_frame: Matrix3<f32>,
     pub(super) gravity_weight: f32,
     /// Live calibration quality factors of the current working candidate,
     /// reset together with the model minimum and recomputed by
@@ -209,7 +233,9 @@ impl<const N: usize> MagModel<N> {
 
     /// Initializes the learned gravity projection once from the first usable
     /// observation: the current one when it carries a gravity direction,
-    /// otherwise the first retained row that does.
+    /// otherwise the first retained row that does. The seed uses the same
+    /// preconditioned features as the optimizer and the quality statistic,
+    /// $\kappa = \psi(u, \tilde{g})^T \theta$.
     pub(super) fn initialize_gravity_projection(
         &mut self,
         current_sample: Vector3<f32>,
@@ -227,7 +253,10 @@ impl<const N: usize> MagModel<N> {
                 })
             });
         if let Some((sample, gravity)) = observation {
-            let features = Self::gravity_features(self.normalized_sample(sample), gravity);
+            let features = Self::gravity_features(
+                self.normalized_sample(sample),
+                self.preconditioned_gravity(gravity),
+            );
             let projection = features.dot(&self.parameters);
             if projection.is_finite() {
                 self.learned_gravity_projection = Some(projection);
@@ -251,7 +280,9 @@ impl<const N: usize> MagModel<N> {
 
     /// Features of the projection of gravity onto the ellipsoid normal
     /// `Q * sample + q / 2`. The projection is linear in the nine ellipsoid
-    /// parameters, keeping the combined online objective convex and quadratic.
+    /// parameters, keeping the combined online objective convex and
+    /// quadratic. `gravity` is the preconditioned direction $\tilde{g}$ —
+    /// callers apply [`MagModel::preconditioned_gravity`] first.
     pub(super) fn gravity_features(
         sample: Vector3<f32>,
         gravity: Vector3<f32>,
@@ -268,6 +299,15 @@ impl<const N: usize> MagModel<N> {
             0.5 * gravity.y,
             0.5 * gravity.z,
         ])
+    }
+
+    /// Preconditioned gravity direction $\tilde{g} = A_w^{-1} g$ used by the
+    /// surrogate everywhere (seeding, optimizer features, live quality).
+    /// Deliberately not renormalized: the projection residual must equal
+    /// $g^T A_w^{-1} n$, and a common scale factor of the frame is absorbed
+    /// by the learned projection $\kappa$.
+    pub(super) fn preconditioned_gravity(&self, gravity: Vector3<f32>) -> Vector3<f32> {
+        self.gravity_frame * gravity
     }
 
     /// Feature vector `varphi(d)` of a unit direction `d`: the term whose
@@ -356,13 +396,13 @@ impl<const N: usize> MagModel<N> {
     /// Gravity fitness in `[0, 1]`: a linear ramp from 1 at the
     /// `GRAVITY_RMS_FLOOR` residual to 0 at `MAX_GRAVITY_RMS`, applied to
     /// the mean square gravity-projection residual `psi^T theta - kappa`
-    /// recomputed over the retained rows carrying a gravity direction.
-    /// Unlike the radial score, a missing statistic maps to a neutral 1:
-    /// gravity is optional, so an absent or disabled gravity term must
-    /// never penalize a magnetometer-only calibration. The residual
-    /// measures constancy of the ellipsoid-normal projection, which matches
-    /// the corrected-direction dot product only for isotropic correction;
-    /// the score inherits the surrogate's anisotropic soft-iron bias.
+    /// recomputed over the retained rows carrying a gravity direction, with
+    /// `psi` built from the preconditioned direction $\tilde{g}_i$. Unlike
+    /// the radial score, a missing statistic maps to a neutral 1: gravity
+    /// is optional, so an absent or disabled gravity term must never
+    /// penalize a magnetometer-only calibration. Preconditioning removes
+    /// the surrogate's anisotropic soft-iron bias as the frame converges;
+    /// the remaining transient bias stays inside the floor.
     pub(super) fn gravity_fitness_score(mean_square: Option<f32>) -> f32 {
         match mean_square {
             Some(mean_square) if mean_square.is_finite() && mean_square >= 0.0 => {
@@ -442,6 +482,28 @@ impl<const N: usize> MagModel<N> {
         Ok(CalibrationCandidate { offset, correction })
     }
 
+    /// Refreshes the gravity preconditioner frame from a valid working
+    /// candidate: $A_w^{-1}$ is the inverse of the candidate's correction,
+    /// symmetrized, with eigenvalues clamped to
+    /// [`MIN_GRAVITY_FRAME_EIGENVALUE`, `MAX_GRAVITY_FRAME_EIGENVALUE`]. The
+    /// candidate correction is already SPD with bounded condition, so the
+    /// inverse is well-defined; the clamp bounds the per-refresh target
+    /// motion of the fixed-point iteration between preconditioner and fit.
+    /// The frame is refreshed even when the surrogate is weight-disabled, so
+    /// a later opt-in never starts from a stale frame.
+    pub(super) fn refresh_gravity_frame(&mut self, candidate: &CalibrationCandidate) {
+        let Some(inverse) = candidate.correction.try_inverse() else {
+            return;
+        };
+        let symmetrized = 0.5 * (inverse + inverse.transpose());
+        let eigen = symmetrized.symmetric_eigen();
+        let clamped = eigen
+            .eigenvalues
+            .map(|value| value.clamp(MIN_GRAVITY_FRAME_EIGENVALUE, MAX_GRAVITY_FRAME_EIGENVALUE));
+        self.gravity_frame =
+            eigen.eigenvectors * Matrix3::from_diagonal(&clamped) * eigen.eigenvectors.transpose();
+    }
+
     /// Updates the live quality of the current working candidate.
     /// Normalization uses the maintained raw moments; coverage and both
     /// fitness statistics rescan the retained rows, so an expired or
@@ -469,6 +531,7 @@ impl<const N: usize> MagModel<N> {
                 return None;
             }
         };
+        self.refresh_gravity_frame(&candidate);
         // Radial fitness: mean square of the algebraic ellipsoid residual
         // `phi(u_i)^T theta - 1` over every retained row, in fixed ascending
         // row order so the result is bit-deterministic. This is the same
@@ -501,10 +564,12 @@ impl<const N: usize> MagModel<N> {
                 for row in 0..self.sample_row_count {
                     let row = self.samples.view(row);
                     if let Some(gravity) = row.gravity() {
-                        let residual =
-                            Self::gravity_features(self.normalized_sample(row.sample()), gravity)
-                                .dot(&self.parameters)
-                                - kappa;
+                        let residual = Self::gravity_features(
+                            self.normalized_sample(row.sample()),
+                            self.preconditioned_gravity(gravity),
+                        )
+                        .dot(&self.parameters)
+                            - kappa;
                         gravity_square_sum += residual * residual;
                         gravity_count += 1;
                     }

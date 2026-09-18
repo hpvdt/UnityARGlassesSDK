@@ -191,6 +191,7 @@ impl<const N: usize> Default for MagCalibrator<N> {
                 sample_mean: Vector3::zeros(),
                 sample_rms_radius: 0.0,
                 learned_gravity_projection: None,
+                gravity_frame: Matrix3::identity(),
                 gravity_weight: DEFAULT_GRAVITY_WEIGHT,
                 quality: CalibrationQuality::ZERO,
             },
@@ -356,7 +357,10 @@ impl<const N: usize> MagCalibrator<N> {
             if let Some(gravity) =
                 gravity.filter(|_| self.model.learned_gravity_projection.is_some())
             {
-                gravity_rows.push(MagModel::<N>::gravity_features(normalized, gravity));
+                gravity_rows.push(MagModel::<N>::gravity_features(
+                    normalized,
+                    self.model.preconditioned_gravity(gravity),
+                ));
             }
         }
         (

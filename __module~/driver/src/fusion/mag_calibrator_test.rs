@@ -45,7 +45,7 @@ impl<const N: usize> MagCalibrator<N> {
             if let Some(gravity) = row.gravity() {
                 let residual = MagModel::<N>::gravity_features(
                     self.model.normalized_sample(row.sample()),
-                    gravity,
+                    self.model.preconditioned_gravity(gravity),
                 )
                 .dot(&self.model.parameters)
                     - kappa;
@@ -827,9 +827,10 @@ fn mag_calibrator_gravity_surrogate_survives_strong_anisotropy() {
     ];
     // Chord distance for unit vectors is ~angle in radians for small errors.
     // Aggregate the summed probe error across every anisotropic and dip case
-    // before comparing: the surrogate helps isotropic-axis cases and can
-    // regress on rotated-eigenvector cases, so the aggregate is what guards
-    // against a net regression at the shipped low weight.
+    // before comparing: with the unpreconditioned surrogate the aggregate
+    // was the only robust guard because rotated-eigenvector cases regressed;
+    // the preconditioned surrogate converges to the exact dip constraint, so
+    // the aggregate must now strictly improve.
     let mut plain_total = 0.0_f32;
     let mut refined_total = 0.0_f32;
 
@@ -877,21 +878,18 @@ fn mag_calibrator_gravity_surrogate_survives_strong_anisotropy() {
         }
     }
 
-    // The ellipsoid-normal surrogate pins `g_i^T A m_i` rather than the exact
-    // dip `g_i^T m_i`, so rotated full-SPD soft iron biases the fit toward
-    // isotropy. Validation found that bias repeatable: the rotated case above
-    // regresses on every dip angle at every tested nonzero weight (already
-    // +0.3 aggregate probe error at weight `0.003`), while axis-aligned and
-    // isotropic cases improve. Lowering the weight therefore cannot remove
-    // the regression, so the default weight is 0 and this sweep runs at the
-    // opt-in weight `0.01` to keep the aggregate bias bounded for callers
-    // that enable the surrogate. The extended sweep behind this conclusion
-    // covered condition numbers up to 8, dip angles from 12 to 83 degrees,
-    // and inconsistent-acceleration gravity hints.
-    let regression_tolerance = 0.2_f32;
+    // The unpreconditioned surrogate pinned `g_i^T A m_i` rather than the
+    // exact dip `g_i^T m_i`, so rotated full-SPD soft iron biased the fit
+    // toward isotropy: the rotated cases above regressed at every tested
+    // nonzero weight (already +0.3 aggregate probe error at weight `0.003`).
+    // The preconditioned surrogate pins `g_i^T A_w^{-1} A m_i`, which
+    // converges to the exact dip as the working correction converges; the
+    // regression is gone and every case in this sweep improves instead.
+    // The aggregate must therefore be strictly better than the plain fit —
+    // a tolerance here would let an anisotropy bias creep back in.
     assert!(
-        refined_total <= plain_total + regression_tolerance,
-        "gravity surrogate regressed under strong anisotropy: \
+        refined_total < plain_total,
+        "preconditioned gravity surrogate must improve under strong anisotropy: \
          plain_total={plain_total} refined_total={refined_total}"
     );
 }
@@ -1176,8 +1174,13 @@ fn mag_calibrator_reports_confidence_factors() {
     }
     let refined = refined_result.unwrap();
     let opposed = opposed_result.unwrap();
-    assert!(
-        (0.0..1.0).contains(&refined.gravity_fitness),
+    // With the preconditioned surrogate, a consistent co-rotating gravity
+    // direction is fit exactly once the frame converges: the projection
+    // residual drops at or below the GRAVITY_RMS_FLOOR and the factor
+    // saturates at 1. The unbiased surrogate is expected to reach the top
+    // of the range, so the interior assertion is now an exact plateau.
+    assert_eq!(
+        refined.gravity_fitness, 1.0,
         "gravity_fitness={}",
         refined.gravity_fitness
     );
