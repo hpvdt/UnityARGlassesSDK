@@ -17,11 +17,11 @@ const EVENT_PERIOD_US: u64 = 20_001;
 /// phase holds several checkpoints even when the first successful correction
 /// arrives late (slowest observed: ~1200 evaluations).
 const MAX_EVAL_COUNT: u64 = 3_000;
-/// Interval, in evaluations after the first successful correction, at which
-/// cumulative post-correction stats (error, confidence, fitness components,
-/// worst error) are snapshotted and reported as an open-ended
-/// 500/1000/1500/... series, showing whether the means stay stable instead of
-/// degrading over time.
+/// Interval, in evaluations after the first successful correction, marking the
+/// checkpoints of the reported series. Each checkpoint aggregates the samples
+/// from that point to the end of the run, so the open-ended 500/1000/1500/...
+/// series shows whether the stats measured after each latency stay stable
+/// instead of degrading over time.
 const CHECKPOINT_INTERVAL: u64 = 500;
 
 /// Worst single correction error allowed beyond the first checkpoint.
@@ -30,12 +30,12 @@ const WORST_VALIDATION_ERROR_CRITERION: f32 = 25.0;
 /// Highest average correction error allowed beyond the first checkpoint.
 const AVG_VALIDATION_ERROR_AFTER_CRITERION: f64 = 10.0;
 
-/// How far the cumulative post-correction mean error may drift up between the
-/// first checkpoint and any later one before the run counts as unstable.
+/// How far the mean error measured beyond a checkpoint may exceed the one
+/// measured beyond the first checkpoint before the run counts as unstable.
 const ERROR_DEGRADATION_MARGIN_DEGREES: f64 = 5.0;
 
-/// How far the cumulative post-correction mean confidence may drift down
-/// between the first checkpoint and any later one.
+/// How far the mean confidence measured beyond a checkpoint may fall below
+/// the one measured beyond the first checkpoint.
 const CONFIDENCE_DEGRADATION_MARGIN: f64 = 0.1;
 
 /// Whether the calibrator is fed a co-timestamped simulated accelerometer reading with each sample.
@@ -45,9 +45,22 @@ enum AttitudeMode {
     Never,
 }
 
-/// Cumulative post-correction stats snapshot at a checkpoint (a multiple of
-/// `CHECKPOINT_INTERVAL` evaluations after the first successful correction).
-/// Every field covers the whole post-correction span up to that checkpoint.
+/// One magnetometer evaluation after the first successful correction,
+/// retained so every checkpoint can aggregate the span from that checkpoint
+/// to the end of the run. `latency` counts evaluations since the first
+/// successful correction (which itself has latency 0).
+struct PostCorrectionSample {
+    latency: u64,
+    error_degrees: Option<f32>,
+    confidence: f32,
+    radial: f32,
+    gravity: f32,
+    coverage: f32,
+}
+
+/// Checkpoint of the reported series (a multiple of `CHECKPOINT_INTERVAL`
+/// evaluations after the first successful correction). Every field aggregates
+/// the samples from that checkpoint to the end of the run.
 struct CheckpointStats {
     evals_after_first_success: u64,
     mean_error_degrees: f64,
@@ -60,6 +73,56 @@ struct CheckpointStats {
     min_confidence_radial: f32,
     min_confidence_gravity: f32,
     min_confidence_coverage: f32,
+}
+
+/// Builds the open-ended checkpoint series from the retained post-correction
+/// samples: one entry per multiple of `CHECKPOINT_INTERVAL` covered by the
+/// run, aggregating the suffix of samples starting at that latency.
+fn build_checkpoints(samples: &[PostCorrectionSample]) -> Vec<CheckpointStats> {
+    let Some(last_latency) = samples.last().map(|sample| sample.latency) else {
+        return Vec::new();
+    };
+    (1..)
+        .map(|checkpoint| checkpoint * CHECKPOINT_INTERVAL)
+        .take_while(|&latency| latency <= last_latency)
+        .map(|latency| {
+            // samples are pushed in latency order
+            let start = samples.partition_point(|sample| sample.latency < latency);
+            let samples = &samples[start..];
+            let count = samples.len().max(1) as f64;
+            let mean = |field: fn(&PostCorrectionSample) -> f32| {
+                samples
+                    .iter()
+                    .map(|sample| f64::from(field(sample)))
+                    .sum::<f64>()
+                    / count
+            };
+            let (error_sum, error_count, worst_error) = samples
+                .iter()
+                .filter_map(|sample| sample.error_degrees)
+                .fold((0.0f64, 0u64, 0.0f32), |(sum, count, worst), error| {
+                    (sum + f64::from(error), count + 1, worst.max(error))
+                });
+            let worst_confidence_sample = samples
+                .iter()
+                .min_by(|a, b| a.confidence.total_cmp(&b.confidence));
+            CheckpointStats {
+                evals_after_first_success: latency,
+                mean_error_degrees: error_sum / error_count.max(1) as f64,
+                worst_error_degrees: worst_error,
+                mean_confidence: mean(|sample| sample.confidence),
+                mean_radial: mean(|sample| sample.radial),
+                mean_gravity: mean(|sample| sample.gravity),
+                mean_coverage: mean(|sample| sample.coverage),
+                min_confidence: worst_confidence_sample.map_or(0.0, |sample| sample.confidence),
+                min_confidence_radial: worst_confidence_sample.map_or(0.0, |sample| sample.radial),
+                min_confidence_gravity: worst_confidence_sample
+                    .map_or(0.0, |sample| sample.gravity),
+                min_confidence_coverage: worst_confidence_sample
+                    .map_or(0.0, |sample| sample.coverage),
+            }
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -111,20 +174,9 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     let mut sim_motion = SimMotion::with_config(config);
     let mut fusion = FusionState::new(Box::new(SimMotion::new()));
     let mut first_success_count = None;
-    // cumulative accumulators over the whole post-correction span, snapshotted
-    // at every checkpoint into `stats.checkpoints`
-    let mut post_correction_count = 0u64;
-    let mut post_correction_error_sum = 0.0f64;
-    let mut post_correction_error_count = 0u64;
-    let mut post_correction_worst_error = 0.0f32;
-    let mut post_correction_confidence_sum = 0.0f64;
-    let mut post_correction_min_confidence = f32::INFINITY;
-    let mut min_confidence_radial = 0.0f32;
-    let mut min_confidence_gravity = 0.0f32;
-    let mut min_confidence_coverage = 0.0f32;
-    let mut post_correction_radial_sum = 0.0f64;
-    let mut post_correction_gravity_sum = 0.0f64;
-    let mut post_correction_coverage_sum = 0.0f64;
+    // every post-correction evaluation is retained so each checkpoint can
+    // aggregate the span from that checkpoint to the end of the run
+    let mut post_correction_samples: Vec<PostCorrectionSample> = Vec::new();
 
     let mut stats = RunStats::default();
     // locals below back up assert messages and first-success tracking only
@@ -212,43 +264,17 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         let latency = stats.eval_count - count_at_first_success;
 
         // failed evaluations carry no quality sample (the tuple above falls
-        // back to zeroed components for them); exclude them from the
-        // post-correction stats. They can only occur before the first
-        // checkpoint — the strict phase beyond it panics on them.
+        // back to zeroed components for them); exclude them. They can only
+        // occur before the first checkpoint — the strict phase beyond it
+        // panics on them.
         if result.is_ok() {
-            if let Some(angle_degrees) = angle_degrees {
-                post_correction_error_sum += f64::from(angle_degrees);
-                post_correction_error_count += 1;
-                post_correction_worst_error = post_correction_worst_error.max(angle_degrees);
-            }
-            post_correction_confidence_sum += f64::from(confidence);
-            post_correction_count += 1;
-            post_correction_radial_sum += f64::from(radial_fitness);
-            post_correction_gravity_sum += f64::from(gravity_fitness);
-            post_correction_coverage_sum += f64::from(coverage);
-            if confidence < post_correction_min_confidence {
-                post_correction_min_confidence = confidence;
-                min_confidence_radial = radial_fitness;
-                min_confidence_gravity = gravity_fitness;
-                min_confidence_coverage = coverage;
-            }
-        }
-
-        if latency >= CHECKPOINT_INTERVAL && latency.is_multiple_of(CHECKPOINT_INTERVAL) {
-            let count = post_correction_count as f64;
-            stats.checkpoints.push(CheckpointStats {
-                evals_after_first_success: latency,
-                mean_error_degrees: post_correction_error_sum
-                    / post_correction_error_count.max(1) as f64,
-                worst_error_degrees: post_correction_worst_error,
-                mean_confidence: post_correction_confidence_sum / count,
-                mean_radial: post_correction_radial_sum / count,
-                mean_gravity: post_correction_gravity_sum / count,
-                mean_coverage: post_correction_coverage_sum / count,
-                min_confidence: post_correction_min_confidence,
-                min_confidence_radial,
-                min_confidence_gravity,
-                min_confidence_coverage,
+            post_correction_samples.push(PostCorrectionSample {
+                latency,
+                error_degrees: angle_degrees,
+                confidence,
+                radial: radial_fitness,
+                gravity: gravity_fitness,
+                coverage,
             });
         }
 
@@ -291,6 +317,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
     });
     stats.count_until_first_success = count_until_first_success;
     stats.first_success_confidence = first_success_confidence.unwrap();
+    stats.checkpoints = build_checkpoints(&post_correction_samples);
     assert!(
         !stats.checkpoints.is_empty(),
         "magnetometer calibration recorded no checkpoints: seed={seed}, mode={mode_label}, \
@@ -302,29 +329,31 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
          seed={seed}, mode={mode_label}, \
          first success at evaluation {count_until_first_success} of {MAX_EVAL_COUNT}"
     );
-    // stability: cumulative post-correction means must not keep degrading
-    // after the first checkpoint
+    // stability: stats measured from each checkpoint onward must not be worse
+    // than the ones measured from the first checkpoint onward
     let first_checkpoint = &stats.checkpoints[0];
     for checkpoint in &stats.checkpoints[1..] {
         assert!(
             checkpoint.mean_error_degrees
                 <= first_checkpoint.mean_error_degrees + ERROR_DEGRADATION_MARGIN_DEGREES,
-            "post-correction mean error degraded from {:.3} deg after {} evaluations \
-             to {:.3} deg after {} evaluations: seed={seed}, mode={mode_label}",
-            first_checkpoint.mean_error_degrees,
-            first_checkpoint.evals_after_first_success,
-            checkpoint.mean_error_degrees,
+            "post-correction mean error measured from evaluation {} onward ({:.3} deg) \
+             exceeded the one from evaluation {} onward ({:.3} deg) by more than \
+             {ERROR_DEGRADATION_MARGIN_DEGREES} deg: seed={seed}, mode={mode_label}",
             checkpoint.evals_after_first_success,
+            checkpoint.mean_error_degrees,
+            first_checkpoint.evals_after_first_success,
+            first_checkpoint.mean_error_degrees,
         );
         assert!(
             checkpoint.mean_confidence
                 >= first_checkpoint.mean_confidence - CONFIDENCE_DEGRADATION_MARGIN,
-            "post-correction mean confidence degraded from {:.6} after {} evaluations \
-             to {:.6} after {} evaluations: seed={seed}, mode={mode_label}",
-            first_checkpoint.mean_confidence,
-            first_checkpoint.evals_after_first_success,
-            checkpoint.mean_confidence,
+            "post-correction mean confidence measured from evaluation {} onward ({:.6}) \
+             fell below the one from evaluation {} onward ({:.6}) by more than \
+             {CONFIDENCE_DEGRADATION_MARGIN}: seed={seed}, mode={mode_label}",
             checkpoint.evals_after_first_success,
+            checkpoint.mean_confidence,
+            first_checkpoint.evals_after_first_success,
+            first_checkpoint.mean_confidence,
         );
     }
 
