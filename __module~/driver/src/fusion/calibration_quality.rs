@@ -32,10 +32,14 @@ impl CalibrationQuality {
         coverage: 0.0,
         radial_fitness: 0.0,
         gravity_fitness: 0.0,
-        // FIXME: this is wrong, if gravity vector exists, it should be used for optimisation.
-        //   (to be elaborated)
-        //  Investigate the current optimisation loss function to ensure that:
-        //  ...
+        /*
+
+        FIXME: this is wrong, if gravity vector exists, it should be used for optimisation.
+            Investigate the current optimisation loss function to ensure that:
+            - the gravity loss is provably convex
+            - online SGD correctly samples from the replay cache with gravity vector and correctly compute the subgradient with these samples
+            Finally, improve the code to ensure that both gradient loss and magnetic dip (the projection of magnetic vector on the direction of gravity) converge & become stable.
+         */
         gravity_term_weight: 0.0,
     };
 
