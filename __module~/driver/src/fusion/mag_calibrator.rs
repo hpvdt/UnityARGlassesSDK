@@ -488,7 +488,7 @@ impl<const N: usize> MagCalibrator<N> {
         // with the sample radius $r$).
         let mut gravity_scale = 1.0;
         if gravity_features.nrows() > 0 {
-            let projections = &gravity_features * &parameters;
+            let projections = &gravity_features * parameters;
             gravity_scale = (projections.norm_squared() / gravity_features.nrows() as f32)
                 .max(ONLINE_SCALE_EPSILON)
                 .sqrt();

@@ -50,9 +50,9 @@ const MAX_GRAVITY_FRAME_EIGENVALUE: f32 = 4.0;
 /// relative to the projection scale $\sigma_g$ (a dip-inconsistency
 /// fraction), so the constant transfers across devices and field radii; it
 /// is calibrated against the synthetic consistent/contradictory gravity
-/// tests (a fully contradictory hint stream sits near the relative RMS of
-/// 1) and against the Air 1 trace, whose steady accelerometer-hint spread
-/// centers near 0.2.
+/// tests (a fully contradictory hint stream has a relative RMS near 1) and
+/// against the Air 1 trace, whose steady accelerometer-hint spread centers
+/// near 0.2.
 const MAX_GRAVITY_RMS: f32 = 0.35;
 /// Uniform-sphere reference for directional coverage: the smallest
 /// eigenvalue of `E[varphi(d) varphi(d)^T]` over uniformly distributed unit
