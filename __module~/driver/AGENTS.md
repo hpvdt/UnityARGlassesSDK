@@ -253,7 +253,8 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$D$:** Symmetric positive-definite soft-iron distortion matrix; $3 \times 3$.
 - **$d$:** Normalized-offset candidate in cache-normalization units, $d = -\tfrac{1}{2} Q^{-1} q$; $3 \times 1$.
 - **$e_{r,i}$:** Radial algebraic residual of observation $i$, $e_{r,i} = \phi_i^T \theta - 1$.
-- **$e_{g,i}$:** Gravity-projection residual of observation $i$, $e_{g,i} = \psi_i^T \theta - \kappa$.
+- **$e_{g,i}$:** Gravity-projection residual of observation $i$, normalized by the projection scale,
+  $e_{g,i} = (\psi_i^T \theta - \kappa) / \sigma_g$.
 - **$G$:** Gravity-carrying subset of a minibatch; $|G|$ is its observation count.
 - **$g_i$:** Normalized gravity direction of observation $i$; $3 \times 1$.
 - **$H$:** Mean Gram matrix of the retained mean-centered unit directions,
@@ -276,8 +277,8 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
   `mag_model::MagModel`).
 - **$s_i$:** Gravity normal projection, $s_i = \tilde{g}_i^T n_i$.
 - **$s_{\theta,j}$, $s_\kappa$:** Diagonal feature-energy scales normalizing the optimizer descent step,
-  $s_{\theta,j} = \frac{1}{|B|} \sum_{i \in B} \phi_{i,j}^2 + \frac{w_g}{|G|} \sum_{i \in G} \psi_{i,j}^2
-  + \lambda R_{jj} + \epsilon$, and $s_\kappa = w_g + \epsilon$.
+  $s_{\theta,j} = \frac{1}{|B|} \sum_{i \in B} \phi_{i,j}^2 + \frac{w_g}{\sigma_g^2 |G|} \sum_{i \in G}
+  \psi_{i,j}^2 + \lambda R_{jj} + \epsilon$, and $s_\kappa = w_g / \sigma_g^2 + \epsilon$.
 - **$u_i$:** Normalized magnetometer sample, $u_i = (x_i - \mu) / r$; $3 \times 1$.
 - **$\hat{u}_i$:** Mean-centered unit direction of retained sample $i$; $3 \times 1$.
 - **$w_g$:** Gravity term weight (`gravity_weight`).
@@ -293,6 +294,9 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$\lambda$:** Shape regularization weight.
 - **$\mu$:** Sample mean of the retained magnetometer samples (code field `sample_mean` in
   `mag_model::MagModel`); $3 \times 1$.
+- **$\sigma_g$:** Gravity projection scale: the RMS projection $\sqrt{\frac{1}{n_g} \sum_i (\psi_i^T \theta)^2}$
+  over the gravity-carrying rows of a minibatch or cache scan, frozen per optimizer update and floored at
+  $\epsilon$ (code variable `gravity_scale`); scalar.
 - **$\nabla_\theta$, $\nabla_\kappa$:** Gradients of $J_r + J_g$ with respect to
   $\theta$ ($\nabla_\theta$; $9 \times 1$) and $\kappa$ ($\nabla_\kappa$; scalar).
 - **$\phi(u)$:** Ellipsoid-fit feature vector with cross-term weight $2$; $9 \times 1$.

@@ -494,6 +494,8 @@ impl<const N: usize> MagModel<N> {
     /// The frame is refreshed even when the surrogate is weight-disabled, so
     /// a later opt-in never starts from a stale frame.
     pub(super) fn refresh_gravity_frame(&mut self, candidate: &CalibrationCandidate) {
+        // Defensive: a valid working candidate is SPD with bounded condition,
+        // so inversion cannot fail; keep the previous frame if it ever does.
         let Some(inverse) = candidate.correction.try_inverse() else {
             return;
         };
@@ -583,8 +585,8 @@ impl<const N: usize> MagModel<N> {
                     }
                 }
                 (gravity_count > 0).then(|| {
-                    let scale_squared = (gravity_scale_square_sum / gravity_count as f32)
-                        .max(ONLINE_SCALE_EPSILON);
+                    let scale_squared =
+                        (gravity_scale_square_sum / gravity_count as f32).max(ONLINE_SCALE_EPSILON);
                     gravity_square_sum / gravity_count as f32 / scale_squared
                 })
             }

@@ -96,11 +96,13 @@ $$
 The optional gravity term uses the ellipsoid normal
 
 $$
-n_i = Q\, u_i + q / 2.
+n_i = Q\, u_i + q / 2
 $$
 
-For a normalized gravity direction $g_i$, the projection $s_i = g_i^T n_i$ is linear in $\theta$ through the feature
-vector
+and the preconditioned gravity direction $\tilde{g}_i = A_w^{-1} g_i$, where $A_w$ is the current working
+soft-iron correction: the code field `gravity_frame` stores the symmetrized $A_w^{-1}$ with eigenvalues clamped
+to $[0.25, 4]$, refreshed from every valid working candidate and identity until the first one. The projection
+$s_i = \tilde{g}_i^T n_i$ is linear in $\theta$ through the feature vector
 
 $$
 \begin{aligned}
@@ -110,30 +112,38 @@ $$
 \end{aligned}
 $$
 
-The optimizer learns a scalar projection $\kappa$ and, with the configured weight $w_g$ (`gravity_weight`), minimizes
+The optimizer learns a scalar projection $\kappa$ and, with the configured weight $w_g$ (`gravity_weight` —
+default `0.01`), minimizes the projection-scale normalized residual
 
 $$
-e_{g,i} = \psi_i^T \theta - \kappa, \qquad
-J_g = \frac{w_g}{2 n_g} \sum_i (\psi_i^T \theta - \kappa)^2.
+e_{g,i} = \frac{\psi_i^T \theta - \kappa}{\sigma_g}, \qquad
+J_g = \frac{w_g}{2 n_g} \sum_i e_{g,i}^2,
 $$
 
-$J_r + J_g$ is convex and quadratic in $(\theta, \kappa)$; matrix square roots occur only during physical candidate
-conversion, not in the optimizer. Gravity is optional and disabled by default (weight `0`); `gravity_weight(w)` with a
-positive `w` opts back in.
+where $\sigma_g$ is the RMS projection $\psi^T \theta$ over the update's gravity rows, floored for numerical
+safety and frozen from the pre-update parameters for the whole update. Within one update $J_r + J_g$ is
+therefore a convex quadratic in $(\theta, \kappa)$: a positive-semidefinite Gram sum of squared affine terms
+plus the convex shape regularizer; the frame and $\sigma_g$ change only between updates, making the scheme a
+fixed-point iteration whose per-update target motion is bounded by the frame's eigenvalue clamp. Matrix square
+roots occur only during physical candidate conversion and per-refresh frame updates, never inside a gradient
+step. Gravity is disabled only by an explicit `gravity_weight(0)`.
 
-This term is a physical surrogate rather than the exact magnetic dip. The model gives
+Preconditioning makes the surrogate target the exact magnetic dip. The model gives
 
 $$
 Q\, (u_i - d) = \gamma\, r\, A\, m_i,
 $$
 
-so the surrogate keeps $g_i^T A m_i$ approximately constant instead of the exact $g_i^T m_i$. It is exact for isotropic
-correction and biased by anisotropic soft iron. Validation sweeps beyond the fixed simulator distortion (condition
-numbers up to 8, rotated eigenvectors, inconsistent acceleration, dip angles from 12 to 83 degrees) found a repeatable
-accuracy regression under rotated-eigenvector soft iron at every tested nonzero weight, while the fixed-seed SimMotion
-benchmark at weight `0.01` differed from the disabled baseline by under 0.04 degrees; the surrogate therefore ships
-disabled. Any change to an opted-in weight must be validated the same way: compare fixed-seed with-gravity integration
-results against magnetometer-only results from the SimMotion regression test named under "Calibration validation".
+so $s_i = \gamma\, r\, g_i^T A_w^{-1} A m_i$: as the working correction $A_w$ converges to $A$, the learned
+$\kappa / (\gamma r)$ converges to the exact dip projection $g_i^T m_i$, rather than the anisotropy-biased
+$g_i^T A m_i$ of the unpreconditioned form. The normalized residual is device-independent: the raw projection
+carries the $\gamma r$ scale of the ellipsoid equation (SimMotion's cache radius is near $14$, the Air 1
+trace's near $44$), so without normalization both the term's effective pull and its fitness ramp would drift
+with the field radius. The anisotropy sweep that regressed under the unpreconditioned surrogate now improves
+in every case (`mag_calibrator_gravity_surrogate_survives_strong_anisotropy`), and the Air 1 replay holds the
+relative dip residual of a walking accelerometer-hint trace near `0.2` at a stable $\kappa$. Any change to the
+configured weight must still be validated against the fixed-seed SimMotion regression named under "Calibration
+validation".
 
 Gravity changes the shared $\theta$. Physical candidate conversion still uses only $\theta$; there is no second
 gravity-refined candidate and no relaxed radial-error allowance for gravity-assisted fits.
@@ -167,10 +177,10 @@ $$
 
 $$
 \nabla_\theta = \frac{1}{|B|} \sum_{i \in B} e_{r,i}\, \phi_i
-    + \frac{w_g}{|G|} \sum_{i \in G} e_{g,i}\, \psi_i
+    + \frac{w_g}{|G|\, \sigma_g} \sum_{i \in G} e_{g,i}\, \psi_i
     + \lambda R\, (\theta - \theta_{\mathrm{prior}}),
 \qquad
-\nabla_\kappa = -\frac{w_g}{|G|} \sum_{i \in G} e_{g,i}.
+\nabla_\kappa = -\frac{w_g}{|G|\, \sigma_g} \sum_{i \in G} e_{g,i}.
 $$
 
 Omit the gravity terms when $G$ is empty, and add the regularization once per update rather than once per observation.
@@ -178,10 +188,10 @@ The diagonal feature-energy scales are
 
 $$
 s_{\theta,j} = \frac{1}{|B|} \sum_{i \in B} \phi_{i,j}^2
-    + \frac{w_g}{|G|} \sum_{i \in G} \psi_{i,j}^2
+    + \frac{w_g}{|G|\, \sigma_g^2} \sum_{i \in G} \psi_{i,j}^2
     + \lambda R_{jj} + \epsilon,
 \qquad
-s_\kappa = w_g + \epsilon.
+s_\kappa = \frac{w_g}{\sigma_g^2} + \epsilon.
 $$
 
 The optimizer divides each gradient component by its scale. Its learning rate decays from a private initial value to a
@@ -242,12 +252,13 @@ algebraic residual by the state-dependent factor $2 \gamma$ and weighted outlier
 saturate while the optimizer kept descending its own objective (the Air 1 replay showed block-long post-warmup
 radial-fitness dips to zero, which vanished once fitness moved to the algebraic residual).
 
-Gravity fitness likewise recomputes the mean square of the gravity-projection residual
-$\psi(u_i, g_i)^T \theta - \kappa$ over the retained rows that carry a valid gravity direction, and ramps linearly
-from `1` at the `0.1` RMS floor to `0` at the `0.35` ceiling (the cache-wide mean square rides slightly above the
-trailing-window estimate the original `0.3` ceiling was tuned against). The floor absorbs the surrogate's known
-anisotropic soft-iron bias: even a perfect fit keeps an irreducible residual, and it must not drag down a good
-calibration. A
+Gravity fitness likewise recomputes the mean square of the normalized gravity-projection residual
+$e_{g,i} = (\psi(u_i, \tilde{g}_i)^T \theta - \kappa) / \sigma_g$ over the retained rows that carry a valid
+gravity direction — exactly the optimizer's gravity data term, with $\sigma_g$ recomputed from the same rows —
+and ramps linearly from `1` at the `0.1` RMS floor to `0` at the `0.35` ceiling, both expressed as dip-
+inconsistency fractions of the projection scale. The floor absorbs the transient residual while the
+preconditioner frame is still converging: even a perfect fit keeps an irreducible residual until then, and it
+must not drag down a good calibration. A
 missing statistic — gravity disabled (`gravity_weight(0)`), the projection $\kappa$ not yet seeded from a gravity
 observation, or carried by no retained row — maps to a neutral `1` rather than `0`: gravity is optional, so an absent
 or disabled gravity term never penalizes a magnetometer-only calibration, unlike the mandatory radial statistic whose
@@ -265,9 +276,10 @@ is normalized by its own observation count, the counts cancel and the relative w
 stores it as `CalibrationQuality::gravity_term_weight`). The combination must be additive rather than
 multiplicative: a product or power mean gives each factor a veto the objective does not have — at the typical
 $w_g = 0.01$, a completely broken gravity surrogate costs the objective about one percent, yet geometrically it
-would zero the fitness. The per-statistic ramps — including the gravity bias floor — apply before the
-combination, so the surrogate's anisotropic bias never leaks into the radial assessment the way a single combined
-ramp would. When the gravity statistic is absent the effective weight is `0` and fitness reduces exactly to the
+would zero the fitness. The per-statistic ramps — including the gravity residual floor, which absorbs the
+transient dip inconsistency while the preconditioner frame converges — apply before the combination, so the
+surrogate's transient bias never leaks into the radial assessment the way a single combined ramp would. When
+the gravity statistic is absent the effective weight is `0` and fitness reduces exactly to the
 radial factor. Live confidence is coverage times fitness, clamped to $[0, 1]$. `MagCalibrationResult` reports
 every factor: `confidence`, `coverage`, `fitness`, `radial_fitness`, `gravity_fitness`, and
 `gravity_term_weight`.

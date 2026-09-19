@@ -34,7 +34,11 @@ impl<const N: usize> MagCalibrator<N> {
     /// Independently recomputes the gravity mean square of the current
     /// working parameters over the retained rows carrying a gravity
     /// direction, mirroring the gating and the projection-scale
-    /// normalization of `update_quality`.
+    /// normalization of `update_quality`. The preconditioner frame is NOT
+    /// refreshed here: the mirror intentionally reuses the frame state of
+    /// the last production `update_quality`, so the comparison only makes
+    /// sense after a production quality update (which `evaluate_correct`
+    /// always performs).
     fn gravity_mean_square_for_test(&self) -> Option<f32> {
         let kappa = self.model.learned_gravity_projection?;
         if self.model.gravity_weight <= 0.0 {
@@ -1006,9 +1010,7 @@ fn check_minibatch_update_against_analytic_subgradient(
     }
     let radial_features: Vec<_> = observations
         .iter()
-        .map(|&(sample, _)| {
-            MagModel::<63>::features(calibrator.model.normalized_sample(sample))
-        })
+        .map(|&(sample, _)| MagModel::<63>::features(calibrator.model.normalized_sample(sample)))
         .collect();
     let gravity_features: Vec<_> = observations
         .iter()
@@ -1041,10 +1043,9 @@ fn check_minibatch_update_against_analytic_subgradient(
         .sqrt();
     let gravity_scale_squared = gravity_scale * gravity_scale;
     let prior = MagModel::<63>::parameter_prior();
-    let regularization_weights =
-        SVector::<f32, CALIBRATION_PARAMETER_COUNT>::from_row_slice(&[
-            1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0,
-        ]);
+    let regularization_weights = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::from_row_slice(&[
+        1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0,
+    ]);
     let mut gradient = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
     let mut gradient_scale = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
     for features in &radial_features {
