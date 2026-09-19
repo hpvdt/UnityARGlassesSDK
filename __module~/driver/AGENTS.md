@@ -295,8 +295,8 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$\mu$:** Sample mean of the retained magnetometer samples (code field `sample_mean` in
   `mag_model::MagModel`); $3 \times 1$.
 - **$\sigma_g$:** Gravity projection scale: the RMS projection $\sqrt{\frac{1}{n_g} \sum_i (\psi_i^T \theta)^2}$
-  over the gravity-carrying rows of a minibatch or cache scan, frozen per optimizer update and floored at
-  $\epsilon$ (code variable `gravity_scale`); scalar.
+  over the gravity-carrying rows of a minibatch or cache scan, frozen per optimizer update with its square
+  floored at $\epsilon$ (code variable `gravity_scale`); scalar.
 - **$\nabla_\theta$, $\nabla_\kappa$:** Gradients of $J_r + J_g$ with respect to
   $\theta$ ($\nabla_\theta$; $9 \times 1$) and $\kappa$ ($\nabla_\kappa$; scalar).
 - **$\phi(u)$:** Ellipsoid-fit feature vector with cross-term weight $2$; $9 \times 1$.

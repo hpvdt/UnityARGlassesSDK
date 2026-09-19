@@ -59,9 +59,10 @@ impl CalibrationQuality {
     /// mean — gives each factor a veto the objective does not have (at
     /// `w_g = 0.01` a completely broken gravity surrogate costs the
     /// objective about 1%, while geometrically it would zero the fitness).
-    /// The per-factor ramps (and hence the gravity bias floor) stay applied
-    /// per statistic before combination, so the surrogate's known
-    /// anisotropic bias never leaks into the radial assessment. `w = 0` —
+    /// The per-factor ramps (and hence the gravity residual floor) stay
+    /// applied per statistic before combination, so the surrogate's
+    /// transient dip inconsistency while the preconditioner frame converges
+    /// never leaks into the radial assessment. `w = 0` —
     /// gravity disabled, unseeded, or absent from the cache — reduces the
     /// combination to `radial_fitness`, and a gravity-free stream is never
     /// penalized.
