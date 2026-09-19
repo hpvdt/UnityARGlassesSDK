@@ -1,7 +1,7 @@
 use nalgebra::{Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
 
 use super::bad_mag_cause::BadCalibration;
-use super::mag_calibrator::SHAPE_PRIOR_SCALE;
+use super::mag_calibrator::{ONLINE_SCALE_EPSILON, SHAPE_PRIOR_SCALE};
 use super::mag_samples::{MagSamples, Row};
 use super::CalibrationQuality;
 
@@ -25,10 +25,13 @@ const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
 /// outlier weighting — so the old constant does not transfer.
 pub(super) const MAX_RADIAL_RMS: f32 = 0.5;
 /// Gravity-projection RMS residual below which the gravity fitness is 1.
-/// While the preconditioner frame is still converging — and under the
-/// clamp's anisotropy bound — even a perfect fit keeps an irreducible
-/// residual; the floor keeps that transient bias from dragging down a good
-/// calibration.
+/// The residual is relative to the projection scale $\sigma_g$, so the floor
+/// is a dip-inconsistency fraction: at 0.1 the dip projection of the
+/// retained rows may spread by a tenth of its own mean magnitude before the
+/// fitness leaves the plateau. A perfect fit under clean hints keeps a
+/// residual far below this; the floor absorbs the transient spread while the
+/// preconditioner frame is still converging — and under its clamp bound —
+/// so that transient bias never drags down a good calibration.
 const GRAVITY_RMS_FLOOR: f32 = 0.1;
 /// Eigenvalue bounds of the gravity preconditioner `gravity_frame`
 /// ($A_w^{-1}$). While the working correction converges, preconditioning is a
@@ -43,14 +46,13 @@ const MIN_GRAVITY_FRAME_EIGENVALUE: f32 = 0.25;
 /// Upper eigenvalue bound of `gravity_frame`; see `MIN_GRAVITY_FRAME_EIGENVALUE`.
 const MAX_GRAVITY_FRAME_EIGENVALUE: f32 = 4.0;
 /// Gravity-projection RMS residual at which the gravity fitness reaches 0,
-/// ramping linearly down from 1 at `GRAVITY_RMS_FLOOR`. Residuals live in
-/// normalized ellipsoid-equation units; both constants are calibrated
-/// against the synthetic consistent/contradictory gravity test. The
-/// statistic is the mean square over the whole retained cache, whose
-/// steady-state consistent-fit RMS sits above the trailing-window estimate
-/// the original 0.3 ceiling was tuned against, so the ceiling is raised to
-/// 0.35 to keep the same factor for the same physical fit quality
-/// (SimMotion regression-validated).
+/// ramping linearly down from 1 at `GRAVITY_RMS_FLOOR`. The residual is
+/// relative to the projection scale $\sigma_g$ (a dip-inconsistency
+/// fraction), so the constant transfers across devices and field radii; it
+/// is calibrated against the synthetic consistent/contradictory gravity
+/// tests (a fully contradictory hint stream sits near the relative RMS of
+/// 1) and against the Air 1 trace, whose steady accelerometer-hint spread
+/// centers near 0.2.
 const MAX_GRAVITY_RMS: f32 = 0.35;
 /// Uniform-sphere reference for directional coverage: the smallest
 /// eigenvalue of `E[varphi(d) varphi(d)^T]` over uniformly distributed unit
@@ -554,27 +556,37 @@ impl<const N: usize> MagModel<N> {
             return None;
         }
         // Gravity fitness: mean square of the projection residual over the
-        // retained rows that carry a gravity direction. The statistic stays
-        // absent (neutral 1 below) when gravity is disabled, the projection
-        // is not yet seeded, or no retained row carries gravity.
+        // retained rows that carry a gravity direction, normalized by the
+        // projection scale $\sigma_g$ (RMS projection over the same rows),
+        // exactly as in the online objective: the relative dip-residual is
+        // device-independent, while the raw residual scales with the field
+        // radius $r$. The statistic stays absent (neutral 1 below) when
+        // gravity is disabled, the projection is not yet seeded, or no
+        // retained row carries gravity.
         let mut gravity_square_sum = 0.0f32;
+        let mut gravity_scale_square_sum = 0.0f32;
         let mut gravity_count = 0usize;
         let gravity_mean_square = match self.learned_gravity_projection {
             Some(kappa) if self.gravity_weight > 0.0 => {
                 for row in 0..self.sample_row_count {
                     let row = self.samples.view(row);
                     if let Some(gravity) = row.gravity() {
-                        let residual = Self::gravity_features(
+                        let projection = Self::gravity_features(
                             self.normalized_sample(row.sample()),
                             self.preconditioned_gravity(gravity),
                         )
-                        .dot(&self.parameters)
-                            - kappa;
+                        .dot(&self.parameters);
+                        let residual = projection - kappa;
                         gravity_square_sum += residual * residual;
+                        gravity_scale_square_sum += projection * projection;
                         gravity_count += 1;
                     }
                 }
-                (gravity_count > 0).then_some(gravity_square_sum / gravity_count as f32)
+                (gravity_count > 0).then(|| {
+                    let scale_squared = (gravity_scale_square_sum / gravity_count as f32)
+                        .max(ONLINE_SCALE_EPSILON);
+                    gravity_square_sum / gravity_count as f32 / scale_squared
+                })
             }
             _ => None,
         };

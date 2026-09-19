@@ -27,20 +27,18 @@ const PUBLICATION_STREAK_RESET_CONFIDENCE: f32 = 0.01;
 /// is about 1.1 s of sustained quality at the 50 Hz magnetometer rate.
 pub(super) const MIN_PUBLICATION_STREAK: usize = 55;
 const MIN_MAG_NORM: f32 = 0.4;
-/// Default gravity-surrogate weight: disabled. The ellipsoid-normal gravity
-/// surrogate pins `g_i^T A m_i` (with `A` the soft-iron correction)
-/// approximately constant instead of the exact magnetic dip `g_i^T m_i`; the
-/// two coincide only for isotropic soft iron, so anisotropic soft iron biases
-/// the fit toward isotropy. Validation sweeps beyond the fixed simulator
-/// distortion — condition numbers up to 8, rotated eigenvectors, inconsistent
-/// acceleration, and dip angles from 12 to 83 degrees — found a repeatable
-/// accuracy regression under rotated-eigenvector soft iron at every tested
-/// nonzero weight (already +0.3 aggregate probe error at weight 0.003,
-/// growing with the weight), while the fixed-seed SimMotion benchmark at
-/// weight 0.01 differed from the disabled baseline by under 0.04 degree.
-/// Lowering the default therefore cannot remove the regression, so the
-/// surrogate ships disabled; [`MagCalibrator::gravity_weight`] opts back in.
-const DEFAULT_GRAVITY_WEIGHT: f32 = 0.0;
+/// Default gravity-surrogate weight. With the preconditioned surrogate, the
+/// projection target converges to the exact magnetic dip
+/// `g_i^T m_i` (see `MagModel::gravity_frame`), so a retained gravity
+/// direction should always inform the fit: the rotated-eigenvector
+/// anisotropy sweep that regressed under the unpreconditioned surrogate now
+/// improves in every case
+/// (`mag_calibrator_gravity_surrogate_survives_strong_anisotropy`), and the
+/// fixed-seed SimMotion benchmark at this weight matched the old disabled
+/// baseline to within 0.04 degree. `0.01` keeps the gravity term a small
+/// correction on the radial objective; [`MagCalibrator::gravity_weight`]
+/// with `0` opts out.
+const DEFAULT_GRAVITY_WEIGHT: f32 = 0.01;
 const DEFAULT_MINIBATCH_SIZE: usize = 32;
 /// Cache-only replay updates run per valid sample while the calibration is
 /// still unpublished. They let the cold-start optimizer take several gradient
@@ -62,7 +60,9 @@ const ONLINE_INITIAL_LEARNING_RATE: f32 = 0.5;
 const ONLINE_LEARNING_RATE_DECAY_STEPS: f32 = 128.0;
 const ONLINE_MIN_LEARNING_RATE: f32 = 0.01;
 const ONLINE_MAX_STEP_NORM: f32 = 0.5;
-const ONLINE_SCALE_EPSILON: f32 = 1.0e-4;
+/// Numerical floor of the optimizer feature-energy scales, also reused as
+/// the floor of the gravity projection scale $\sigma_g$.
+pub(super) const ONLINE_SCALE_EPSILON: f32 = 1.0e-4;
 const ONLINE_BACKTRACK_STEPS: usize = 12;
 const ONLINE_PRNG_SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 /// Number of neighbor entries cached per buffered sample row: the `k` nearest
@@ -231,10 +231,11 @@ impl<const N: usize> MagCalibrator<N> {
     }
 
     /// Configure the relative weight of the gravity-consistency residual.
-    /// The default is 0: the ellipsoid-normal gravity surrogate is disabled
-    /// because its anisotropic soft-iron bias regresses accuracy under
-    /// rotated-eigenvector distortion (see `DEFAULT_GRAVITY_WEIGHT`). A
-    /// positive weight opts back in.
+    /// The default is `DEFAULT_GRAVITY_WEIGHT` (0.01): with the
+    /// preconditioned surrogate the projection target converges to the exact
+    /// magnetic dip, so a retained gravity direction always informs the fit.
+    /// Pass `0` to opt out, reducing the objective and the live fitness to
+    /// the purely radial terms even when rows carry gravity.
     pub fn gravity_weight(self, gravity_weight: f32) -> Self {
         Self {
             model: MagModel {
@@ -370,10 +371,16 @@ impl<const N: usize> MagCalibrator<N> {
         )
     }
 
+    /// Minibatch objective with the gravity residual expressed relative to
+    /// `gravity_scale`: $e_{g,i} = (\psi_i^T \theta - \kappa) / \sigma_g$.
+    /// The scale is frozen for the duration of one optimizer update (it is
+    /// computed from the pre-update parameters), so the evaluated objective
+    /// stays a convex quadratic in $(\theta, \kappa)$.
     fn minibatch_objective(
         &self,
         parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
         kappa: f32,
+        gravity_scale: f32,
         minibatch: MinibatchSpec,
     ) -> f32 {
         let (features, gravity_features, _) = self.minibatch_feature_matrices(minibatch);
@@ -381,8 +388,9 @@ impl<const N: usize> MagCalibrator<N> {
         let mut objective = 0.5 * residuals.norm_squared() / features.nrows() as f32
             + Self::regularization_loss(parameters);
         if gravity_features.nrows() > 0 {
-            let residuals = &gravity_features * parameters
-                - DVector::from_element(gravity_features.nrows(), kappa);
+            let residuals = (&gravity_features * parameters
+                - DVector::from_element(gravity_features.nrows(), kappa))
+                / gravity_scale;
             objective += 0.5 * self.model.gravity_weight * residuals.norm_squared()
                 / gravity_features.nrows() as f32;
         }
@@ -469,17 +477,33 @@ impl<const N: usize> MagCalibrator<N> {
             Self::parameter_vector(features.map(|value| value * value).row_sum_tr())
                 / features.nrows() as f32;
         let mut kappa_gradient = 0.0;
+        // Projection scale $\sigma_g$ of the gravity residual: the RMS
+        // projection $\psi^T \theta$ over this minibatch, floored for
+        // numerical safety and frozen for the whole update. Normalizing the
+        // residual by $\sigma_g$ makes the data term measure the magnetic
+        // dip's relative consistency instead of absolute equation units that
+        // scale with the raw field radius: without it the gravity term's
+        // effective pull and its fitness ramp would drift with the device
+        // calibration state (the hint-noise residual of a real trace scales
+        // with the sample radius $r$).
+        let mut gravity_scale = 1.0;
         if gravity_features.nrows() > 0 {
+            let projections = &gravity_features * &parameters;
+            gravity_scale = (projections.norm_squared() / gravity_features.nrows() as f32)
+                .max(ONLINE_SCALE_EPSILON)
+                .sqrt();
+            let gravity_scale_squared = gravity_scale * gravity_scale;
             let residuals = &gravity_features * parameters
                 - DVector::from_element(gravity_features.nrows(), kappa);
             gradient += self.model.gravity_weight
                 * Self::parameter_vector(gravity_features.tr_mul(&residuals))
-                / gravity_features.nrows() as f32;
+                / (gravity_features.nrows() as f32 * gravity_scale_squared);
             gradient_scale += self.model.gravity_weight
                 * Self::parameter_vector(gravity_features.map(|value| value * value).row_sum_tr())
-                / gravity_features.nrows() as f32;
-            kappa_gradient =
-                -residuals.sum() * (self.model.gravity_weight / gravity_features.nrows() as f32);
+                / (gravity_features.nrows() as f32 * gravity_scale_squared);
+            kappa_gradient = -residuals.sum()
+                * (self.model.gravity_weight
+                    / (gravity_features.nrows() as f32 * gravity_scale_squared));
         }
 
         let prior = MagModel::<N>::parameter_prior();
@@ -493,7 +517,11 @@ impl<const N: usize> MagCalibrator<N> {
         gradient_scale.add_scalar_mut(ONLINE_SCALE_EPSILON);
         let descent_direction = gradient.component_div(&gradient_scale);
         let kappa_step = if gravity_features.nrows() > 0 && self.model.gravity_weight > 0.0 {
-            kappa_gradient / (self.model.gravity_weight + ONLINE_SCALE_EPSILON)
+            // Curvature of the normalized gravity term in $\kappa$:
+            // $w_g / \sigma_g^2$.
+            kappa_gradient
+                / (self.model.gravity_weight / (gravity_scale * gravity_scale)
+                    + ONLINE_SCALE_EPSILON)
         } else {
             0.0
         };
@@ -503,7 +531,8 @@ impl<const N: usize> MagCalibrator<N> {
             return false;
         }
 
-        let old_objective = self.minibatch_objective(&parameters, kappa, minibatch);
+        let old_objective =
+            self.minibatch_objective(&parameters, kappa, gravity_scale, minibatch);
         let learning_rate = (ONLINE_INITIAL_LEARNING_RATE
             / (1.0 + self.optimizer_steps as f32 / ONLINE_LEARNING_RATE_DECAY_STEPS))
             .max(ONLINE_MIN_LEARNING_RATE);
@@ -511,7 +540,8 @@ impl<const N: usize> MagCalibrator<N> {
         for _ in 0..ONLINE_BACKTRACK_STEPS {
             let trial_parameters = parameters - step_size * descent_direction;
             let trial_kappa = kappa - step_size * kappa_step;
-            let objective = self.minibatch_objective(&trial_parameters, trial_kappa, minibatch);
+            let objective =
+                self.minibatch_objective(&trial_parameters, trial_kappa, gravity_scale, minibatch);
             if trial_parameters.iter().all(|value| value.is_finite())
                 && trial_kappa.is_finite()
                 && objective.is_finite()

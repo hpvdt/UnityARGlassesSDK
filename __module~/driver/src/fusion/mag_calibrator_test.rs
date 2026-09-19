@@ -1,10 +1,11 @@
-use nalgebra::{Matrix3, UnitQuaternion, Vector3};
+use nalgebra::{Matrix3, SVector, UnitQuaternion, Vector3};
 
-use super::super::mag_model::{CoverageGramMatrix, MagModel};
+use super::super::mag_model::{CoverageGramMatrix, MagModel, CALIBRATION_PARAMETER_COUNT};
 use super::super::mag_samples::Row;
 use super::super::BadMagCause;
 use super::{
-    MagCalibrationResult, MagCalibrator, MIN_PUBLICATION_CONFIDENCE, MIN_PUBLICATION_STREAK,
+    MagCalibrationResult, MagCalibrator, MinibatchSpec, MIN_PUBLICATION_CONFIDENCE,
+    MIN_PUBLICATION_STREAK, ONLINE_SCALE_EPSILON, SHAPE_REGULARIZATION,
 };
 
 impl<const N: usize> MagCalibrator<N> {
@@ -32,28 +33,34 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Independently recomputes the gravity mean square of the current
     /// working parameters over the retained rows carrying a gravity
-    /// direction, mirroring the gating in `update_quality`.
+    /// direction, mirroring the gating and the projection-scale
+    /// normalization of `update_quality`.
     fn gravity_mean_square_for_test(&self) -> Option<f32> {
         let kappa = self.model.learned_gravity_projection?;
         if self.model.gravity_weight <= 0.0 {
             return None;
         }
         let mut sum = 0.0f32;
+        let mut projection_square_sum = 0.0f32;
         let mut count = 0usize;
         for row in 0..self.model.sample_row_count {
             let row = self.model.samples.view(row);
             if let Some(gravity) = row.gravity() {
-                let residual = MagModel::<N>::gravity_features(
+                let projection = MagModel::<N>::gravity_features(
                     self.model.normalized_sample(row.sample()),
                     self.model.preconditioned_gravity(gravity),
                 )
-                .dot(&self.model.parameters)
-                    - kappa;
+                .dot(&self.model.parameters);
+                let residual = projection - kappa;
                 sum += residual * residual;
+                projection_square_sum += projection * projection;
                 count += 1;
             }
         }
-        (count > 0).then_some(sum / count as f32)
+        (count > 0).then(|| {
+            let scale_squared = (projection_square_sum / count as f32).max(ONLINE_SCALE_EPSILON);
+            sum / count as f32 / scale_squared
+        })
     }
 
     fn working_quality_components(&self) -> (bool, f32, f32, f32) {
@@ -445,12 +452,10 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
 
     // Calibrator A ingests an early batch whose older rows then expire
     // (lifespan 100 us, final batch timestamp 153 keeps exactly the rows
-    // with timestamp >= 53), followed by a fresh batch. The surrogate is
-    // disabled by default; both calibrators opt in explicitly so the
-    // gravity-projection statistic stays live.
-    let mut lifespan_a = MagCalibrator::<63>::new()
-        .max_sample_lifespan_us(100)
-        .gravity_weight(0.01);
+    // with timestamp >= 53), followed by a fresh batch. Both calibrators
+    // use the default weight, so the gravity-projection statistic stays
+    // live.
+    let mut lifespan_a = MagCalibrator::<63>::new().max_sample_lifespan_us(100);
     for timestamp_us in 50..=59 {
         let index = timestamp_us as usize - 50;
         lifespan_a.evaluate_sample_vec(sample(index), Some(gravity(index)), timestamp_us);
@@ -464,9 +469,7 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
     // order. Its optimizer history differs from A's (B never saw the
     // expired prefix), which is the non-strict-by-design part; only the
     // caches and the cache-derived fitness semantics are pinned here.
-    let mut survivors_only = MagCalibrator::<63>::new()
-        .max_sample_lifespan_us(100)
-        .gravity_weight(0.01);
+    let mut survivors_only = MagCalibrator::<63>::new().max_sample_lifespan_us(100);
     for timestamp_us in 53..=59 {
         let index = timestamp_us as usize - 50;
         survivors_only.evaluate_sample_vec(sample(index), Some(gravity(index)), timestamp_us);
@@ -745,8 +748,8 @@ fn mag_calibrator_improves_with_consistent_gravity() {
     let world_mag = Vector3::new(0.8, 0.1, 0.5).normalize();
     let world_gravity = Vector3::z();
     let mut plain = MagCalibrator::<63>::new();
-    // The surrogate is disabled by default; opt in explicitly to exercise it.
-    let mut gravity_refined = MagCalibrator::<63>::new().gravity_weight(0.01);
+    // The default weight keeps the gravity surrogate active.
+    let mut gravity_refined = MagCalibrator::<63>::new();
 
     for i in 0..63 {
         let attitude = UnitQuaternion::from_euler_angles(
@@ -837,10 +840,9 @@ fn mag_calibrator_gravity_surrogate_survives_strong_anisotropy() {
     for distortion in distortions {
         for (world_mag, world_gravity) in dip_cases {
             let mut plain = MagCalibrator::<63>::new();
-            // The surrogate is disabled by default; this sweep opts into the
-            // highest weight whose SimMotion benchmark matched the disabled
-            // baseline, to keep characterizing its anisotropy bias.
-            let mut gravity_refined = MagCalibrator::<63>::new().gravity_weight(0.01);
+            // The default weight keeps the surrogate active; this sweep
+            // characterizes its convergence under anisotropy.
+            let mut gravity_refined = MagCalibrator::<63>::new();
             for i in 0..16 * 63 {
                 let j = i % 63;
                 let attitude = UnitQuaternion::from_euler_angles(
@@ -873,8 +875,17 @@ fn mag_calibrator_gravity_surrogate_survives_strong_anisotropy() {
                     })
                     .sum::<f32>()
             };
-            plain_total += error_of(&plain);
-            refined_total += error_of(&gravity_refined);
+            let plain_error = error_of(&plain);
+            let refined_error = error_of(&gravity_refined);
+            // The preconditioned surrogate converges to the exact dip, so
+            // every anisotropy/dip case improves individually, not just on
+            // aggregate.
+            assert!(
+                refined_error < plain_error,
+                "case regressed: plain={plain_error} refined={refined_error}"
+            );
+            plain_total += plain_error;
+            refined_total += refined_error;
         }
     }
 
@@ -895,16 +906,23 @@ fn mag_calibrator_gravity_surrogate_survives_strong_anisotropy() {
 }
 
 #[test]
-fn mag_calibrator_disables_gravity_surrogate_by_default() {
-    // The validation sweep behind `DEFAULT_GRAVITY_WEIGHT` found a
-    // repeatable rotated-eigenvector regression at every tested nonzero
-    // weight, so the surrogate ships disabled: a default calibrator fed
-    // valid gravity hints must stay bit-identical to one fed none.
+fn mag_calibrator_uses_gravity_by_default() {
+    // With the preconditioned surrogate, gravity hints inform the fit at the
+    // default weight: a default calibrator fed consistent gravity must keep
+    // a live gravity statistic and converge differently from a hint-free
+    // one. An explicit gravity_weight(0) must however restore the old
+    // disabled behavior exactly: the valid hints then change nothing, not
+    // even a cached-row side effect.
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    // Co-rotating world directions keep the dip angle constant, so the hint
+    // stream is physically consistent with the magnetic samples.
+    let world_mag = Vector3::new(0.8, 0.1, 0.5).normalize();
     let world_gravity = Vector3::z();
     let mut plain = MagCalibrator::<63>::new();
     let mut hinted = MagCalibrator::<63>::new();
+    let mut opted_out = MagCalibrator::<63>::new().gravity_weight(0.0);
+    let mut hinted_result = None;
     for i in 0..17 * 63 {
         let j = i % 63;
         let attitude = UnitQuaternion::from_euler_angles(
@@ -913,12 +931,230 @@ fn mag_calibrator_disables_gravity_surrogate_by_default() {
             j as f32 * 2.4,
         );
         let body_gravity = attitude.inverse() * world_gravity;
-        let raw = offset + distortion * sample_direction(j, 63);
+        let raw = offset + distortion * (attitude.inverse() * world_mag);
         assert_eq!(
             plain.evaluate_correct(raw, None, i as u64),
-            hinted.evaluate_correct(raw, Some(body_gravity), i as u64)
+            opted_out.evaluate_correct(raw, Some(body_gravity), i as u64)
         );
+        hinted_result = Some(hinted.evaluate_correct(raw, Some(body_gravity), i as u64));
     }
+    let hinted_result = hinted_result.unwrap().unwrap();
+    // The gravity statistic is live and, with a consistent hint stream, sits
+    // on its fitness plateau; it also shifts the working fit, so the hinted
+    // run cannot remain bit-identical to the hint-free one.
+    assert_eq!(hinted_result.gravity_term_weight, 0.01);
+    assert_eq!(hinted_result.gravity_fitness, 1.0);
+    assert!(
+        hinted.model.parameters != plain.model.parameters,
+        "default gravity surrogate left the fit untouched"
+    );
+
+    // The statistic stays neutral when no valid gravity direction exists:
+    // a hinted-but-disabled calibrator has no seed and no residual scan.
+    assert_eq!(opted_out.model.learned_gravity_projection, None);
+    let opted_out_result = opted_out
+        .evaluate_correct(offset + distortion * sample_direction(0, 63), None, 17 * 63)
+        .unwrap();
+    assert_eq!(opted_out_result.gravity_term_weight, 0.0);
+}
+
+/// One independently rederived online update against production: both the
+/// sample-anchored and the cache-replay form. The test duplicates the draw
+/// sequence, the feature construction, the gradient accumulation, and the
+/// diagonal scaling from the documented formulas, then asserts that the
+/// production update moves the working state along the negative normalized
+/// subgradient of exactly that minibatch and strictly lowers its objective.
+/// With a live projection every draw carries gravity, so the drawn gravity
+/// subset equals the whole minibatch and both gradient terms are exercised.
+#[track_caller]
+fn check_minibatch_update_against_analytic_subgradient(
+    calibrator: &mut MagCalibrator<63>,
+    current: Option<(Vector3<f32>, Vector3<f32>)>,
+    random_draws: usize,
+) {
+    let parameters = calibrator.model.parameters;
+    let kappa = calibrator
+        .model
+        .learned_gravity_projection
+        .expect("gravity projection must be seeded");
+    let weight = calibrator.model.gravity_weight;
+    let spec = MinibatchSpec {
+        current_sample: current.map(|(sample, _)| sample),
+        current_gravity: current.map(|(_, gravity)| gravity),
+        accepted_row: None,
+        random_draws,
+        random_state: calibrator.prng_state,
+    };
+
+    // Duplicate the draw sequence and feature construction of
+    // `minibatch_feature_matrices`. The frame and normalization are frozen
+    // for the whole update, so the cached rows are read once up front.
+    let mut random_state = spec.random_state;
+    let mut observations: Vec<(Vector3<f32>, Option<Vector3<f32>>)> = current
+        .map(|(sample, gravity)| (sample, Some(gravity)))
+        .into_iter()
+        .collect();
+    for _ in 0..random_draws {
+        let row = MagCalibrator::<63>::random_cache_row(
+            &mut random_state,
+            calibrator.model.sample_row_count,
+            None,
+        )
+        .expect("retained cache is empty");
+        let row = calibrator.model.samples.view(row);
+        observations.push((row.sample(), row.gravity()));
+    }
+    let radial_features: Vec<_> = observations
+        .iter()
+        .map(|&(sample, _)| {
+            MagModel::<63>::features(calibrator.model.normalized_sample(sample))
+        })
+        .collect();
+    let gravity_features: Vec<_> = observations
+        .iter()
+        .filter_map(|&(sample, gravity)| {
+            gravity.map(|gravity| {
+                MagModel::<63>::gravity_features(
+                    calibrator.model.normalized_sample(sample),
+                    calibrator.model.preconditioned_gravity(gravity),
+                )
+            })
+        })
+        .collect();
+    assert_eq!(
+        gravity_features.len(),
+        observations.len(),
+        "every warmup row carries gravity, so the gravity subset is the whole minibatch"
+    );
+    let observation_count = observations.len() as f32;
+    let gravity_count = gravity_features.len() as f32;
+
+    // Analytic gradient and diagonal scales of the documented objective.
+    // The gravity projection scale is frozen from the pre-update parameters,
+    // exactly as production freezes it for the whole update.
+    let projections: Vec<f32> = gravity_features
+        .iter()
+        .map(|features| features.dot(&parameters))
+        .collect();
+    let gravity_scale = (projections.iter().map(|p| p * p).sum::<f32>() / gravity_count)
+        .max(ONLINE_SCALE_EPSILON)
+        .sqrt();
+    let gravity_scale_squared = gravity_scale * gravity_scale;
+    let prior = MagModel::<63>::parameter_prior();
+    let regularization_weights =
+        SVector::<f32, CALIBRATION_PARAMETER_COUNT>::from_row_slice(&[
+            1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0,
+        ]);
+    let mut gradient = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
+    let mut gradient_scale = SVector::<f32, CALIBRATION_PARAMETER_COUNT>::zeros();
+    for features in &radial_features {
+        gradient += features * (features.dot(&parameters) - 1.0);
+        gradient_scale += features.component_mul(features);
+    }
+    gradient /= observation_count;
+    gradient_scale /= observation_count;
+    let mut kappa_gradient = 0.0f32;
+    for features in &gravity_features {
+        let residual = features.dot(&parameters) - kappa;
+        gradient += weight / gravity_scale_squared / gravity_count * features * residual;
+        gradient_scale +=
+            weight / gravity_scale_squared / gravity_count * features.component_mul(features);
+        kappa_gradient -= residual;
+    }
+    kappa_gradient *= weight / gravity_scale_squared / gravity_count;
+    gradient += SHAPE_REGULARIZATION * regularization_weights.component_mul(&(parameters - prior));
+    gradient_scale += SHAPE_REGULARIZATION * regularization_weights;
+    gradient_scale.add_scalar_mut(ONLINE_SCALE_EPSILON);
+    let descent = gradient.component_div(&gradient_scale);
+    let kappa_step = kappa_gradient / (weight / gravity_scale_squared + ONLINE_SCALE_EPSILON);
+
+    // The same minibatch objective as production, for the decrease check:
+    // the gravity residual is relative to the frozen projection scale.
+    let objective = |parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>, kappa: f32| {
+        let radial: f32 = radial_features
+            .iter()
+            .map(|features| {
+                let residual = features.dot(parameters) - 1.0;
+                residual * residual
+            })
+            .sum();
+        let gravity: f32 = gravity_features
+            .iter()
+            .map(|features| {
+                let residual = (features.dot(parameters) - kappa) / gravity_scale;
+                residual * residual
+            })
+            .sum();
+        0.5 * radial / observation_count
+            + 0.5 * weight * gravity / gravity_count
+            + 0.5
+                * SHAPE_REGULARIZATION
+                * regularization_weights
+                    .component_mul(&(parameters - prior))
+                    .dot(&(parameters - prior))
+    };
+    let objective_before = objective(&parameters, kappa);
+
+    assert!(
+        calibrator.apply_minibatch_update(spec),
+        "a gravity-carrying minibatch with a live gradient was rejected"
+    );
+    let delta_theta = calibrator.model.parameters - parameters;
+    let delta_kappa = calibrator.model.learned_gravity_projection.unwrap() - kappa;
+
+    // The accepted step must be exactly anti-parallel to the normalized
+    // subgradient: any wrongly sampled row, feature, weighting, or sign in
+    // the production gradient rotates the accepted direction.
+    let moved = (delta_theta.norm_squared() + delta_kappa * delta_kappa).sqrt();
+    let expected_norm = (descent.norm_squared() + kappa_step * kappa_step).sqrt();
+    assert!(moved > 0.0 && expected_norm > 0.0);
+    let alignment =
+        -(delta_theta.dot(&descent) + delta_kappa * kappa_step) / (moved * expected_norm);
+    assert!(
+        (alignment - 1.0).abs() < 1.0e-4,
+        "accepted step deviates from the analytic subgradient: alignment={alignment}"
+    );
+
+    let objective_after = objective(&calibrator.model.parameters, kappa + delta_kappa);
+    assert!(
+        objective_after < objective_before,
+        "accepted step did not lower the minibatch objective: \
+         before={objective_before} after={objective_after}"
+    );
+}
+
+#[test]
+fn mag_calibrator_gravity_subgradient_matches_online_update() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+    let world_mag = Vector3::new(0.8, 0.1, 0.5).normalize();
+    let world_gravity = Vector3::z();
+    // Replay disabled so the warmup performs exactly one optimizer update
+    // per sample and this test observes isolated later updates.
+    let mut calibrator = MagCalibrator::<63>::new().replay_updates(0);
+    for i in 0..63 {
+        let attitude = UnitQuaternion::from_euler_angles(
+            0.25 * (i as f32 * 0.7).sin(),
+            0.35 * (i as f32 * 1.7).sin(),
+            i as f32 * 2.4,
+        );
+        let raw = offset + distortion * (attitude.inverse() * world_mag);
+        let body_gravity = attitude.inverse() * world_gravity;
+        calibrator.evaluate_sample_vec(raw, Some(body_gravity), i as u64);
+    }
+    assert!(calibrator.model.learned_gravity_projection.is_some());
+
+    // Sample-anchored update: the arriving observation plus gravity-carrying
+    // cache draws.
+    let next_sample = offset + distortion * sample_direction(7, 63);
+    let next_gravity = Vector3::z();
+    check_minibatch_update_against_analytic_subgradient(
+        &mut calibrator,
+        Some((next_sample, next_gravity)),
+        31,
+    );
+    // Cache-replay update: no anchoring observation, retained rows only.
+    check_minibatch_update_against_analytic_subgradient(&mut calibrator, None, 8);
 }
 
 #[test]
@@ -926,9 +1162,9 @@ fn mag_calibrator_ignores_invalid_gravity() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let mut plain = MagCalibrator::<12>::new();
-    // The surrogate is disabled by default; opt in explicitly so the test
-    // keeps exercising invalid-gravity filtering with an active gravity term.
-    let mut invalid = MagCalibrator::<12>::new().gravity_weight(0.01);
+    // The default weight keeps the gravity term active, so this exercises
+    // invalid-gravity filtering with a live surrogate.
+    let mut invalid = MagCalibrator::<12>::new();
     for i in 0..12 {
         let raw = offset + distortion * sample_direction(i, 12);
         let _ = plain.evaluate_correct(raw, None, i as u64);
@@ -1146,9 +1382,9 @@ fn mag_calibrator_reports_confidence_factors() {
     // stays large, and the factor drops.
     let world_mag = Vector3::new(0.8, 0.1, 0.5).normalize();
     let world_gravity = Vector3::z();
-    // The surrogate is disabled by default; opt in explicitly to exercise it.
-    let mut refined = MagCalibrator::<63>::new().gravity_weight(0.01);
-    let mut opposed = MagCalibrator::<63>::new().gravity_weight(0.01);
+    // The default weight keeps the surrogate active in both calibrators.
+    let mut refined = MagCalibrator::<63>::new();
+    let mut opposed = MagCalibrator::<63>::new();
     let mut refined_result = None;
     let mut opposed_result = None;
     for i in 0..16 * 63 {

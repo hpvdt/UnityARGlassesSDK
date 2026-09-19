@@ -379,8 +379,12 @@ impl Fusion for NaiveCF {
                 magnetometer,
                 timestamp,
             } => {
-                self.integrate_mag(&magnetometer, false, false, timestamp);
-                // self.integrate_mag(&magnetometer, true, true, timestamp); TODO: use this
+                // The calibrator's preconditioned gravity surrogate converges
+                // to the exact magnetic dip, so the ACC-derived gravity hint
+                // always informs calibration; horizontal-only heading
+                // correction stays parked pending validation.
+                // TODO: evaluate self.integrate_mag(&magnetometer, true, true, timestamp)
+                self.integrate_mag(&magnetometer, true, false, timestamp);
                 self.renormalize();
             }
             _ => {
