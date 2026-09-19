@@ -531,8 +531,7 @@ impl<const N: usize> MagCalibrator<N> {
             return false;
         }
 
-        let old_objective =
-            self.minibatch_objective(&parameters, kappa, gravity_scale, minibatch);
+        let old_objective = self.minibatch_objective(&parameters, kappa, gravity_scale, minibatch);
         let learning_rate = (ONLINE_INITIAL_LEARNING_RATE
             / (1.0 + self.optimizer_steps as f32 / ONLINE_LEARNING_RATE_DECAY_STEPS))
             .max(ONLINE_MIN_LEARNING_RATE);
