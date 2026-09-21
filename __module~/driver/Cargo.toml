@@ -55,4 +55,5 @@ test-case = "3"
 #opencv = { version = "0.89.0", default-features = false, features = ["highgui", "imgproc", "calib3d"] }
 
 [lib]
+path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]

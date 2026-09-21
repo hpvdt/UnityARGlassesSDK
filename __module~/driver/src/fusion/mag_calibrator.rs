@@ -184,8 +184,8 @@ impl<const N: usize> Default for MagCalibrator<N> {
             publication_quality_streak: 0,
             model: MagModel {
                 samples: MagSamples::default(),
-                sample_row_count: Default::default(),
                 parameters: MagModel::<N>::parameter_prior(),
+                sample_row_count: Default::default(),
                 raw_sample_sum: Vector3::zeros(),
                 raw_outer_product_sum: Matrix3::zeros(),
                 sample_mean: Vector3::zeros(),

@@ -82,8 +82,11 @@ pub(super) struct MagModel<const N: usize> {
     /// Retained magnetometer sample cache: the raw samples and the optional
     /// gravity direction carried by each row.
     pub(super) samples: MagSamples<N>,
-    pub(super) sample_row_count: usize,
     pub(super) parameters: SVector<f32, CALIBRATION_PARAMETER_COUNT>,
+    /// Number of retained cache rows `0..sample_row_count`: the zeroth raw
+    /// moment the first and second moments below are averaged over,
+    /// maintained on append, replacement, and expiry alongside them.
+    pub(super) sample_row_count: usize,
     /// Raw first moment of the retained magnetometer samples, maintained
     /// incrementally on append, replacement, and expiry. Backs
     /// `raw_mean_and_covariance` and thus `refresh_normalization`.
@@ -116,7 +119,9 @@ pub(super) struct MagModel<const N: usize> {
     /// to the exact magnetic dip $\gamma r\, g_i^T m_i$ once the working
     /// correction $A_w$ matches the true $A$. Identity until the first valid
     /// working candidate refreshes it; refreshed by [`MagModel::update_quality`].
+    // TODO: why is gravity_frame required? The optimisation objective is to minimise the divergence of magnetic dip (projection of corrected magnetic vector on the direction of gravity) and learned_gravity_projection, it doesn't even use gravity_frame
     pub(super) gravity_frame: Matrix3<f32>,
+    // TODO: duplicate: gravity_weight should always be identical to CalibrationQuality.gravity_term_weight, this is a major vulnerability that may cause divergence between quality estimation and optimisation
     pub(super) gravity_weight: f32,
     /// Live calibration quality factors of the current working candidate,
     /// reset together with the model minimum and recomputed by
