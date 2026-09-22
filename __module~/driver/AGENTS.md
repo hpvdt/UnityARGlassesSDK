@@ -341,4 +341,4 @@ alphabets (e.g. `\mu` in LaTeX math and `mu` in code should always refer to the 
     - recommended fix (if applicable).
   - **Unit test:** Path of the failing unit test(s) that reveals the issue, e.g. `src/path/to/file.rs (issue_summary)`.
     - issue should always come with one or more unit tests
-- Keep items that are checked (`[x]`) only when the fix has already been merged; remove them on cleanup passes.
+- Check (`[x]`) the item only when the fix has already been merged; don't remove any of them.
