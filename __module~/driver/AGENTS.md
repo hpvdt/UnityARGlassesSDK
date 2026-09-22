@@ -280,6 +280,18 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$R$:** Diagonal feature-space regularization weights $\operatorname{diag}(1, 1, 1, 2, 2, 2, 0, 0, 0)$; $9 \times 9$.
 - **$r$:** RMS radius of the retained magnetometer samples (code field `sample_rms_radius` in
   `mag_model::MagModel`).
+- **$\mathrm{ratio}$:** Blend ratio of the naive complementary filter,
+  $S = \mathrm{ratio}\, (S^{-} + d\tilde{S}_1\, dt_1) + (1 - \mathrm{ratio})\, \tilde{S}_2$; the state-sensor
+  correction weight $1 - \mathrm{ratio}$ appears in code as `BASE_GRAV_RATIO`, `BASE_MAG_RATIO`, and the `scale`
+  parameter of `NaiveCF::get_correction`.
+- **$S$:** Current estimated attitude state (unit quaternion) of the naive complementary filter (code field
+  `FusionState::attitude`).
+- **$S^{-}$:** Previous estimated attitude state of the naive complementary filter.
+- **$\tilde{S}_2$:** Low-frequency state-sensor reading (accelerometer gravity or magnetometer) correcting the
+  complementary filter.
+- **$d\tilde{S}_1$:** High-frequency rate-sensor reading (gyroscope), the dead-reckoning increment rate of the
+  complementary filter (code variable `d_s1_t1` holds the increment $d\tilde{S}_1\, dt_1$).
+- **$dt_1$:** Time elapsed since the last rate-sensor sample (code variable `d_t1`).
 - **$s_i$:** Gravity normal projection, $s_i = \tilde{g}_i^T n_i$.
 - **$s_{\theta,j}$, $s_\kappa$:** Diagonal feature-energy scales normalizing the optimizer descent step,
   $s_{\theta,j} = \frac{1}{|B|} \sum_{i \in B} \phi_{i,j}^2 + \frac{w_g}{\sigma_g^2 |G|} \sum_{i \in G}
@@ -290,18 +302,6 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
   basis vectors, giving $D = V V^T$; $3 \times 3$.
 - **$w_g$:** Gravity term weight (`gravity_weight`).
 - **$x_i$:** Raw retained magnetometer sample vector; $3 \times 1$.
-- **$S$:** Current estimated attitude state (unit quaternion) of the naive complementary filter (code field
-  `FusionState::attitude`).
-- **$S^{-}$:** Previous estimated attitude state of the naive complementary filter.
-- **$\tilde{S}_2$:** Low-frequency state-sensor reading (accelerometer gravity or magnetometer) correcting the
-  complementary filter.
-- **$d\tilde{S}_1$:** High-frequency rate-sensor reading (gyroscope), the dead-reckoning increment rate of the
-  complementary filter (code variable `d_s1_t1` holds the increment $d\tilde{S}_1\, dt_1$).
-- **$dt_1$:** Time elapsed since the last rate-sensor sample (code variable `d_t1`).
-- **$\mathrm{ratio}$:** Blend ratio of the naive complementary filter,
-  $S = \mathrm{ratio}\, (S^{-} + d\tilde{S}_1\, dt_1) + (1 - \mathrm{ratio})\, \tilde{S}_2$; the state-sensor
-  correction weight $1 - \mathrm{ratio}$ appears in code as `BASE_GRAV_RATIO`, `BASE_MAG_RATIO`, and the `scale`
-  parameter of `NaiveCF::get_correction`.
 - **$\gamma$:** Ellipsoid normalization scale, $\gamma = 1 + d^T Q d$.
 - **$\epsilon$:** Numerical floor of the optimizer feature-energy scales.
 - **$\theta$:** Packed online coefficients $[Q_{00}, Q_{11}, Q_{22}, Q_{01}, Q_{02}, Q_{12}, q_0, q_1, q_2]$ (code

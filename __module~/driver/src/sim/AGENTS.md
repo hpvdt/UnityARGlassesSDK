@@ -48,7 +48,7 @@ The SimMotion AR glasses fixture is a deterministic, public, configurable simula
   matrix as $D = V V^T$. The normalized directions of the vectors are the eigenvectors of $D$, and its eigenvalues
   are their squared L2 norms, so $D$ is symmetric positive definite and every eigenvalue remains within the
   configured bounds without SVD validation.
-- Generate `S` once during fixture initialization and reuse it for every magnetometer reading.
+- Generate $D$ once during fixture initialization and reuse it for every magnetometer reading.
 
 ## Non-Sensor Behavior
 
