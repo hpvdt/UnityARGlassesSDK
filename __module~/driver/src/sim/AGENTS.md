@@ -44,10 +44,10 @@ The SimMotion AR glasses fixture is a deterministic, public, configurable simula
 - Generate three seeded random vectors and apply Gram-Schmidt orthogonalization without normalizing them. After
   orthogonalization, clamp each vector's L2 norm to the permanent vector-norm bounds so the scale remains baked into the
   vector. Resample a vector if it is degenerate or too close to the span of the preceding vectors.
-- Form a matrix `V` from the three mutually orthogonal, scaled vectors and construct the soft-iron matrix as
-  `S = V V^T`. The normalized directions of the vectors are the eigenvectors of `S`, and its eigenvalues are their
-  squared L2 norms, so `S` is symmetric positive definite and every eigenvalue remains within the configured bounds
-  without SVD validation.
+- Form a matrix $V$ from the three mutually orthogonal, scaled vectors and construct the soft-iron distortion
+  matrix as $D = V V^T$. The normalized directions of the vectors are the eigenvectors of $D$, and its eigenvalues
+  are their squared L2 norms, so $D$ is symmetric positive definite and every eigenvalue remains within the
+  configured bounds without SVD validation.
 - Generate `S` once during fixture initialization and reuse it for every magnetometer reading.
 
 ## Non-Sensor Behavior

@@ -219,13 +219,18 @@ appear in this list. Add a new acronym here in the same change that introduces i
 - **ABI:** Application Binary Interface.
 - **AHRS:** Attitude and Heading Reference System.
 - **API:** Application Programming Interface.
+- **EKF:** Extended Kalman Filter.
+- **ESKF:** Error-State Kalman Filter.
 - **FFI:** Foreign Function Interface.
 - **FRD:** Forward-Right-Down aerospace coordinate frame.
+- **KF:** Kalman Filter.
 - **LLM:** Large Language Model.
+- **PRNG:** Pseudo-Random Number Generator.
 - **RMS:** Root Mean Square.
 - **RUB:** Right-Up-Back Android sensor coordinate frame.
 - **SGD:** Stochastic Gradient Descent.
 - **SPD:** Symmetric Positive-Definite.
+- **SVD:** Singular Value Decomposition.
 
 ### Formulas
 
@@ -281,8 +286,22 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
   \psi_{i,j}^2 + \lambda R_{jj} + \epsilon$, and $s_\kappa = w_g / \sigma_g^2 + \epsilon$.
 - **$u_i$:** Normalized magnetometer sample, $u_i = (x_i - \mu) / r$; $3 \times 1$.
 - **$\hat{u}_i$:** Mean-centered unit direction of retained sample $i$; $3 \times 1$.
+- **$V$:** Matrix whose columns are the SimMotion fixture's three mutually orthogonal, scale-carrying soft-iron
+  basis vectors, giving $D = V V^T$; $3 \times 3$.
 - **$w_g$:** Gravity term weight (`gravity_weight`).
 - **$x_i$:** Raw retained magnetometer sample vector; $3 \times 1$.
+- **$S$:** Current estimated attitude state (unit quaternion) of the naive complementary filter (code field
+  `FusionState::attitude`).
+- **$S^{-}$:** Previous estimated attitude state of the naive complementary filter.
+- **$\tilde{S}_2$:** Low-frequency state-sensor reading (accelerometer gravity or magnetometer) correcting the
+  complementary filter.
+- **$d\tilde{S}_1$:** High-frequency rate-sensor reading (gyroscope), the dead-reckoning increment rate of the
+  complementary filter (code variable `d_s1_t1` holds the increment $d\tilde{S}_1\, dt_1$).
+- **$dt_1$:** Time elapsed since the last rate-sensor sample (code variable `d_t1`).
+- **$\mathrm{ratio}$:** Blend ratio of the naive complementary filter,
+  $S = \mathrm{ratio}\, (S^{-} + d\tilde{S}_1\, dt_1) + (1 - \mathrm{ratio})\, \tilde{S}_2$; the state-sensor
+  correction weight $1 - \mathrm{ratio}$ appears in code as `BASE_GRAV_RATIO`, `BASE_MAG_RATIO`, and the `scale`
+  parameter of `NaiveCF::get_correction`.
 - **$\gamma$:** Ellipsoid normalization scale, $\gamma = 1 + d^T Q d$.
 - **$\epsilon$:** Numerical floor of the optimizer feature-energy scales.
 - **$\theta$:** Packed online coefficients $[Q_{00}, Q_{11}, Q_{22}, Q_{01}, Q_{02}, Q_{12}, q_0, q_1, q_2]$ (code

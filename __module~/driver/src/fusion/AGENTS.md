@@ -125,8 +125,9 @@ safety and frozen from the pre-update parameters for the whole update. Within on
 therefore a convex quadratic in $(\theta, \kappa)$: a positive-semidefinite Gram sum of squared affine terms
 plus the convex shape regularizer; the frame and $\sigma_g$ change only between updates, making the scheme a
 fixed-point iteration whose per-update target motion is bounded by the frame's eigenvalue clamp. Matrix square
-roots occur only during physical candidate conversion and per-refresh frame updates, never inside a gradient
-step. Gravity is disabled only by an explicit `gravity_weight(0)`.
+roots occur only during physical candidate conversion, never inside a gradient step or a frame refresh (the
+refresh only clamps the eigenvalues of the symmetrized inverse). Gravity is disabled only by an explicit
+`gravity_weight(0)`.
 
 Preconditioning makes the surrogate target the exact magnetic dip. The model gives
 
