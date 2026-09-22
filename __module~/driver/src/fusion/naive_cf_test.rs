@@ -139,8 +139,8 @@ fn construction_and_update_fit_bounded_stack() {
 }
 
 fn sample_direction(i: usize) -> Vector3<f32> {
-    let theta = 0.37 + i as f32 * 1.21;
+    let azimuth = 0.37 + i as f32 * 1.21;
     let z = -0.8 + 1.6 * i as f32 / 1022.0;
-    let radius = (1.0 - z * z).sqrt();
-    Vector3::new(radius * theta.cos(), radius * theta.sin(), z)
+    let xy_radius = (1.0 - z * z).sqrt();
+    Vector3::new(xy_radius * azimuth.cos(), xy_radius * azimuth.sin(), z)
 }

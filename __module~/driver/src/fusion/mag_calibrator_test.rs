@@ -221,19 +221,19 @@ fn mag_calibrator_corrects_asymmetrically_sampled_distortion() {
     // refuses publication for a sweep that never visits a cap of the sphere,
     // so the asymmetric sampling must still span all directions.
     for i in 0..63 {
-        let theta = 0.37 + i as f32 * 1.21;
+        let azimuth = 0.37 + i as f32 * 1.21;
         let z = -0.85 + 1.7 * i as f32 / 62.0;
-        let radius = (1.0 - z * z).sqrt();
-        let direction = Vector3::new(radius * theta.cos(), radius * theta.sin(), z);
+        let xy_radius = (1.0 - z * z).sqrt();
+        let direction = Vector3::new(xy_radius * azimuth.cos(), xy_radius * azimuth.sin(), z);
         let _ = calibrator.evaluate_correct(offset + distortion * direction, None, i as u64);
     }
 
     for i in 0..16 * 63 {
         let sample_index = i % 63;
-        let theta = 0.37 + sample_index as f32 * 1.21;
+        let azimuth = 0.37 + sample_index as f32 * 1.21;
         let z = -0.85 + 1.7 * sample_index as f32 / 62.0;
-        let radius = (1.0 - z * z).sqrt();
-        let direction = Vector3::new(radius * theta.cos(), radius * theta.sin(), z);
+        let xy_radius = (1.0 - z * z).sqrt();
+        let direction = Vector3::new(xy_radius * azimuth.cos(), xy_radius * azimuth.sin(), z);
         let _ = calibrator.evaluate_correct(offset + distortion * direction, None, (64 + i) as u64);
     }
     let expected = Vector3::new(1.0, -2.0, -1.0).normalize();
@@ -804,11 +804,11 @@ fn mag_calibrator_improves_with_consistent_gravity() {
 fn mag_calibrator_gravity_surrogate_survives_strong_anisotropy() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let diagonal = |x: f32, y: f32, z: f32| Matrix3::new(x, 0.0, 0.0, 0.0, y, 0.0, 0.0, 0.0, z);
-    let rotate = |roll: f32, pitch: f32, yaw: f32, d: Matrix3<f32>| {
+    let rotate = |roll: f32, pitch: f32, yaw: f32, distortion: Matrix3<f32>| {
         let basis = UnitQuaternion::from_euler_angles(roll, pitch, yaw)
             .to_rotation_matrix()
             .into_inner();
-        basis * d * basis.transpose()
+        basis * distortion * basis.transpose()
     };
     // Strongly anisotropic SPD soft iron, with and without rotated
     // eigenvectors, spanning a range of condition numbers.
@@ -1205,8 +1205,9 @@ fn mag_calibrator_scores_direction_coverage() {
     // score cannot be inflated by the fit's own reshaping of the sample
     // covariance.
     for i in 0..16 * 63 {
-        let theta = i as f32 * 0.31;
-        let near_planar = Vector3::new(theta.cos() * 0.866, theta.sin() * 0.866, 0.5).normalize();
+        let azimuth = i as f32 * 0.31;
+        let near_planar =
+            Vector3::new(azimuth.cos() * 0.866, azimuth.sin() * 0.866, 0.5).normalize();
         calibrator.evaluate_sample_vec(offset + near_planar, None, i as u64);
     }
     let (valid, coverage, _, _) = calibrator.working_quality_components();
@@ -1273,8 +1274,8 @@ fn design_coverage_is_rotation_invariant_and_detects_rank_deficiency() {
     // rank-deficient and the score collapses however long the circle runs.
     let circle: Vec<Vector3<f32>> = (0..64)
         .map(|i| {
-            let theta = i as f32 * 0.31;
-            Vector3::new(theta.cos() * 0.866, theta.sin() * 0.866, 0.5).normalize()
+            let azimuth = i as f32 * 0.31;
+            Vector3::new(azimuth.cos() * 0.866, azimuth.sin() * 0.866, 0.5).normalize()
         })
         .collect();
     let planar_coverage = MagCalibrator::<9>::coverage_scores_for_test(
@@ -1518,10 +1519,10 @@ fn mag_calibrator_neighbor_cache_matches_naive_rescan() {
             timestamp_us += 1 + next() % 3;
             // Quantized directions with jitter: new samples frequently land
             // near buffered ones, provoking replacements.
-            let theta = (next() % 8) as f32 * 0.785 + (next() % 100) as f32 / 500.0;
+            let azimuth = (next() % 8) as f32 * 0.785 + (next() % 100) as f32 / 500.0;
             let z = (next() % 5) as f32 / 2.5 - 1.0 + (next() % 100) as f32 / 500.0;
-            let radius = (1.0 - z * z).max(0.0).sqrt();
-            let direction = Vector3::new(radius * theta.cos(), radius * theta.sin(), z);
+            let xy_radius = (1.0 - z * z).max(0.0).sqrt();
+            let direction = Vector3::new(xy_radius * azimuth.cos(), xy_radius * azimuth.sin(), z);
             let sample = Vector3::new(11.0, -7.0, 5.0) + 40.0 * direction;
             calibrator.evaluate_sample_vec(sample, None, timestamp_us);
             calibrator
@@ -1610,10 +1611,10 @@ fn train_calibrator<const N: usize>(
 }
 
 fn sample_direction(i: usize, n: usize) -> Vector3<f32> {
-    let theta = 0.37 + i as f32 * 1.21;
+    let azimuth = 0.37 + i as f32 * 1.21;
     let z = -0.8 + 1.6 * i as f32 / (n - 1) as f32;
-    let radius = (1.0 - z * z).sqrt();
-    Vector3::new(radius * theta.cos(), radius * theta.sin(), z)
+    let xy_radius = (1.0 - z * z).sqrt();
+    Vector3::new(xy_radius * azimuth.cos(), xy_radius * azimuth.sin(), z)
 }
 
 fn assert_vec_close(actual: Vector3<f32>, expected: Vector3<f32>, tolerance: f32) {
