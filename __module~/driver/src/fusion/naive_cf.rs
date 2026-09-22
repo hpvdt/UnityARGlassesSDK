@@ -1,28 +1,24 @@
 //!
 //! NaiveCF is a simple sensor fusion algorithm that uses a complementary filter.
 //!
-//! complementary filter with very simple update algorithm:
+//! Complementary filter with a very simple update algorithm. With $S$ and $S^{-}$ the current and
+//! previous estimated state, $d\tilde{S}_1$ a rate sensor reading (e.g. gyroscope: high frequency, high
+//! drift, dead reckoning), $\tilde{S}_2$ a state sensor reading (e.g. gravity/accelerometer, magnetometer:
+//! low frequency, high noise, low drift), $dt_1$ the time elapsed since the last rate sensor sample, and
+//! $\mathrm{ratio}$ the blend ratio:
 //!
-//! (
-//!     assuming:
-//!     (S, S-) = current & previous estimated state
-//!     d~S1 = rate sensor reading (e.g. gyro), high frequency, high drift, dead reckoning
-//!    ~S2 = state sensor reading (e.g. grav/acc, mag), low frequency, high noise, low drift
-//!    d_t1 = time elapse since last rate sensor sampling
-//!)
+//! $$S = \mathrm{ratio}\, (S^{-} + d\tilde{S}_1\, dt_1) + (1 - \mathrm{ratio})\, \tilde{S}_2$$
 //!
-//!S = S- + ratio * d~S1 * d_t1 + (1-ratio) * (~S2 - S-)
-//!  = ratio * (S- + d~S1 * d_t1) + (1-ratio) * ~S2
+//! This implies:
 //!
-//!this implies:
+//! - The algorithm natively supports state sensor(s) with different sampling frequency, incomplete
+//!   reading, or unreliable reading, as the $\tilde{S}_2$ variable is merely an optional correction.
+//! - The interpolation between $\tilde{S}_2$ and the rate-integrated prediction doesn't need to be linear
+//!   or additive, e.g. 3D angular interpolation is multiplicative.
+//! - The ratio can be adjusted based on quality and frequency of the state sensor(s).
 //!
-//!- the algorithm natively support state sensor(s) with different sampling frequency, incomplete reading,
-//!or unreliable reading, as ~S2 variable is merely an optional correction
-//!- the interpolation between ~S2 and the first term doesn't need to be linear or additive,
-//!e.g. 3D angular interpolation is multiplicative
-//!- the ratio can be adjusted based on quality & frequency of state sensor(s)
-//!
-//!most glasses have acc & grav/acc readings in 1 bundle, but I prefer not using this assumption and still update them independently
+//! Most glasses have acc & grav/acc readings in 1 bundle, but I prefer not using this assumption and still
+//! update them independently.
 //!
 //! # example:
 //!  TODO: fill

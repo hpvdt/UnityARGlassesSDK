@@ -504,8 +504,7 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
     // itself is NOT asserted bitwise equal to B's: A and B share the cache
     // but not the online-optimizer parameter history, which legitimately
     // still carries the expired rows' gradients (non-strict by design; see
-    // TODO.md, "Make live fitness statistics cache-derived and
-    // lifespan-aware").
+    // "Known adaptation limitation" in the fusion AGENTS.md).
     let result_a = result_a.unwrap().unwrap();
     let radial_mean_square = lifespan_a
         .radial_mean_square_for_test()

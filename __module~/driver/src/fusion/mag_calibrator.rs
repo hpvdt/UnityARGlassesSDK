@@ -61,7 +61,7 @@ const ONLINE_LEARNING_RATE_DECAY_STEPS: f32 = 128.0;
 const ONLINE_MIN_LEARNING_RATE: f32 = 0.01;
 const ONLINE_MAX_STEP_NORM: f32 = 0.5;
 /// Numerical floor of the optimizer feature-energy scales, also reused as
-/// the floor of the gravity projection scale $\sigma_g$.
+/// the floor of the squared gravity projection scale $\sigma_g^2$.
 pub(super) const ONLINE_SCALE_EPSILON: f32 = 1.0e-4;
 const ONLINE_BACKTRACK_STEPS: usize = 12;
 const ONLINE_PRNG_SEED: u64 = 0x9E37_79B9_7F4A_7C15;
