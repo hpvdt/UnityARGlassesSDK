@@ -9,8 +9,9 @@ use super::CalibrationQuality;
 /// model.
 pub(super) const CALIBRATION_PARAMETER_COUNT: usize = 9;
 
-/// Gram sum of the retained direction features, `sum_i varphi(d_i)
-/// varphi(d_i)^T`, backing the coverage score.
+/// Gram sum of the retained direction features,
+/// $\sum_i \varphi(\hat{u}_i) \varphi(\hat{u}_i)^T$, backing the coverage
+/// score.
 pub(super) type CoverageGramMatrix =
     SMatrix<f32, CALIBRATION_PARAMETER_COUNT, CALIBRATION_PARAMETER_COUNT>;
 const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
@@ -55,10 +56,11 @@ const MAX_GRAVITY_FRAME_EIGENVALUE: f32 = 4.0;
 /// near 0.2.
 const MAX_GRAVITY_RMS: f32 = 0.35;
 /// Uniform-sphere reference for directional coverage: the smallest
-/// eigenvalue of `E[varphi(d) varphi(d)^T]` over uniformly distributed unit
-/// directions, where `varphi` is the coverage-feature vector with
-/// `sqrt(2)` cross-term weights (see `coverage_feature`). A fully isotropic
-/// cache scores 1 against this reference.
+/// eigenvalue of $\mathbb{E}[\varphi(\hat{u}) \varphi(\hat{u})^T]$ over
+/// uniformly distributed unit directions $\hat{u}$, where $\varphi$ is the
+/// coverage-feature vector with $\sqrt{2}$ cross-term weights (see
+/// `coverage_feature`). A fully isotropic cache scores 1 against this
+/// reference.
 const COVERAGE_LAMBDA_REF: f32 = 2.0 / 15.0;
 
 /// Finite hard-iron offset and soft-iron correction derived from the
@@ -119,9 +121,14 @@ pub(super) struct MagModel<const N: usize> {
     /// to the exact magnetic dip $\gamma r\, g_i^T m_i$ once the working
     /// correction $A_w$ matches the true $A$. Identity until the first valid
     /// working candidate refreshes it; refreshed by [`MagModel::update_quality`].
-    // TODO: why is gravity_frame required? The optimisation objective is to minimise the divergence of magnetic dip (projection of corrected magnetic vector on the direction of gravity) and learned_gravity_projection, it doesn't even use gravity_frame
+    // TODO: why is gravity_frame required? The optimisation objective is to
+    // minimise the divergence of magnetic dip (projection of the corrected
+    // magnetic vector on the direction of gravity) and
+    // learned_gravity_projection; it doesn't even use gravity_frame
     pub(super) gravity_frame: Matrix3<f32>,
-    // TODO: duplicate: gravity_weight should always be identical to CalibrationQuality.gravity_term_weight, this is a major vulnerability that may cause divergence between quality estimation and optimisation
+    // TODO: duplicate: gravity_weight should always be identical to
+    // CalibrationQuality.gravity_term_weight; a divergence between quality
+    // estimation and optimisation may otherwise result
     pub(super) gravity_weight: f32,
     /// Live calibration quality factors of the current working candidate,
     /// reset together with the model minimum and recomputed by
@@ -317,17 +324,18 @@ impl<const N: usize> MagModel<N> {
         self.gravity_frame * gravity
     }
 
-    /// Feature vector `varphi(d)` of a unit direction `d`: the term whose
-    /// outer products `varphi(d) varphi(d)^T` build the coverage Gram matrix
-    /// summed by `mean_centered_coverage` and scored by `coverage_from_gram`.
-    /// The nine components are the ellipsoid-fit features with `sqrt(2)`
-    /// cross-term weights; with that weighting the feature norm equals the
-    /// rotation-invariant `tr(d d^T d d^T)`, so the induced rotation on
-    /// feature space is orthogonal and the Gram eigenvalues are exactly
-    /// rotation-invariant. Under the uniform spherical distribution
-    /// `E[varphi varphi^T]` has eigenvalues `{1/3 x4, 2/15 x5}`; the
-    /// smallest, `2/15`, is the `COVERAGE_LAMBDA_REF` uniform-sphere
-    /// reference.
+    /// Feature vector $\varphi(\hat{u})$ of a unit direction $\hat{u}$: the
+    /// term whose outer products $\varphi(\hat{u}) \varphi(\hat{u})^T$ build
+    /// the coverage Gram matrix summed by `mean_centered_coverage` and
+    /// scored by `coverage_from_gram`. The nine components are the
+    /// ellipsoid-fit features with $\sqrt{2}$ cross-term weights; with that
+    /// weighting the feature norm equals the rotation-invariant
+    /// $\operatorname{tr}(\hat{u} \hat{u}^T \hat{u} \hat{u}^T)$, so the
+    /// induced rotation on feature space is orthogonal and the Gram
+    /// eigenvalues are exactly rotation-invariant. Under the uniform
+    /// spherical distribution $\mathbb{E}[\varphi \varphi^T]$ has
+    /// eigenvalues $\{1/3 \times 4,\ 2/15 \times 5\}$; the smallest,
+    /// $2/15$, is the `COVERAGE_LAMBDA_REF` uniform-sphere reference.
     pub(super) fn coverage_feature(
         direction: Vector3<f32>,
     ) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {

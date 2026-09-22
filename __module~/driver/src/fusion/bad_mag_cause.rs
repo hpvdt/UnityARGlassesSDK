@@ -29,7 +29,9 @@ pub enum BadCalibration {
 /// Reason a magnetometer reading is not usable.
 #[derive(Clone, Copy, derive_more::Debug, PartialEq)]
 pub enum BadReading {
-    /// The raw magnetometer vector is too small to be useful. TODO: this is actually not a problem as hard-iron zero can be very far
+    /// The raw magnetometer vector is too small to be useful.
+    /// TODO: this is actually not a problem as hard-iron zero can be very
+    /// far
     // WeakRawReading {
     //     /// Actual raw vector norm.
     //     norm: f32,

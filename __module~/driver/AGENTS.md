@@ -194,7 +194,8 @@ submitting a change.
 
 ## Planning
 
-- Any inconsistency or contradiction discovered during the planning stage must be immediately raised and highlighted in the plan
+- Any inconsistency or contradiction discovered during the planning stage must be immediately raised and
+  highlighted in the plan
 - no plan shall be executed until the inconsistency or contradiction is full addressed
 
 ## Documentation (including Markdown & Comments)
@@ -248,15 +249,18 @@ must appear in the following list, with each entry containing the following info
 
 Add a new symbol here in the same change that introduces it; otherwise use the full name.
 
-- **$A$:** Soft-iron correction matrix, $A = D^{-1} = M^{1/2} / r$; $3 \times 3$.
+- **$A$:** Soft-iron correction matrix, $A = D^{-1} = M^{1/2} / r$ (code field `soft_iron_correction` of
+  `MagCalibrator`, candidate field `CalibrationCandidate::correction`); $3 \times 3$.
 - **$A_w$:** Current working soft-iron correction used as the gravity preconditioner; the code field
   `gravity_frame` stores $A_w^{-1}$ with eigenvalues clamped to $[0.25, 4]$; $3 \times 3$.
-- **$B$:** Online-optimizer minibatch; $|B|$ is its observation count.
+- **$B$:** Online-optimizer minibatch; $|B|$ is its observation count (code field `minibatch_size`).
 - **$B_r$:** Replay minibatch size (`replay_minibatch_size`).
-- **$b$:** Hard-iron offset vector, $b = \mu + r d$; $3 \times 1$.
-- **$c$:** Shape-prior scale of the regularization target $c I$.
+- **$b$:** Hard-iron offset vector, $b = \mu + r d$ (code field `hard_iron_offset` of `MagCalibrator`, candidate
+  field `CalibrationCandidate::offset`); $3 \times 1$.
+- **$c$:** Shape-prior scale of the regularization target $c I$ (code constant `SHAPE_PRIOR_SCALE`).
 - **$D$:** Symmetric positive-definite soft-iron distortion matrix; $3 \times 3$.
-- **$d$:** Normalized-offset candidate in cache-normalization units, $d = -\tfrac{1}{2} Q^{-1} q$; $3 \times 1$.
+- **$d$:** Normalized-offset candidate in cache-normalization units, $d = -\tfrac{1}{2} Q^{-1} q$ (code variable
+  `normalized_offset`); $3 \times 1$.
 - **$e_{r,i}$:** Radial algebraic residual of observation $i$, $e_{r,i} = \phi_i^T \theta - 1$.
 - **$e_{g,i}$:** Gravity-projection residual of observation $i$, normalized by the projection scale,
   $e_{g,i} = (\psi_i^T \theta - \kappa) / \sigma_g$.
@@ -274,9 +278,11 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$n$:** Number of terms in an objective or Gram average.
 - **$n_g$:** Gravity-carrying term count in $J_g$.
 - **$n_i$:** Ellipsoid normal at $u_i$, $n_i = Q u_i + q / 2$; $3 \times 1$.
-- **$p$:** Ramped count of cold-start replay updates per sample.
-- **$Q$:** Symmetric ellipsoid shape matrix in $u_i^T Q\, u_i + q^T u_i = 1$; $3 \times 3$.
-- **$q$:** Ellipsoid linear coefficient vector in $u_i^T Q\, u_i + q^T u_i = 1$; $3 \times 1$.
+- **$p$:** Ramped count of cold-start replay updates per sample (code variable `replay_count`).
+- **$Q$:** Symmetric ellipsoid shape matrix in $u_i^T Q\, u_i + q^T u_i = 1$ (code variable `shape` returned by
+  `MagModel::unpack_ellipsoid_coefficients`); $3 \times 3$.
+- **$q$:** Ellipsoid linear coefficient vector in $u_i^T Q\, u_i + q^T u_i = 1$ (code variable `linear` returned
+  by `MagModel::unpack_ellipsoid_coefficients`); $3 \times 1$.
 - **$R$:** Diagonal feature-space regularization weights $\operatorname{diag}(1, 1, 1, 2, 2, 2, 0, 0, 0)$; $9 \times 9$.
 - **$r$:** RMS radius of the retained magnetometer samples (code field `sample_rms_radius` in
   `mag_model::MagModel`).
@@ -302,15 +308,16 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
   basis vectors, giving $D = V V^T$; $3 \times 3$.
 - **$w_g$:** Gravity term weight (`gravity_weight`).
 - **$x_i$:** Raw retained magnetometer sample vector; $3 \times 1$.
-- **$\gamma$:** Ellipsoid normalization scale, $\gamma = 1 + d^T Q d$.
-- **$\epsilon$:** Numerical floor of the optimizer feature-energy scales.
+- **$\gamma$:** Ellipsoid normalization scale, $\gamma = 1 + d^T Q d$ (code variable `ellipsoid_scale`).
+- **$\epsilon$:** Numerical floor of the optimizer feature-energy scales (code constant `ONLINE_SCALE_EPSILON`).
 - **$\theta$:** Packed online coefficients $[Q_{00}, Q_{11}, Q_{22}, Q_{01}, Q_{02}, Q_{12}, q_0, q_1, q_2]$ (code
   field `parameters`); $9 \times 1$.
 - **$\theta_{\mathrm{prior}}$:** Prior coefficient vector $[c, c, c, 0, 0, 0, 0, 0, 0]$; $9 \times 1$.
 - **$\tilde{g}_i$:** Preconditioned gravity direction of observation $i$,
   $\tilde{g}_i = A_w^{-1} g_i$; $3 \times 1$.
-- **$\kappa$:** Learned gravity projection scalar.
-- **$\lambda$:** Shape regularization weight.
+- **$\kappa$:** Learned gravity projection scalar (code field `learned_gravity_projection` of
+  `mag_model::MagModel`).
+- **$\lambda$:** Shape regularization weight (code constant `SHAPE_REGULARIZATION`).
 - **$\mu$:** Sample mean of the retained magnetometer samples (code field `sample_mean` in
   `mag_model::MagModel`); $3 \times 1$.
 - **$\sigma_g$:** Gravity projection scale: the RMS projection $\sqrt{\frac{1}{n_g} \sum_i (\psi_i^T \theta)^2}$
