@@ -4,12 +4,12 @@ use super::bad_mag_cause::{BadMagCause, BadReading};
 use super::calibration_quality::CalibrationQuality;
 use super::mag_model::{MagModel, CALIBRATION_PARAMETER_COUNT};
 use super::mag_samples::{ConcreteRow, MagSamples, Row};
-const SHAPE_REGULARIZATION: f32 = 1.0e-3;
+const SHAPE_REGULARIZATION /*$\lambda$*/: f32 = 1.0e-3;
 /// Scale of the regularization target shape, in units of the identity.
 /// Algebraic ellipsoid fits under noise systematically inflate the ellipsoid
 /// (underestimate the eigenvalues of the shape matrix), so the prior centers
 /// on a shape larger than the ideal sphere to counter that bias.
-pub(super) const SHAPE_PRIOR_SCALE: f32 = 2.0;
+pub(super) const SHAPE_PRIOR_SCALE /*$c$*/: f32 = 2.0;
 /// Confidence required for a working candidate to advance the publication
 /// streak. This is the highest tested threshold at which every fixed SimMotion
 /// regression seed completes the 2000-evaluation budget; the rank-deficient
@@ -62,7 +62,7 @@ const ONLINE_MIN_LEARNING_RATE: f32 = 0.01;
 const ONLINE_MAX_STEP_NORM: f32 = 0.5;
 /// Numerical floor of the optimizer feature-energy scales, also reused as
 /// the floor of the squared gravity projection scale $\sigma_g^2$.
-pub(super) const ONLINE_SCALE_EPSILON: f32 = 1.0e-4;
+pub(super) const ONLINE_SCALE_EPSILON /*$\epsilon$*/: f32 = 1.0e-4;
 const ONLINE_BACKTRACK_STEPS: usize = 12;
 const ONLINE_PRNG_SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 /// Number of neighbor entries cached per buffered sample row: the `k` nearest
@@ -135,8 +135,8 @@ impl MagCalibrationResult {
 /// only the online-optimizer parameters carry history beyond the cache.
 pub struct MagCalibrator<const N: usize> {
     sample_timestamps_us: [u64; N],
-    hard_iron_offset: Vector3<f32>,
-    soft_iron_correction: Matrix3<f32>,
+    hard_iron_offset: Vector3<f32>,     /*$b$*/
+    soft_iron_correction: Matrix3<f32>, /*$A$*/
     calibration_initialized: bool,
     mean_distance: f32,
     /// Per-row incremental k-nearest-neighbor cache for the diversity
@@ -149,11 +149,11 @@ pub struct MagCalibrator<const N: usize> {
     /// below `k`.
     neighbor_cache: [[NeighborEntry; NEIGHBOR_CACHE_CAPACITY]; N],
     neighbor_cache_len: [u8; N],
-    neighbor_count: usize,
+    neighbor_count: usize, /*$k$*/
     max_sample_lifespan_us: u64,
-    minibatch_size: usize,
+    minibatch_size: usize, /*$|B|$*/
     replay_updates: usize,
-    replay_minibatch_size: usize,
+    replay_minibatch_size: usize, /*$B_r$*/
     prng_state: u64,
     optimizer_steps: u64,
     publication_quality_streak: usize,
@@ -440,7 +440,7 @@ impl<const N: usize> MagCalibrator<N> {
         if self.calibration_initialized || self.model.sample_row_count == 0 {
             return;
         }
-        let replay_count = self
+        let replay_count /*$p$*/ = self
             .replay_updates
             .saturating_mul(self.model.sample_row_count)
             / N.max(1);
@@ -467,16 +467,16 @@ impl<const N: usize> MagCalibrator<N> {
             return false;
         }
 
-        let parameters = self.model.parameters;
+        let parameters /*$\theta$*/ = self.model.parameters;
         // Gravity rows exist only once the projection is seeded.
-        let kappa = self.model.learned_gravity_projection.unwrap_or(0.0);
+        let kappa /*$\kappa$*/ = self.model.learned_gravity_projection.unwrap_or(0.0);
         let residuals = &features * parameters - DVector::from_element(features.nrows(), 1.0);
-        let mut gradient =
+        let mut gradient /*$\nabla_\theta$*/ =
             Self::parameter_vector(features.tr_mul(&residuals)) / features.nrows() as f32;
-        let mut gradient_scale =
+        let mut gradient_scale /*$s_{\theta}$*/ =
             Self::parameter_vector(features.map(|value| value * value).row_sum_tr())
                 / features.nrows() as f32;
-        let mut kappa_gradient = 0.0;
+        let mut kappa_gradient /*$\nabla_\kappa$*/ = 0.0;
         // Projection scale $\sigma_g$ of the gravity residual: the RMS
         // projection $\psi^T \theta$ over this minibatch, floored for
         // numerical safety and frozen for the whole update. Normalizing the
@@ -486,7 +486,7 @@ impl<const N: usize> MagCalibrator<N> {
         // effective pull and its fitness ramp would drift with the device
         // calibration state (the hint-noise residual of a real trace scales
         // with the sample radius $r$).
-        let mut gravity_scale = 1.0;
+        let mut gravity_scale /*$\sigma_g$*/ = 1.0;
         if gravity_features.nrows() > 0 {
             let projections = &gravity_features * parameters;
             gravity_scale = (projections.norm_squared() / gravity_features.nrows() as f32)

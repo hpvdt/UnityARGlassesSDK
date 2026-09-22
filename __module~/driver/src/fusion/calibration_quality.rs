@@ -24,7 +24,7 @@ pub struct CalibrationQuality {
     /// while the gravity-projection statistic is live, `0.0` otherwise.
     /// Zero reduces the combination to `radial_fitness` exactly, matching
     /// the objective with the surrogate disabled.
-    pub gravity_term_weight: f32,
+    pub gravity_term_weight: f32, /*$w_g$*/
 }
 
 impl CalibrationQuality {

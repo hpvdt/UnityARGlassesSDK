@@ -152,7 +152,7 @@ pub struct FusionState {
 
     // following data will be updated in memory directly,
     /// Latest attitude estimate as a unit quaternion.
-    pub attitude: UnitQuaternion<f32>,
+    pub attitude: UnitQuaternion<f32>, /*$S$*/
 
     /// Per-sensor correction magnitudes.
     pub corrections: NineAxis<Correction>,

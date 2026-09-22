@@ -68,8 +68,8 @@ const COVERAGE_LAMBDA_REF: f32 = 2.0 / 15.0;
 /// calibrator.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct CalibrationCandidate {
-    pub(super) offset: Vector3<f32>,
-    pub(super) correction: Matrix3<f32>,
+    pub(super) offset: Vector3<f32>,     /*$b$*/
+    pub(super) correction: Matrix3<f32>, /*$A$*/
 }
 
 /// Calibration model state behind `MagCalibrator`: the retained magnetometer
@@ -84,7 +84,7 @@ pub(super) struct MagModel<const N: usize> {
     /// Retained magnetometer sample cache: the raw samples and the optional
     /// gravity direction carried by each row.
     pub(super) samples: MagSamples<N>,
-    pub(super) parameters: SVector<f32, CALIBRATION_PARAMETER_COUNT>,
+    pub(super) parameters: SVector<f32, CALIBRATION_PARAMETER_COUNT>, /*$\theta$*/
     /// Number of retained cache rows `0..sample_row_count`: the zeroth raw
     /// moment the first and second moments below are averaged over,
     /// maintained on append, replacement, and expiry alongside them.
@@ -98,12 +98,12 @@ pub(super) struct MagModel<const N: usize> {
     pub(super) raw_outer_product_sum: Matrix3<f64>,
     /// Sample mean $\mu$ of the retained magnetometer samples: the center of
     /// the sample normalization $u_i = (x_i - \mu) / r$.
-    pub(super) sample_mean: Vector3<f32>,
+    pub(super) sample_mean: Vector3<f32>, /*$\mu$*/
     /// RMS radius $r$ of the retained magnetometer samples: the scale of the
     /// sample normalization $u_i = (x_i - \mu) / r$. Zero on an empty or
     /// single-point cache, which makes the normalization unusable; see
     /// `sample_normalization_usable`.
-    pub(super) sample_rms_radius: f32,
+    pub(super) sample_rms_radius: f32, /*$r$*/
     /// Learned scalar $\kappa$ of the gravity surrogate: the projection of
     /// the preconditioned gravity direction $\tilde{g}_i = A_w^{-1} g_i$
     /// onto the ellipsoid normal $n_i = Q u_i + q / 2$ at a retained row,
@@ -111,7 +111,7 @@ pub(super) struct MagModel<const N: usize> {
     /// approximately constant across rows. `None` until seeded once from the
     /// first usable gravity observation, then refined by the optimizer
     /// gradient steps.
-    pub(super) learned_gravity_projection: Option<f32>,
+    pub(super) learned_gravity_projection: Option<f32>, /*$\kappa$*/
     /// Gravity preconditioner frame $A_w^{-1}$: the inverse of the current
     /// working soft-iron correction, symmetrized with eigenvalues clamped to
     /// [`MIN_GRAVITY_FRAME_EIGENVALUE`, `MAX_GRAVITY_FRAME_EIGENVALUE`]. The
@@ -125,11 +125,11 @@ pub(super) struct MagModel<const N: usize> {
     // minimise the divergence of magnetic dip (projection of the corrected
     // magnetic vector on the direction of gravity) and
     // learned_gravity_projection; it doesn't even use gravity_frame
-    pub(super) gravity_frame: Matrix3<f32>,
+    pub(super) gravity_frame: Matrix3<f32>, /*$A_w^{-1}$*/
     // TODO: duplicate: gravity_weight should always be identical to
     // CalibrationQuality.gravity_term_weight; a divergence between quality
     // estimation and optimisation may otherwise result
-    pub(super) gravity_weight: f32,
+    pub(super) gravity_weight: f32, /*$w_g$*/
     /// Live calibration quality factors of the current working candidate,
     /// reset together with the model minimum and recomputed by
     /// `update_quality` on every publication evaluation.
@@ -453,7 +453,7 @@ impl<const N: usize> MagModel<N> {
             });
         }
 
-        let (shape, linear) = Self::unpack_ellipsoid_coefficients(&parameters);
+        let (shape /*$Q$*/, linear /*$q$*/) = Self::unpack_ellipsoid_coefficients(&parameters);
         let shape_eigen = shape.symmetric_eigen();
         let correction_condition = Self::condition_number(&shape_eigen.eigenvalues).sqrt();
         if correction_condition > MAX_CORRECTION_CONDITION {
@@ -469,8 +469,8 @@ impl<const N: usize> MagModel<N> {
                 condition: f32::INFINITY,
                 max_condition: MAX_CORRECTION_CONDITION,
             })?;
-        let normalized_offset = -0.5 * shape_cholesky.solve(&linear);
-        let ellipsoid_scale = 1.0 + normalized_offset.dot(&(shape * normalized_offset));
+        let normalized_offset /*$d$*/ = -0.5 * shape_cholesky.solve(&linear);
+        let ellipsoid_scale /*$\gamma$*/ = 1.0 + normalized_offset.dot(&(shape * normalized_offset));
         if !ellipsoid_scale.is_finite() || ellipsoid_scale <= f32::EPSILON {
             return Err(BadCalibration::Unsolveable {
                 message: "ellipsoid normalization is non-positive",

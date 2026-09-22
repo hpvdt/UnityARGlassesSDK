@@ -75,11 +75,11 @@ impl NaiveCF {
         }
     }
 
-    const BASE_GRAV_RATIO: f32 = 0.005;
+    const BASE_GRAV_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.005;
     //const BASE_GRAV_RATIO: f32 = 0.0; //no grav
     // const BASE_GRAV_RATIO: f32 = 1.0; //absolute correction, no gyro
 
-    const BASE_MAG_RATIO: f32 = 0.1;
+    const BASE_MAG_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.1;
 
     const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; //microseconds
 
@@ -93,9 +93,9 @@ impl NaiveCF {
     fn integrate_gyro(&mut self, gyro_rub: &Vector3<f32>, t: u64) -> () {
         let gyro = rub_to_frd(gyro_rub);
 
-        let d_t1 = t - self.prev_gyro.1;
+        let d_t1 /*$dt_1$*/ = t - self.prev_gyro.1;
         let d_t1_f = d_t1 as f32 / Self::GYRO_SPEED_IN_TIMESTAMP_FACTOR;
-        let d_s1_t1 = d_t1_f * gyro;
+        let d_s1_t1 /*$d\tilde{S}_1\, dt_1$*/ = d_t1_f * gyro;
 
         let increment = UnitQuaternion::from_euler_angles(d_s1_t1.x, d_s1_t1.y, d_s1_t1.z);
 
@@ -213,7 +213,7 @@ impl NaiveCF {
     pub fn get_correction(
         acc: &Vector3<f32>,
         rotation: &UnitQuaternion<f32>,
-        scale: f32,
+        scale /*$1 - \mathrm{ratio}$*/: f32,
     ) -> Option<UnitQuaternion<f32>> {
         let uncorrected = rotation * Self::G_ACC_FRD.normalize();
 
