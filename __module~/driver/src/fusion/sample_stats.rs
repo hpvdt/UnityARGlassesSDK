@@ -17,6 +17,9 @@ pub(super) struct SampleStats {
     /// Raw second outer-product moment of the retained magnetometer
     /// samples; see `raw_sample_sum`.
     pub(super) raw_outer_product_sum: Matrix3<f64>,
+    // TODO: the following 2 states can be replaced by a lazily cached value
+    //  everytime samples are updated, the cache is nullified.
+    //  next access will regenerate the cache on demand
     /// Sample mean $\mu$ of the retained magnetometer samples: the center of
     /// the sample normalization $u_i = (x_i - \mu) / r$.
     pub(super) sample_mean: Vector3<f32>, /*$\mu$*/
