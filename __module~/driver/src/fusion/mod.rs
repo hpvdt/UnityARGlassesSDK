@@ -36,6 +36,7 @@ mod mag_samples;
 mod naive_cf;
 #[cfg(test)]
 mod naive_cf_test;
+mod sample_stats;
 
 /// Converts a raw sensor vector from RUB (right, up, back) into FRD (forward, right, down).
 pub fn rub_to_frd(v: &Vector3<f32>) -> Vector3<f32> {

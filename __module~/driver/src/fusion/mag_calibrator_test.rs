@@ -19,16 +19,17 @@ impl<const N: usize> MagCalibrator<N> {
     fn radial_mean_square_for_test(&self) -> Option<f32> {
         self.model.working_candidate().ok()?;
         let mut sum = 0.0f32;
-        for row in 0..self.model.sample_row_count {
+        for row in 0..self.model.stats.sample_row_count {
             let residual = MagModel::<N>::features(
                 self.model
+                    .stats
                     .normalized_sample(self.model.samples.view(row).sample()),
             )
             .dot(&self.model.parameters)
                 - 1.0;
             sum += residual * residual;
         }
-        Some(sum / self.model.sample_row_count as f32)
+        Some(sum / self.model.stats.sample_row_count as f32)
     }
 
     /// Independently recomputes the gravity mean square of the current
@@ -47,11 +48,11 @@ impl<const N: usize> MagCalibrator<N> {
         let mut sum = 0.0f32;
         let mut projection_square_sum = 0.0f32;
         let mut count = 0usize;
-        for row in 0..self.model.sample_row_count {
+        for row in 0..self.model.stats.sample_row_count {
             let row = self.model.samples.view(row);
             if let Some(gravity) = row.gravity() {
                 let projection = MagModel::<N>::gravity_features(
-                    self.model.normalized_sample(row.sample()),
+                    self.model.stats.normalized_sample(row.sample()),
                     self.model.preconditioned_gravity(gravity),
                 )
                 .dot(&self.model.parameters);
@@ -113,15 +114,15 @@ impl<const N: usize> MagCalibrator<N> {
 
     fn raw_moments_for_test(&self) -> (usize, Vector3<f64>, Matrix3<f64>) {
         (
-            self.model.sample_row_count,
-            self.model.raw_sample_sum,
-            self.model.raw_outer_product_sum,
+            self.model.stats.sample_row_count,
+            self.model.stats.raw_sample_sum,
+            self.model.stats.raw_outer_product_sum,
         )
     }
 
     /// Verifies maintained raw moments against a direct current-cache sum.
     fn check_raw_moments(&self) -> Result<(), String> {
-        let (sum, outer_sum) = (0..self.model.sample_row_count).fold(
+        let (sum, outer_sum) = (0..self.model.stats.sample_row_count).fold(
             (Vector3::<f64>::zeros(), Matrix3::<f64>::zeros()),
             |(sum, outer_sum), row| {
                 let sample = self.model.samples.view(row).sample().cast::<f64>();
@@ -129,9 +130,9 @@ impl<const N: usize> MagCalibrator<N> {
             },
         );
         let scale = sum.norm().max(outer_sum.norm()).max(1.0);
-        let error = (self.model.raw_sample_sum - sum)
+        let error = (self.model.stats.raw_sample_sum - sum)
             .norm()
-            .max((self.model.raw_outer_product_sum - outer_sum).norm());
+            .max((self.model.stats.raw_outer_product_sum - outer_sum).norm());
         if error <= 1.0e-12 * scale {
             Ok(())
         } else {
@@ -146,10 +147,10 @@ impl<const N: usize> MagCalibrator<N> {
     /// true distances to the row's other buffered rows. Read-only; used by
     /// tests to cross-check the incremental cache maintenance.
     fn check_neighbor_cache(&self) -> Result<(), String> {
-        for row in 0..self.model.sample_row_count {
+        for row in 0..self.model.stats.sample_row_count {
             let len = self.neighbor_cache_len[row] as usize;
             let cache = &self.neighbor_cache[row][..len];
-            let mut true_dists: Vec<f32> = (0..self.model.sample_row_count)
+            let mut true_dists: Vec<f32> = (0..self.model.stats.sample_row_count)
                 .filter(|&j| j != row)
                 .map(|j| {
                     let diff =
@@ -159,7 +160,9 @@ impl<const N: usize> MagCalibrator<N> {
                 .collect();
             true_dists.sort_unstable_by(|a, b| a.total_cmp(b));
             for (i, entry) in cache.iter().enumerate() {
-                if entry.row as usize >= self.model.sample_row_count || entry.row as usize == row {
+                if entry.row as usize >= self.model.stats.sample_row_count
+                    || entry.row as usize == row
+                {
                     return Err(format!("row {row}: entry {i} references row {}", entry.row));
                 }
                 if i > 0 && cache[i - 1].squared_distance > entry.squared_distance {
@@ -485,7 +488,7 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
 
     // The expired prefix is gone from A's cache: both caches hold exactly
     // the surviving rows in stable insertion order.
-    assert_eq!(lifespan_a.model.sample_row_count, 19);
+    assert_eq!(lifespan_a.model.stats.sample_row_count, 19);
     assert_caches_identical(&lifespan_a, &survivors_only);
 
     // A shared suffix at a fixed timestamp (no further expiry) lets both
@@ -525,8 +528,11 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
 /// Asserts that two calibrators retain exactly the same rows with the same
 /// timestamps and gravity directions, in the same order.
 fn assert_caches_identical<const N: usize>(first: &MagCalibrator<N>, second: &MagCalibrator<N>) {
-    assert_eq!(first.model.sample_row_count, second.model.sample_row_count);
-    for row in 0..first.model.sample_row_count {
+    assert_eq!(
+        first.model.stats.sample_row_count,
+        second.model.stats.sample_row_count
+    );
+    for row in 0..first.model.stats.sample_row_count {
         assert_eq!(
             first.model.samples.view(row).sample(),
             second.model.samples.view(row).sample()
@@ -1000,7 +1006,7 @@ fn check_minibatch_update_against_analytic_subgradient(
     for _ in 0..random_draws {
         let row = MagCalibrator::<63>::random_cache_row(
             &mut random_state,
-            calibrator.model.sample_row_count,
+            calibrator.model.stats.sample_row_count,
             None,
         )
         .expect("retained cache is empty");
@@ -1009,14 +1015,16 @@ fn check_minibatch_update_against_analytic_subgradient(
     }
     let radial_features: Vec<_> = observations
         .iter()
-        .map(|&(sample, _)| MagModel::<63>::features(calibrator.model.normalized_sample(sample)))
+        .map(|&(sample, _)| {
+            MagModel::<63>::features(calibrator.model.stats.normalized_sample(sample))
+        })
         .collect();
     let gravity_features: Vec<_> = observations
         .iter()
         .filter_map(|&(sample, gravity)| {
             gravity.map(|gravity| {
                 MagModel::<63>::gravity_features(
-                    calibrator.model.normalized_sample(sample),
+                    calibrator.model.stats.normalized_sample(sample),
                     calibrator.model.preconditioned_gravity(gravity),
                 )
             })

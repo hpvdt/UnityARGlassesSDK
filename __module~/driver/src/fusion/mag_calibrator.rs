@@ -4,6 +4,7 @@ use super::bad_mag_cause::{BadMagCause, BadReading};
 use super::calibration_quality::CalibrationQuality;
 use super::mag_model::{MagModel, CALIBRATION_PARAMETER_COUNT};
 use super::mag_samples::{ConcreteRow, MagSamples, Row};
+use super::sample_stats::SampleStats;
 const SHAPE_REGULARIZATION /*$\lambda$*/: f32 = 1.0e-3;
 /// Scale of the regularization target shape, in units of the identity.
 /// Algebraic ellipsoid fits under noise systematically inflate the ellipsoid
@@ -185,11 +186,7 @@ impl<const N: usize> Default for MagCalibrator<N> {
             model: MagModel {
                 samples: MagSamples::default(),
                 parameters: MagModel::<N>::parameter_prior(),
-                sample_row_count: Default::default(),
-                raw_sample_sum: Vector3::zeros(),
-                raw_outer_product_sum: Matrix3::zeros(),
-                sample_mean: Vector3::zeros(),
-                sample_rms_radius: 0.0,
+                stats: SampleStats::default(),
                 learned_gravity_projection: None,
                 gravity_frame: Matrix3::identity(),
                 gravity_weight: DEFAULT_GRAVITY_WEIGHT,
@@ -342,7 +339,7 @@ impl<const N: usize> MagCalibrator<N> {
             .chain((0..minibatch.random_draws).map_while(|_| {
                 Self::random_cache_row(
                     &mut random_state,
-                    self.model.sample_row_count,
+                    self.model.stats.sample_row_count,
                     minibatch.accepted_row,
                 )
                 .map(|row| {
@@ -353,7 +350,7 @@ impl<const N: usize> MagCalibrator<N> {
         let mut radial_rows = Vec::with_capacity(minibatch.random_draws + 1);
         let mut gravity_rows = Vec::with_capacity(minibatch.random_draws + 1);
         for (sample, gravity) in observations {
-            let normalized = self.model.normalized_sample(sample);
+            let normalized = self.model.stats.normalized_sample(sample);
             radial_rows.push(MagModel::<N>::features(normalized));
             if let Some(gravity) =
                 gravity.filter(|_| self.model.learned_gravity_projection.is_some())
@@ -407,17 +404,18 @@ impl<const N: usize> MagCalibrator<N> {
         current_gravity: Option<Vector3<f32>>,
         accepted_row: Option<usize>,
     ) {
-        if !self.model.sample_normalization_usable() {
+        if !self.model.stats.sample_normalization_usable() {
             return;
         }
         self.model
             .initialize_gravity_projection(current_sample, current_gravity);
 
-        let random_draws = if self.model.sample_row_count > usize::from(accepted_row.is_some()) {
-            self.minibatch_size.saturating_sub(1)
-        } else {
-            0
-        };
+        let random_draws =
+            if self.model.stats.sample_row_count > usize::from(accepted_row.is_some()) {
+                self.minibatch_size.saturating_sub(1)
+            } else {
+                0
+            };
         if self.apply_minibatch_update(MinibatchSpec {
             current_sample: Some(current_sample),
             current_gravity,
@@ -437,12 +435,12 @@ impl<const N: usize> MagCalibrator<N> {
         // enough to converge against. Replay steps reuse the current
         // learning rate without advancing its schedule, so annealing stays
         // tied to the rate of arriving data rather than to compute.
-        if self.calibration_initialized || self.model.sample_row_count == 0 {
+        if self.calibration_initialized || self.model.stats.sample_row_count == 0 {
             return;
         }
         let replay_count /*$p$*/ = self
             .replay_updates
-            .saturating_mul(self.model.sample_row_count)
+            .saturating_mul(self.model.stats.sample_row_count)
             / N.max(1);
         for _ in 0..replay_count {
             self.apply_minibatch_update(MinibatchSpec {
@@ -764,13 +762,13 @@ impl<const N: usize> MagCalibrator<N> {
         gravity_direction: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) -> bool {
-        let previous_sample_row_count = self.model.sample_row_count;
+        let previous_sample_row_count = self.model.stats.sample_row_count;
         let mut index_map = [u32::MAX; N];
         let mut retained_count = 0;
         for (index, map_slot) in index_map
             .iter_mut()
             .enumerate()
-            .take(self.model.sample_row_count)
+            .take(self.model.stats.sample_row_count)
         {
             let row = self.model.samples.view(index).copied();
             if timestamp_us.saturating_sub(self.sample_timestamps_us[index])
@@ -783,16 +781,16 @@ impl<const N: usize> MagCalibrator<N> {
                 }
                 retained_count += 1;
             } else {
-                self.model.remove_raw_moment(row.sample());
+                self.model.stats.remove_raw_moment(row.sample());
             }
         }
-        if retained_count != self.model.sample_row_count {
-            self.model.sample_row_count = retained_count;
+        if retained_count != self.model.stats.sample_row_count {
+            self.model.stats.sample_row_count = retained_count;
             if retained_count == 0 {
                 // Incremental subtraction can leave round-off residue after
                 // the last retained row expires. An empty cache has exact
                 // zero moments by definition.
-                self.model.clear_raw_moments();
+                self.model.stats.clear_raw_moments();
             }
             self.mean_distance = 0.0;
             self.remap_neighbor_cache(&index_map);
@@ -801,7 +799,7 @@ impl<const N: usize> MagCalibrator<N> {
 
         if !mag_sample.iter().all(|e| e.is_finite()) || mag_sample.norm_squared() <= f32::EPSILON {
             if expired {
-                self.model.refresh_normalization();
+                self.model.stats.refresh_normalization();
             }
             return false;
         }
@@ -810,8 +808,8 @@ impl<const N: usize> MagCalibrator<N> {
         }
         let mut accepted_row = None;
         // Check if buffer is not yet "initialized" with real measurements
-        if self.model.sample_row_count < N {
-            let count = self.model.sample_row_count;
+        if self.model.stats.sample_row_count < N {
+            let count = self.model.stats.sample_row_count;
             let squared_distances = self.squared_distances_to(mag_sample, count);
             for ((cache, len), &squared_distance) in self
                 .neighbor_cache
@@ -833,10 +831,10 @@ impl<const N: usize> MagCalibrator<N> {
                     complete,
                 );
             }
-            self.model.add_raw_moment(mag_sample);
+            self.model.stats.add_raw_moment(mag_sample);
             self.add_sample_at(count, mag_sample, gravity_direction, timestamp_us);
             self.reset_row_cache(count, &squared_distances, count);
-            self.model.sample_row_count += 1;
+            self.model.stats.sample_row_count += 1;
             accepted_row = Some(count);
         }
         // Otherwise check which sample may be best to replace
@@ -891,15 +889,16 @@ impl<const N: usize> MagCalibrator<N> {
                     );
                 }
                 self.model
+                    .stats
                     .remove_raw_moment(self.model.samples.view(replacement_row).sample());
-                self.model.add_raw_moment(mag_sample);
+                self.model.stats.add_raw_moment(mag_sample);
                 self.add_sample_at(replacement_row, mag_sample, gravity_direction, timestamp_us);
                 self.reset_row_cache(replacement_row, &squared_distances, N);
                 accepted_row = Some(replacement_row);
             }
         }
         if expired || accepted_row.is_some() {
-            self.model.refresh_normalization();
+            self.model.stats.refresh_normalization();
         }
         self.update_online_optimizer(mag_sample, gravity_direction, accepted_row);
         true

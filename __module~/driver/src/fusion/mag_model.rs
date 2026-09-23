@@ -3,6 +3,7 @@ use nalgebra::{Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
 use super::bad_mag_cause::BadCalibration;
 use super::mag_calibrator::{ONLINE_SCALE_EPSILON, SHAPE_PRIOR_SCALE};
 use super::mag_samples::{MagSamples, Row};
+use super::sample_stats::SampleStats;
 use super::CalibrationQuality;
 
 /// Number of ellipsoid coefficients fitted by the magnetometer calibration
@@ -74,38 +75,24 @@ pub(super) struct CalibrationCandidate {
 
 /// Calibration model state behind `MagCalibrator`: the retained magnetometer
 /// sample cache the quality statistics are estimated from, the online
-/// ellipsoid coefficients with the sample normalization they are expressed
-/// in, the learned gravity-projection state of the optional surrogate, and
-/// the live quality factors derived from all of the above. Grouping the
-/// fields keeps the quality-estimation inputs (`update_quality`) together
-/// and separate from the optimizer bookkeeping, diversity neighbor cache,
-/// and publication state that the calibrator owns itself.
+/// ellipsoid coefficients with the incrementally maintained cache statistics
+/// ([`SampleStats`]) giving the sample normalization they are expressed in,
+/// the learned gravity-projection state of the optional surrogate, and the
+/// live quality factors derived from all of the above. Grouping the fields
+/// keeps the quality-estimation inputs (`update_quality`) together and
+/// separate from the optimizer bookkeeping, diversity neighbor cache, and
+/// publication state that the calibrator owns itself.
 pub(super) struct MagModel<const N: usize> {
     /// Retained magnetometer sample cache: the raw samples and the optional
     /// gravity direction carried by each row.
     pub(super) samples: MagSamples<N>,
     pub(super) parameters: SVector<f32, CALIBRATION_PARAMETER_COUNT>, /*$\theta$*/
-    // FIXME: The following 5 states are defined for accelerated, continuous update of sample statistics
-    //  they can be extracted into a new struct and file "SampleStats"/"sample_stats.rs", including all methods that exclusively process them
-    /// Number of retained cache rows `0..sample_row_count`: the zeroth raw
-    /// moment the first and second moments below are averaged over,
-    /// maintained on append, replacement, and expiry alongside them.
-    pub(super) sample_row_count: usize,
-    /// Raw first moment of the retained magnetometer samples, maintained
-    /// incrementally on append, replacement, and expiry. Backs
-    /// `raw_mean_and_covariance` and thus `refresh_normalization`.
-    pub(super) raw_sample_sum: Vector3<f64>,
-    /// Raw second outer-product moment of the retained magnetometer
-    /// samples; see `raw_sample_sum`.
-    pub(super) raw_outer_product_sum: Matrix3<f64>,
-    /// Sample mean $\mu$ of the retained magnetometer samples: the center of
-    /// the sample normalization $u_i = (x_i - \mu) / r$.
-    pub(super) sample_mean: Vector3<f32>, /*$\mu$*/
-    /// RMS radius $r$ of the retained magnetometer samples: the scale of the
-    /// sample normalization $u_i = (x_i - \mu) / r$. Zero on an empty or
-    /// single-point cache, which makes the normalization unusable; see
-    /// `sample_normalization_usable`.
-    pub(super) sample_rms_radius: f32, /*$r$*/
+    /// Incrementally maintained statistics of the retained cache rows:
+    /// the row count and raw moments backing the sample normalization
+    /// $(\mu, r)$ it derives. Grouped in [`SampleStats`] so append,
+    /// replacement, and expiry update all of them together in $O(1)$
+    /// without a row scan.
+    pub(super) stats: SampleStats,
     /// Learned scalar $\kappa$ of the gravity surrogate: the projection of
     /// the preconditioned gravity direction $\tilde{g}_i = A_w^{-1} g_i$
     /// onto the ellipsoid normal $n_i = Q u_i + q / 2$ at a retained row,
@@ -139,78 +126,6 @@ pub(super) struct MagModel<const N: usize> {
 }
 
 impl<const N: usize> MagModel<N> {
-    pub(super) fn normalized_sample(&self, sample: Vector3<f32>) -> Vector3<f32> {
-        (sample - self.sample_mean) / self.sample_rms_radius
-    }
-
-    /// Whether the sample normalization $(\mu, r)$ of the retained
-    /// magnetometer samples is usable: both finite and the radius above
-    /// `f32::EPSILON`, which requires two distinct samples. Derived from the
-    /// normalization fields at point of use, so usability can never disagree
-    /// with the state it describes.
-    pub(super) fn sample_normalization_usable(&self) -> bool {
-        self.sample_mean.iter().all(|value| value.is_finite())
-            && self.sample_rms_radius.is_finite()
-            && self.sample_rms_radius > f32::EPSILON
-    }
-
-    pub(super) fn add_raw_moment(&mut self, sample: Vector3<f32>) {
-        let sample = sample.cast::<f64>();
-        self.raw_sample_sum += sample;
-        self.raw_outer_product_sum += sample * sample.transpose();
-    }
-
-    pub(super) fn remove_raw_moment(&mut self, sample: Vector3<f32>) {
-        let sample = sample.cast::<f64>();
-        self.raw_sample_sum -= sample;
-        self.raw_outer_product_sum -= sample * sample.transpose();
-    }
-
-    pub(super) fn clear_raw_moments(&mut self) {
-        self.raw_sample_sum = Vector3::zeros();
-        self.raw_outer_product_sum = Matrix3::zeros();
-    }
-
-    pub(super) fn raw_mean_and_covariance(&self) -> Option<(Vector3<f32>, Matrix3<f32>)> {
-        if self.sample_row_count == 0 {
-            return None;
-        }
-        let count = self.sample_row_count as f64;
-        let mean = self.raw_sample_sum / count;
-        let covariance = self.raw_outer_product_sum / count - mean * mean.transpose();
-        let covariance = 0.5 * (covariance + covariance.transpose());
-        let mean = mean.cast::<f32>();
-        let covariance = covariance.cast::<f32>();
-        if mean.iter().all(|value| value.is_finite())
-            && covariance.iter().all(|value| value.is_finite())
-        {
-            Some((mean, covariance))
-        } else {
-            None
-        }
-    }
-
-    /// Recomputes the current cache normalization from the raw moments
-    /// without touching the working state. Every append, replacement, and
-    /// expiry drift the mean and radius; the working coefficients keep
-    /// their meaning in the new normalization directly, because the drift
-    /// per cache mutation is `O(1 / sample_row_count)` and the online optimizer
-    /// is already designed to track the moving convex optimum as cache
-    /// replacements improve coverage. Working state is therefore never
-    /// rebased or reset: only a zero-radius (empty or single-point) cache
-    /// makes the normalization unusable, which keeps the optimizer
-    /// idle until two distinct samples exist and reports quality zero
-    /// through the usual unusable-candidate path.
-    pub(super) fn refresh_normalization(&mut self) {
-        let Some((sample_mean, covariance)) = self.raw_mean_and_covariance() else {
-            self.sample_mean = Vector3::zeros();
-            self.sample_rms_radius = 0.0;
-            return;
-        };
-        self.sample_mean = sample_mean;
-        self.sample_rms_radius = covariance.trace().sqrt();
-    }
-
     /// Prior coefficient vector of the working ellipsoid state: the
     /// shape-prior scale on the `Q` diagonal and zero elsewhere. It is both
     /// the initial value of `parameters` and the center of the shape
@@ -263,14 +178,14 @@ impl<const N: usize> MagModel<N> {
         let observation = current_gravity
             .map(|gravity| (current_sample, gravity))
             .or_else(|| {
-                (0..self.sample_row_count).find_map(|row| {
+                (0..self.stats.sample_row_count).find_map(|row| {
                     let row = self.samples.view(row);
                     row.gravity().map(|gravity| (row.sample(), gravity))
                 })
             });
         if let Some((sample, gravity)) = observation {
             let features = Self::gravity_features(
-                self.normalized_sample(sample),
+                self.stats.normalized_sample(sample),
                 self.preconditioned_gravity(gravity),
             );
             let projection = features.dot(&self.parameters);
@@ -383,14 +298,14 @@ impl<const N: usize> MagModel<N> {
     /// rank-deficient under any centering.
     pub(super) fn mean_centered_coverage(&self) -> f32 {
         let mut gram_sum = CoverageGramMatrix::zeros();
-        for row in 0..self.sample_row_count {
-            let centered = self.samples.view(row).sample() - self.sample_mean;
+        for row in 0..self.stats.sample_row_count {
+            let centered = self.samples.view(row).sample() - self.stats.sample_mean;
             if let Some(direction) = centered.try_normalize(f32::EPSILON) {
                 let feature = Self::coverage_feature(direction);
                 gram_sum += feature * feature.transpose();
             }
         }
-        Self::coverage_from_gram(&gram_sum, self.sample_row_count)
+        Self::coverage_from_gram(&gram_sum, self.stats.sample_row_count)
     }
 
     /// Radial fitness in `[0, 1]`: a linear ramp from 1 at zero RMS to 0 at
@@ -443,7 +358,7 @@ impl<const N: usize> MagModel<N> {
     /// Derives one finite SPD correction candidate from the current online
     /// ellipsoid state without scanning retained rows.
     pub(super) fn working_candidate(&self) -> Result<CalibrationCandidate, BadCalibration> {
-        if !self.sample_normalization_usable() {
+        if !self.stats.sample_normalization_usable() {
             return Err(BadCalibration::Unsolveable {
                 message: "sample normalization is non-finite or zero",
             });
@@ -486,8 +401,8 @@ impl<const N: usize> MagModel<N> {
         );
         let correction =
             shape_eigen.eigenvectors * square_root * shape_eigen.eigenvectors.transpose()
-                / self.sample_rms_radius;
-        let offset = self.sample_mean + self.sample_rms_radius * normalized_offset;
+                / self.stats.sample_rms_radius;
+        let offset = self.stats.sample_mean + self.stats.sample_rms_radius * normalized_offset;
         if !offset.iter().all(|value| value.is_finite())
             || !correction.iter().all(|value| value.is_finite())
         {
@@ -539,7 +454,7 @@ impl<const N: usize> MagModel<N> {
     /// dips: the Air 1 post-warmup fitness now stays above the 0.5
     /// stability floor for thousands of consecutive evaluations.
     pub(super) fn update_quality(&mut self) -> Option<CalibrationCandidate> {
-        if self.sample_row_count < CALIBRATION_PARAMETER_COUNT {
+        if self.stats.sample_row_count < CALIBRATION_PARAMETER_COUNT {
             self.quality = CalibrationQuality::ZERO;
             return None;
         }
@@ -561,13 +476,16 @@ impl<const N: usize> MagModel<N> {
         // non-finite accumulation marks the statistic unusable, matching
         // the zero-quality path above.
         let mut radial_square_sum = 0.0f32;
-        for row in 0..self.sample_row_count {
-            let residual = Self::features(self.normalized_sample(self.samples.view(row).sample()))
-                .dot(&self.parameters)
+        for row in 0..self.stats.sample_row_count {
+            let residual = Self::features(
+                self.stats
+                    .normalized_sample(self.samples.view(row).sample()),
+            )
+            .dot(&self.parameters)
                 - 1.0;
             radial_square_sum += residual * residual;
         }
-        let radial_mean_square = radial_square_sum / self.sample_row_count as f32;
+        let radial_mean_square = radial_square_sum / self.stats.sample_row_count as f32;
         if !radial_mean_square.is_finite() {
             self.quality = CalibrationQuality::ZERO;
             return None;
@@ -585,11 +503,11 @@ impl<const N: usize> MagModel<N> {
         let mut gravity_count = 0usize;
         let gravity_mean_square = match self.learned_gravity_projection {
             Some(kappa) if self.gravity_weight > 0.0 => {
-                for row in 0..self.sample_row_count {
+                for row in 0..self.stats.sample_row_count {
                     let row = self.samples.view(row);
                     if let Some(gravity) = row.gravity() {
                         let projection = Self::gravity_features(
-                            self.normalized_sample(row.sample()),
+                            self.stats.normalized_sample(row.sample()),
                             self.preconditioned_gravity(gravity),
                         )
                         .dot(&self.parameters);
