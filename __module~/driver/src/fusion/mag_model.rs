@@ -85,6 +85,8 @@ pub(super) struct MagModel<const N: usize> {
     /// gravity direction carried by each row.
     pub(super) samples: MagSamples<N>,
     pub(super) parameters: SVector<f32, CALIBRATION_PARAMETER_COUNT>, /*$\theta$*/
+    // FIXME: The following 5 states are defined for accelerated, continuous update of sample statistics
+    //  they can be extracted into a new struct and file "SampleStats"/"sample_stats.rs", including all methods that exclusively process them
     /// Number of retained cache rows `0..sample_row_count`: the zeroth raw
     /// moment the first and second moments below are averaged over,
     /// maintained on append, replacement, and expiry alongside them.
