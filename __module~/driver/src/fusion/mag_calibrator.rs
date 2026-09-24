@@ -762,7 +762,6 @@ impl<const N: usize> MagCalibrator<N> {
         gravity_direction: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) -> bool {
-        let previous_sample_row_count = self.model.stats.sample_row_count;
         let mut index_map = [u32::MAX; N];
         let mut retained_count = 0;
         for (index, map_slot) in index_map
@@ -795,12 +794,8 @@ impl<const N: usize> MagCalibrator<N> {
             self.mean_distance = 0.0;
             self.remap_neighbor_cache(&index_map);
         }
-        let expired = retained_count != previous_sample_row_count;
 
         if !mag_sample.iter().all(|e| e.is_finite()) || mag_sample.norm_squared() <= f32::EPSILON {
-            if expired {
-                self.model.stats.refresh_normalization();
-            }
             return false;
         }
         if N == 0 {
@@ -896,9 +891,6 @@ impl<const N: usize> MagCalibrator<N> {
                 self.reset_row_cache(replacement_row, &squared_distances, N);
                 accepted_row = Some(replacement_row);
             }
-        }
-        if expired || accepted_row.is_some() {
-            self.model.stats.refresh_normalization();
         }
         self.update_online_optimizer(mag_sample, gravity_direction, accepted_row);
         true

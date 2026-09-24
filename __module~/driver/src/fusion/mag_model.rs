@@ -297,9 +297,10 @@ impl<const N: usize> MagModel<N> {
     /// score exactly where it must be decisive. A near-planar cache stays
     /// rank-deficient under any centering.
     pub(super) fn mean_centered_coverage(&self) -> f32 {
+        let (mu /*$\mu$*/, _) = self.stats.normalization();
         let mut gram_sum = CoverageGramMatrix::zeros();
         for row in 0..self.stats.sample_row_count {
-            let centered = self.samples.view(row).sample() - self.stats.sample_mean;
+            let centered = self.samples.view(row).sample() - mu;
             if let Some(direction) = centered.try_normalize(f32::EPSILON) {
                 let feature = Self::coverage_feature(direction);
                 gram_sum += feature * feature.transpose();
@@ -363,6 +364,7 @@ impl<const N: usize> MagModel<N> {
                 message: "sample normalization is non-finite or zero",
             });
         }
+        let (mu /*$\mu$*/, r /*$r$*/) = self.stats.normalization();
         let parameters = self.parameters;
         if !parameters.iter().all(|value| value.is_finite()) {
             return Err(BadCalibration::Unsolveable {
@@ -400,9 +402,8 @@ impl<const N: usize> MagModel<N> {
                 .map(|value| (value / ellipsoid_scale).sqrt()),
         );
         let correction =
-            shape_eigen.eigenvectors * square_root * shape_eigen.eigenvectors.transpose()
-                / self.stats.sample_rms_radius;
-        let offset = self.stats.sample_mean + self.stats.sample_rms_radius * normalized_offset;
+            shape_eigen.eigenvectors * square_root * shape_eigen.eigenvectors.transpose() / r;
+        let offset = mu + r * normalized_offset;
         if !offset.iter().all(|value| value.is_finite())
             || !correction.iter().all(|value| value.is_finite())
         {

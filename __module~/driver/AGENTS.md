@@ -308,8 +308,8 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$q$:** Ellipsoid linear coefficient vector in $u_i^T Q\, u_i + q^T u_i = 1$ (code variable `linear` returned
   by `MagModel::unpack_ellipsoid_coefficients`); $3 \times 1$.
 - **$R$:** Diagonal feature-space regularization weights $\operatorname{diag}(1, 1, 1, 2, 2, 2, 0, 0, 0)$; $9 \times 9$.
-- **$r$:** RMS radius of the retained magnetometer samples (code field `sample_rms_radius` of
-  `sample_stats::SampleStats`, field `stats` of `mag_model::MagModel`).
+- **$r$:** RMS radius of the retained magnetometer samples (second return value of
+  `SampleStats::normalization`, field `stats` of `mag_model::MagModel`).
 - **$s_i$:** Gravity normal projection, $s_i = \tilde{g}_i^T n_i$.
 - **$s_{\theta,j}$, $s_\kappa$:** Diagonal feature-energy scales normalizing the optimizer descent step,
   $s_{\theta,j} = \frac{1}{|B|} \sum_{i \in B} \phi_{i,j}^2 + \frac{w_g}{\sigma_g^2 |G|} \sum_{i \in G}
@@ -329,8 +329,8 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$\kappa$:** Learned gravity projection scalar (code field `learned_gravity_projection` of
   `mag_model::MagModel`).
 - **$\lambda$:** Shape regularization weight (code constant `SHAPE_REGULARIZATION`).
-- **$\mu$:** Sample mean of the retained magnetometer samples (code field `sample_mean` of
-  `sample_stats::SampleStats`, field `stats` of `mag_model::MagModel`); $3 \times 1$.
+- **$\mu$:** Sample mean of the retained magnetometer samples (first return value of
+  `SampleStats::normalization`, field `stats` of `mag_model::MagModel`); $3 \times 1$.
 - **$\sigma_g$:** Gravity projection scale: the RMS projection $\sqrt{\frac{1}{n_g} \sum_i (\psi_i^T \theta)^2}$
   over the gravity-carrying rows of a minibatch or cache scan, frozen per optimizer update with its square
   floored at $\epsilon$ (code variable `gravity_scale`); scalar.
