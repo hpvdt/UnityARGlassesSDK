@@ -98,8 +98,10 @@ impl<const N: usize> MagSamples<N> {
     }
 
     /// Writes `row` into the sample matrix and gravity array at `index`.
-    pub(super) fn set_row(&mut self, index: usize, row: ConcreteRow) {
-        self.sample_matrix.set_row(index, &row.sample.transpose());
-        self.gravity_directions[index] = row.gravity;
+    /// Accepts either an owned [`ConcreteRow`] or a borrowed [`Slice`] of
+    /// another cache.
+    pub(super) fn set_row(&mut self, index: usize, row: impl Row) {
+        self.sample_matrix.set_row(index, &row.sample().transpose());
+        self.gravity_directions[index] = row.gravity();
     }
 }
