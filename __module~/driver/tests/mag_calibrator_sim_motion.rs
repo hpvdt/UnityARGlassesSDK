@@ -54,6 +54,7 @@ struct PostCorrectionSample {
     error_degrees: Option<f32>,
     confidence: f32,
     radial: f32,
+    regularization: f32,
     gravity: f32,
     coverage: f32,
 }
@@ -67,10 +68,12 @@ struct CheckpointStats {
     worst_error_degrees: f32,
     mean_confidence: f64,
     mean_radial: f64,
+    mean_regularization: f64,
     mean_gravity: f64,
     mean_coverage: f64,
     min_confidence: f32,
     min_confidence_radial: f32,
+    min_confidence_regularization: f32,
     min_confidence_gravity: f32,
     min_confidence_coverage: f32,
 }
@@ -112,10 +115,13 @@ fn build_checkpoints(samples: &[PostCorrectionSample]) -> Vec<CheckpointStats> {
                 worst_error_degrees: worst_error,
                 mean_confidence: mean(|sample| sample.confidence),
                 mean_radial: mean(|sample| sample.radial),
+                mean_regularization: mean(|sample| sample.regularization),
                 mean_gravity: mean(|sample| sample.gravity),
                 mean_coverage: mean(|sample| sample.coverage),
                 min_confidence: worst_confidence_sample.map_or(0.0, |sample| sample.confidence),
                 min_confidence_radial: worst_confidence_sample.map_or(0.0, |sample| sample.radial),
+                min_confidence_regularization: worst_confidence_sample
+                    .map_or(0.0, |sample| sample.regularization),
                 min_confidence_gravity: worst_confidence_sample
                     .map_or(0.0, |sample| sample.gravity),
                 min_confidence_coverage: worst_confidence_sample
@@ -224,17 +230,19 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
             .evaluate_correct(raw_frd, gravity_direction, timestamp);
         stats.eval_time += eval_start.elapsed();
         stats.eval_count += 1;
-        let (confidence, radial_fitness, gravity_fitness, coverage) = result.as_ref().map_or_else(
-            |_| (fusion.magCalibrator.get_confidence(), 0.0, 0.0, 0.0),
-            |result| {
-                (
-                    result.confidence(),
-                    result.radial_fitness,
-                    result.gravity_fitness,
-                    result.coverage,
-                )
-            },
-        );
+        let (confidence, radial_fitness, regularization_loss, gravity_fitness, coverage) =
+            result.as_ref().map_or_else(
+                |_| (fusion.magCalibrator.get_confidence(), 0.0, 0.0, 0.0, 0.0),
+                |result| {
+                    (
+                        result.confidence(),
+                        result.radial_fitness,
+                        result.regularization_loss,
+                        result.gravity_fitness,
+                        result.coverage,
+                    )
+                },
+            );
         stats.confidence_sum += f64::from(confidence);
         stats.confidence_count += 1;
         max_confidence = max_confidence.max(confidence);
@@ -273,6 +281,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
                 error_degrees: angle_degrees,
                 confidence,
                 radial: radial_fitness,
+                regularization: regularization_loss,
                 gravity: gravity_fitness,
                 coverage,
             });
@@ -412,6 +421,14 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         checkpoint_series(&stats.checkpoints, |checkpoint| checkpoint.mean_radial, 6),
     );
     println!(
+        "    - regularization: {}",
+        checkpoint_series(
+            &stats.checkpoints,
+            |checkpoint| checkpoint.mean_regularization,
+            6
+        ),
+    );
+    println!(
         "    - gravity: {}",
         checkpoint_series(&stats.checkpoints, |checkpoint| checkpoint.mean_gravity, 6),
     );
@@ -432,6 +449,14 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         checkpoint_series(
             &stats.checkpoints,
             |checkpoint| f64::from(checkpoint.min_confidence_radial),
+            6
+        ),
+    );
+    println!(
+        "    - regularization: {}",
+        checkpoint_series(
+            &stats.checkpoints,
+            |checkpoint| f64::from(checkpoint.min_confidence_regularization),
             6
         ),
     );
@@ -575,6 +600,10 @@ fn print_avg_stats(runs: &[RunStats]) {
         avg_checkpoint_series(|checkpoint| checkpoint.mean_radial, 6),
     );
     println!(
+        "    - regularization: {}",
+        avg_checkpoint_series(|checkpoint| checkpoint.mean_regularization, 6),
+    );
+    println!(
         "    - gravity: {}",
         avg_checkpoint_series(|checkpoint| checkpoint.mean_gravity, 6),
     );
@@ -589,6 +618,10 @@ fn print_avg_stats(runs: &[RunStats]) {
     println!(
         "    - radial: {}",
         worst_checkpoint_series(|checkpoint| f64::from(checkpoint.min_confidence_radial)),
+    );
+    println!(
+        "    - regularization: {}",
+        worst_checkpoint_series(|checkpoint| f64::from(checkpoint.min_confidence_regularization)),
     );
     println!(
         "    - gravity: {}",

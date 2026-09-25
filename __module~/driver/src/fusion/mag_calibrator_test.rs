@@ -1,22 +1,27 @@
 use nalgebra::{Matrix3, SVector, UnitQuaternion, Vector3};
 
-use super::super::mag_model::{CoverageGramMatrix, MagModel, CALIBRATION_PARAMETER_COUNT};
+use super::super::mag_model::{
+    CoverageGramMatrix, MagModel, CALIBRATION_PARAMETER_COUNT, SHAPE_PRIOR_SCALE,
+    SHAPE_REGULARIZATION,
+};
 use super::super::mag_samples::Row;
 use super::super::BadMagCause;
 use super::{
     MagCalibrationResult, MagCalibrator, MinibatchSpec, MIN_PUBLICATION_CONFIDENCE,
-    MIN_PUBLICATION_STREAK, ONLINE_SCALE_EPSILON, SHAPE_REGULARIZATION,
+    MIN_PUBLICATION_STREAK, ONLINE_SCALE_EPSILON,
 };
 
 impl<const N: usize> MagCalibrator<N> {
-    /// Independently recomputes the radial mean square of the current
-    /// working parameters over the retained cache: the algebraic residual
-    /// `phi(u_i)^T theta - 1` in normalized cache coordinates, row by row in
-    /// ascending order. Deliberately duplicates the accumulation inside
-    /// `update_quality` instead of calling it, so the tests cross-check the
-    /// production path. Gated on a valid working candidate to mirror the
-    /// gating in `update_quality`.
-    fn radial_mean_square_for_test(&self) -> Option<f32> {
+    /// Independently recomputes the two terms of the radial online
+    /// objective of the current working parameters: the mean square of the
+    /// algebraic residual `phi(u_i)^T theta - 1` over the retained cache in
+    /// normalized cache coordinates, row by row in ascending order, and the
+    /// shape-regularization loss `0.5 * lambda * ||Q - c * I||_F^2`.
+    /// Deliberately duplicates the accumulation inside `update_quality`
+    /// instead of calling it, so the tests cross-check the production path.
+    /// Gated on a valid working candidate to mirror the gating in
+    /// `update_quality`.
+    fn radial_objective_for_test(&self) -> Option<(f32, f32)> {
         self.model.working_candidate().ok()?;
         let mut sum = 0.0f32;
         for row in 0..self.model.stats.sample_row_count {
@@ -29,7 +34,14 @@ impl<const N: usize> MagCalibrator<N> {
                 - 1.0;
             sum += residual * residual;
         }
-        Some(sum / self.model.stats.sample_row_count as f32)
+        let (shape, _) = MagModel::<N>::unpack_ellipsoid_coefficients(&self.model.parameters);
+        let regularization_loss = 0.5
+            * SHAPE_REGULARIZATION
+            * (shape - Matrix3::identity() * SHAPE_PRIOR_SCALE).norm_squared();
+        Some((
+            sum / self.model.stats.sample_row_count as f32,
+            regularization_loss,
+        ))
     }
 
     /// Independently recomputes the gravity mean square of the current
@@ -73,8 +85,10 @@ impl<const N: usize> MagCalibrator<N> {
             return (false, 0.0, 0.0, 0.0);
         }
         let coverage = self.model.mean_centered_coverage();
-        let radial_fitness =
-            MagModel::<N>::radial_fitness_score(self.radial_mean_square_for_test());
+        let radial_fitness = MagModel::<N>::radial_fitness_score(
+            self.radial_objective_for_test()
+                .map(|(mean_square, regularization_loss)| mean_square + 2.0 * regularization_loss),
+        );
         let gravity_fitness =
             MagModel::<N>::gravity_fitness_score(self.gravity_mean_square_for_test());
         (true, coverage, radial_fitness, gravity_fitness)
@@ -388,7 +402,7 @@ fn mag_calibrator_keeps_last_correction_after_rejected_refit() {
     // recomputed from the retained rows: the expired history refilled with
     // identical samples leaves a zero-radius normalization, so no usable
     // candidate exists to score.
-    assert_eq!(calibrator.radial_mean_square_for_test(), None);
+    assert_eq!(calibrator.radial_objective_for_test(), None);
 }
 
 #[test]
@@ -428,22 +442,26 @@ fn mag_calibrator_fitness_recovers_after_full_expiry() {
     }
 
     // Once enough fresh rows are retained, the reported fitness is exactly
-    // the mean square algebraic residual recomputed over the calibrator's
-    // own retained cache with its current working parameters; nothing from
-    // the expired rows survives in it.
+    // the radial objective recomputed over the calibrator's own retained
+    // cache with its current working parameters — the mean square algebraic
+    // residual plus twice the shape-regularization loss; nothing from the
+    // expired rows survives in it.
     let mut result = None;
     for i in 7..63 {
         let raw = offset + distortion * sample_direction(i, 63);
         result = Some(calibrator.evaluate_correct(raw, None, 1).unwrap());
     }
     let result = result.unwrap();
-    let radial_mean_square = calibrator
-        .radial_mean_square_for_test()
+    let (radial_mean_square, regularization_loss) = calibrator
+        .radial_objective_for_test()
         .expect("recovered cache produced no working candidate");
     assert_eq!(
         result.radial_fitness,
-        MagCalibrator::<63>::fitness_score_for_test(Some(radial_mean_square))
+        MagCalibrator::<63>::fitness_score_for_test(Some(
+            radial_mean_square + 2.0 * regularization_loss
+        ))
     );
+    assert_eq!(result.regularization_loss, regularization_loss);
     // No gravity direction was ever supplied, so the gravity factor stays
     // neutral.
     assert_eq!(result.gravity_fitness, 1.0);
@@ -509,13 +527,16 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
     // still carries the expired rows' gradients (non-strict by design; see
     // "Known adaptation limitation" in the fusion AGENTS.md).
     let result_a = result_a.unwrap().unwrap();
-    let radial_mean_square = lifespan_a
-        .radial_mean_square_for_test()
+    let (radial_mean_square, regularization_loss) = lifespan_a
+        .radial_objective_for_test()
         .expect("retained cache produced no working candidate");
     assert_eq!(
         result_a.radial_fitness,
-        MagCalibrator::<63>::fitness_score_for_test(Some(radial_mean_square))
+        MagCalibrator::<63>::fitness_score_for_test(Some(
+            radial_mean_square + 2.0 * regularization_loss
+        ))
     );
+    assert_eq!(result_a.regularization_loss, regularization_loss);
     let gravity_mean_square = lifespan_a
         .gravity_mean_square_for_test()
         .expect("retained cache carried no gravity statistic");
@@ -523,6 +544,43 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
         result_a.gravity_fitness,
         MagCalibrator::<63>::gravity_fitness_score_for_test(Some(gravity_mean_square))
     );
+}
+
+#[test]
+fn mag_calibrator_radial_fitness_scores_the_full_objective() {
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
+
+    // Pending quality (fewer than nine retained rows) reports no
+    // regularization statistic.
+    let mut calibrator = MagCalibrator::<63>::new();
+    let result = calibrator
+        .evaluate_correct(offset + distortion * sample_direction(0, 63), None, 0)
+        .unwrap();
+    assert_eq!(result.confidence(), 0.0);
+    assert_eq!(result.regularization_loss, 0.0);
+
+    // Once the working candidate has moved off the prior, the
+    // regularization loss is positive and the radial fitness scores the
+    // full radial objective — the data residual mean square plus twice the
+    // loss, i.e. the RMS-equivalent of 2 * J_r — so it is strictly below
+    // what a data-only score would report, just as the objective the
+    // optimizer descends exceeds its data term.
+    let mut calibrator = seeded_calibrator::<63>(offset, distortion);
+    let result = calibrator
+        .evaluate_correct(offset + distortion * sample_direction(0, 63), None, 1)
+        .unwrap();
+    let (radial_mean_square, regularization_loss) = calibrator
+        .radial_objective_for_test()
+        .expect("seeded calibrator produced no working candidate");
+    assert!(regularization_loss > 0.0);
+    assert_eq!(result.regularization_loss, regularization_loss);
+    let data_only = MagCalibrator::<63>::fitness_score_for_test(Some(radial_mean_square));
+    let combined = MagCalibrator::<63>::fitness_score_for_test(Some(
+        radial_mean_square + 2.0 * regularization_loss,
+    ));
+    assert!(combined < data_only);
+    assert_eq!(result.radial_fitness, combined);
 }
 
 /// Asserts that two calibrators retain exactly the same rows with the same

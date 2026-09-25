@@ -2,15 +2,9 @@ use nalgebra::{DMatrix, DVector, Matrix3, SVector, Vector3};
 
 use super::bad_mag_cause::{BadMagCause, BadReading};
 use super::calibration_quality::CalibrationQuality;
-use super::mag_model::{MagModel, CALIBRATION_PARAMETER_COUNT};
+use super::mag_model::{MagModel, CALIBRATION_PARAMETER_COUNT, SHAPE_REGULARIZATION};
 use super::mag_samples::{ConcreteRow, MagSamples, Row};
 use super::sample_stats::SampleStats;
-const SHAPE_REGULARIZATION /*$\lambda$*/: f32 = 1.0e-3;
-/// Scale of the regularization target shape, in units of the identity.
-/// Algebraic ellipsoid fits under noise systematically inflate the ellipsoid
-/// (underestimate the eigenvalues of the shape matrix), so the prior centers
-/// on a shape larger than the ideal sphere to counter that bias.
-pub(super) const SHAPE_PRIOR_SCALE /*$c$*/: f32 = 2.0;
 /// Confidence required for a working candidate to advance the publication
 /// streak. This is the highest tested threshold at which every fixed SimMotion
 /// regression seed completes the 2000-evaluation budget; the rank-deficient
@@ -280,12 +274,6 @@ impl<const N: usize> MagCalibrator<N> {
         }
     }
 
-    fn regularization_loss(parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>) -> f32 {
-        let (shape, _) = MagModel::<N>::unpack_ellipsoid_coefficients(parameters);
-        0.5 * SHAPE_REGULARIZATION
-            * (shape - Matrix3::identity() * SHAPE_PRIOR_SCALE).norm_squared()
-    }
-
     fn next_random(random_state: &mut u64) -> u64 {
         *random_state = random_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut value = *random_state;
@@ -383,7 +371,7 @@ impl<const N: usize> MagCalibrator<N> {
         let (features, gravity_features, _) = self.minibatch_feature_matrices(minibatch);
         let residuals = &features * parameters - DVector::from_element(features.nrows(), 1.0);
         let mut objective = 0.5 * residuals.norm_squared() / features.nrows() as f32
-            + Self::regularization_loss(parameters);
+            + MagModel::<N>::regularization_loss(parameters);
         if gravity_features.nrows() > 0 {
             let residuals = (&gravity_features * parameters
                 - DVector::from_element(gravity_features.nrows(), kappa))

@@ -240,15 +240,18 @@ still-forming cache keep chord-like directions, which collapses the smallest eig
 survives that drift. The cache mean is the center, not the fitted hard-iron offset: the offset's component along the
 thinnest data direction is itself unconstrained for near-planar support, which destabilizes the score exactly where it
 must be decisive. Rank deficiency detects lower-dimensional support by construction: near-planar motion leaves the Gram
-matrix rank-deficient and scores near zero, so partial-arc caches cannot inflate coverage. Radial fitness is
-the mean square of the algebraic ellipsoid residual $e_{r,i} = \phi(u_i)^T \theta - 1$ recomputed over every
-retained row with the current working parameters on each quality update, sharing the same $O(N)$ cache rescan as
-coverage; this is exactly the radial data term of the online objective, so fitness directly tracks optimizer
-convergence on the retained support. The shape regularizer is deliberately excluded: fitness is a data-fit
-statistic, not a prior check, and the statistic is strictly bounded by the retained cache and never outlives the
-rows that produced it. Radial fitness is a linear ramp from `1` at radial RMS `0` to `0` at radial RMS `0.5`;
-the ceiling is calibrated against the fixed-seed SimMotion regression, under which converged fits sit at
-algebraic RMS roughly `0.06`–`0.15`. The previous physical residual $\|A (x_i - b)\| - 1$ scaled against the
+matrix rank-deficient and scores near zero, so partial-arc caches cannot inflate coverage. Radial fitness
+scores the full radial objective $J_r$ of the online optimizer — the mean square of the algebraic ellipsoid
+residual $e_{r,i} = \phi(u_i)^T \theta - 1$ over the retained rows plus the shape regularizer, summed exactly
+as in $J_r$ where the regularizer enters once rather than per observation — recomputed with the current working
+parameters on each quality update, sharing the same $O(N)$ cache rescan as coverage. The scored statistic is
+$2 J_r$, so the ramp below operates on its RMS-equivalent $\sqrt{2 J_r}$, and a fitness drop directly signals
+optimizer regress rather than a mismatch between two differently scaled residuals. The data term is strictly
+bounded by the retained cache and never outlives the rows that produced it; the regularizer depends only on the
+working coefficients and is also reported separately as `regularization_loss`. Radial fitness is a linear ramp
+from `1` at radial RMS `0` to `0` at radial RMS `0.5`; the ceiling is calibrated against the fixed-seed
+SimMotion regression, under which converged fits sit at $\sqrt{2 J_r}$ roughly `0.06`–`0.15`. The previous
+physical residual $\|A (x_i - b)\| - 1$ scaled against the
 algebraic residual by the state-dependent factor $2 \gamma$ and weighted outliers differently, so fitness could
 saturate while the optimizer kept descending its own objective (the Air 1 replay showed block-long post-warmup
 radial-fitness dips to zero, which vanished once fitness moved to the algebraic residual).
@@ -282,8 +285,8 @@ transient dip inconsistency while the preconditioner frame converges — apply b
 surrogate's transient bias never leaks into the radial assessment the way a single combined ramp would. When
 the gravity statistic is absent the effective weight is `0` and fitness reduces exactly to the
 radial factor. Live confidence is coverage times fitness, clamped to $[0, 1]$. `MagCalibrationResult` reports
-every factor: `confidence`, `coverage`, `fitness`, `radial_fitness`, `gravity_fitness`, and
-`gravity_term_weight`.
+every factor: `confidence`, `coverage`, `fitness`, `radial_fitness`, `regularization_loss`, `gravity_fitness`,
+and `gravity_term_weight`.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
 change only after 55 valid updates at confidence at least `0.0125`, including while the cache is partial. Confidence in

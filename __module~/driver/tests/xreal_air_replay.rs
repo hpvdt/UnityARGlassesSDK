@@ -48,6 +48,7 @@ struct PostCorrectionSample {
     latency: u64,
     confidence: f32,
     radial: f32,
+    regularization: f32,
     gravity: f32,
     coverage: f32,
 }
@@ -59,10 +60,12 @@ struct CheckpointStats {
     evals_after_first_success: u64,
     mean_confidence: f64,
     mean_radial: f64,
+    mean_regularization: f64,
     mean_gravity: f64,
     mean_coverage: f64,
     min_confidence: f32,
     min_confidence_radial: f32,
+    min_confidence_regularization: f32,
     min_confidence_gravity: f32,
     min_confidence_coverage: f32,
 }
@@ -96,10 +99,13 @@ fn build_checkpoints(samples: &[PostCorrectionSample]) -> Vec<CheckpointStats> {
                 evals_after_first_success: latency,
                 mean_confidence: mean(|sample| sample.confidence),
                 mean_radial: mean(|sample| sample.radial),
+                mean_regularization: mean(|sample| sample.regularization),
                 mean_gravity: mean(|sample| sample.gravity),
                 mean_coverage: mean(|sample| sample.coverage),
                 min_confidence: worst_confidence_sample.map_or(0.0, |sample| sample.confidence),
                 min_confidence_radial: worst_confidence_sample.map_or(0.0, |sample| sample.radial),
+                min_confidence_regularization: worst_confidence_sample
+                    .map_or(0.0, |sample| sample.regularization),
                 min_confidence_gravity: worst_confidence_sample
                     .map_or(0.0, |sample| sample.gravity),
                 min_confidence_coverage: worst_confidence_sample
@@ -220,6 +226,7 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
                     latency,
                     confidence: quality.confidence(),
                     radial: quality.radial_fitness,
+                    regularization: quality.regularization_loss,
                     gravity: quality.gravity_fitness,
                     coverage: quality.coverage,
                 });
@@ -302,6 +309,10 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
         checkpoint_series(&checkpoints, |checkpoint| checkpoint.mean_radial, 6),
     );
     eprintln!(
+        "    - regularization: {}",
+        checkpoint_series(&checkpoints, |checkpoint| checkpoint.mean_regularization, 6),
+    );
+    eprintln!(
         "    - gravity: {}",
         checkpoint_series(&checkpoints, |checkpoint| checkpoint.mean_gravity, 6),
     );
@@ -322,6 +333,14 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
         checkpoint_series(
             &checkpoints,
             |checkpoint| f64::from(checkpoint.min_confidence_radial),
+            6
+        ),
+    );
+    eprintln!(
+        "    - regularization: {}",
+        checkpoint_series(
+            &checkpoints,
+            |checkpoint| f64::from(checkpoint.min_confidence_regularization),
             6
         ),
     );
