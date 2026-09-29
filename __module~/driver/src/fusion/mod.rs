@@ -24,19 +24,14 @@ use nalgebra::{Quaternion, UnitQuaternion, Vector3, Vector4};
 use self::naive_cf::NaiveCF;
 use crate::{any_glasses_or_dummy, ARGlasses, Result};
 
-mod bad_mag_cause;
-pub use bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
-
-mod calibration_quality;
-pub use calibration_quality::CalibrationQuality;
-mod mag_calibrator;
-pub use mag_calibrator::{MagCalibrationResult, MagCalibrator};
-mod mag_model;
-mod mag_samples;
+mod mag;
+pub use mag::{
+    BadCalibration, BadMagCause, BadReading, CalibrationQuality, MagCalibrationResult,
+    MagCalibrator,
+};
 mod naive_cf;
 #[cfg(test)]
 mod naive_cf_test;
-mod sample_stats;
 
 /// Converts a raw sensor vector from RUB (right, up, back) into FRD (forward, right, down).
 pub fn rub_to_frd(v: &Vector3<f32>) -> Vector3<f32> {

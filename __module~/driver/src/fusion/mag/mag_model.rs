@@ -574,7 +574,6 @@ impl<const N: usize> MagModel<N> {
             radial_fitness,
             regularization_loss,
             gravity_fitness,
-            gravity_term_weight,
         );
         Some(candidate)
     }
