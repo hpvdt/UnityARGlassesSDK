@@ -465,7 +465,6 @@ fn mag_calibrator_fitness_recovers_after_full_expiry() {
     // No gravity direction was ever supplied, so the gravity factor stays
     // neutral.
     assert_eq!(result.gravity_fitness, 1.0);
-    assert_eq!(result.fitness(), result.radial_fitness);
 }
 
 #[test]
@@ -1009,7 +1008,6 @@ fn mag_calibrator_uses_gravity_by_default() {
     // The gravity statistic is live and, with a consistent hint stream, sits
     // on its fitness plateau; it also shifts the working fit, so the hinted
     // run cannot remain bit-identical to the hint-free one.
-    assert_eq!(hinted_result.gravity_term_weight, 0.01);
     assert_eq!(hinted_result.gravity_fitness, 1.0);
     assert!(
         hinted.model.parameters != plain.model.parameters,
@@ -1022,7 +1020,7 @@ fn mag_calibrator_uses_gravity_by_default() {
     let opted_out_result = opted_out
         .evaluate_correct(offset + distortion * sample_direction(0, 63), None, 17 * 63)
         .unwrap();
-    assert_eq!(opted_out_result.gravity_term_weight, 0.0);
+    assert_eq!(opted_out_result.gravity_fitness, 1.0);
 }
 
 /// One independently rederived online update against production: both the
@@ -1426,8 +1424,8 @@ fn mag_calibrator_reports_confidence_factors() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
 
-    // Without gravity the gravity factor stays neutral and confidence
-    // factors multiply out exactly.
+    // Without gravity the gravity factor stays neutral, and confidence is
+    // the coverage factor alone.
     let mut plain = MagCalibrator::<63>::new();
     let mut plain_result = None;
     for i in 0..16 * 63 {
@@ -1436,17 +1434,12 @@ fn mag_calibrator_reports_confidence_factors() {
     }
     let plain = plain_result.unwrap();
     assert_eq!(plain.gravity_fitness, 1.0);
-    assert_eq!(plain.fitness(), plain.radial_fitness);
-    assert_eq!(
-        plain.confidence(),
-        (plain.coverage * plain.fitness()).clamp(0.0, 1.0)
-    );
+    assert_eq!(plain.confidence(), plain.coverage.clamp(0.0, 1.0));
 
     // With a consistent co-rotating gravity direction the gravity factor is
-    // live in [0, 1] and confidence combines the three factors. Gravity
-    // fixed in the body frame while the attitude rotates is physically
-    // contradictory: no constant dip angle exists, the projection residual
-    // stays large, and the factor drops.
+    // live in [0, 1]. Gravity fixed in the body frame while the attitude
+    // rotates is physically contradictory: no constant dip angle exists,
+    // the projection residual stays large, and the factor drops.
     let world_mag = Vector3::new(0.8, 0.1, 0.5).normalize();
     let world_gravity = Vector3::z();
     // The default weight keeps the surrogate active in both calibrators.
@@ -1487,19 +1480,9 @@ fn mag_calibrator_reports_confidence_factors() {
         "gravity_fitness={}",
         refined.gravity_fitness
     );
-    // The combined fitness is the weighted arithmetic mean with the
-    // gravity term's effective weight: `gravity_weight` (0.01) while the
-    // gravity statistic is live, matching the objective's additive term
-    // ratio `1 : w_g`.
-    assert_eq!(refined.gravity_term_weight, 0.01);
-    assert_eq!(
-        refined.fitness(),
-        (refined.radial_fitness + 0.01 * refined.gravity_fitness) / 1.01
-    );
-    assert_eq!(
-        refined.confidence(),
-        (refined.coverage * refined.fitness()).clamp(0.0, 1.0)
-    );
+    // Confidence is the clamped coverage factor alone: the fitness
+    // diagnostics are reported but take no part in it.
+    assert_eq!(refined.confidence(), refined.coverage.clamp(0.0, 1.0));
     assert!(
         opposed.gravity_fitness < refined.gravity_fitness,
         "opposed={} refined={}",

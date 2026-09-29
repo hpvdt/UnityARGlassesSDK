@@ -261,32 +261,15 @@ $e_{g,i} = (\psi(u_i, \tilde{g}_i)^T \theta - \kappa) / \sigma_g$ over the retai
 gravity direction — exactly the optimizer's gravity data term, with $\sigma_g$ recomputed from the same rows —
 and ramps linearly from `1` at the `0.1` RMS floor to `0` at the `0.35` ceiling, both expressed as dip-
 inconsistency fractions of the projection scale. The floor absorbs the transient residual while the
-preconditioner frame is still converging: even a perfect fit keeps an irreducible residual until then, and it
-must not drag down a good calibration. A
+preconditioner frame is still converging: even a perfect fit keeps an irreducible residual until then, and the
+ramp keeps that transient out of the recorded value. A
 missing statistic — gravity disabled (`gravity_weight(0)`), the projection $\kappa$ not yet seeded from a gravity
-observation, or carried by no retained row — maps to a neutral `1` rather than `0`: gravity is optional, so an absent
-or disabled gravity term never penalizes a magnetometer-only calibration, unlike the mandatory radial statistic whose
-absence scores `0`.
+observation, or carried by no retained row — maps to a neutral `1` rather than `0`, marking the statistic as
+unavailable, unlike the mandatory radial statistic whose absence scores `0`.
 
-Live fitness is the weighted arithmetic mean
-
-$$
-\mathrm{fitness} = \frac{\mathrm{radial} + w_g \cdot \mathrm{gravity}}{1 + w_g}
-$$
-
-of the two fitness factors, mirroring how the objective's totals $J_r + J_g$ combine additively: with the weight
-$w_g$ already inside $J_g$, the radial and gravity data terms stand in the ratio $1 : w_g$, and because each term
-is normalized by its own observation count, the counts cancel and the relative weight is $w_g$ itself (the code
-stores it as `CalibrationQuality::gravity_term_weight`). The combination must be additive rather than
-multiplicative: a product or power mean gives each factor a veto the objective does not have — at the typical
-$w_g = 0.01$, a completely broken gravity surrogate costs the objective about one percent, yet geometrically it
-would zero the fitness. The per-statistic ramps — including the gravity residual floor, which absorbs the
-transient dip inconsistency while the preconditioner frame converges — apply before the combination, so the
-surrogate's transient bias never leaks into the radial assessment the way a single combined ramp would. When
-the gravity statistic is absent the effective weight is `0` and fitness reduces exactly to the
-radial factor. Live confidence is coverage times fitness, clamped to $[0, 1]$. `MagCalibrationResult` reports
-every factor: `confidence`, `coverage`, `fitness`, `radial_fitness`, `regularization_loss`, `gravity_fitness`,
-and `gravity_term_weight`.
+The fitness statistics and `regularization_loss` are reported for diagnostics only: they take no part in the
+confidence, which is the coverage factor alone, clamped to $[0, 1]$. `MagCalibrationResult` reports
+`confidence`, `coverage`, `radial_fitness`, `regularization_loss`, and `gravity_fitness`.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
 change only after 55 valid updates at confidence at least `0.0125`, including while the cache is partial. Confidence in

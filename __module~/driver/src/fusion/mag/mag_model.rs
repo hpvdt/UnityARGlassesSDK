@@ -560,15 +560,6 @@ impl<const N: usize> MagModel<N> {
         let coverage = self.mean_centered_coverage();
         let radial_fitness = Self::radial_fitness_score(Some(radial_objective_mean_square));
         let gravity_fitness = Self::gravity_fitness_score(gravity_mean_square);
-        // The gravity factor joins the combined fitness with the same
-        // relative weight the objective gives it: `w_g` while the statistic
-        // is live, zero otherwise (a neutral gravity factor must not shift
-        // the exponent off pure radial).
-        let gravity_term_weight = if gravity_mean_square.is_some() {
-            self.gravity_weight
-        } else {
-            0.0
-        };
         self.quality = CalibrationQuality::new(
             coverage,
             radial_fitness,
