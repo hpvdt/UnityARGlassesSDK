@@ -291,13 +291,14 @@ For a minibatch of size $|B|$:
 - cold-start replay adds $O(10\, p\, B_r)$ for $p$ ramped replay updates of size $B_r$, only until first publication;
 - candidate conversion uses fixed $3 \times 3$ operations;
 - normalization uses fixed-size raw moments and is $O(1)$ in $N$;
-- coverage and fitness are one $O(N)$ pass over the retained rows (Gram-matrix accumulation plus residual mean
-  squares) and one $9 \times 9$ symmetric eigendecomposition per quality update;
+- coverage, radial fitness, and gravity fitness share one $O(N)$ pass over the retained rows (Gram-matrix accumulation
+  plus both residual mean squares, each row read and centered once against a once-derived normalization) and one
+  $9 \times 9$ symmetric eigendecomposition per quality update;
 - diversity maintenance is expected $O(N)$ for a full cache;
 - persistent online-optimizer, moment, and quality state is $O(1)$ in $N$.
 
-The call remains $O(N)$ overall because sample diversity is linear; the coverage and fitness scans share that budget
-and store no per-row state of their own.
+The call remains $O(N)$ overall because sample diversity is linear; the shared quality scan fits that budget
+and stores no per-row state of its own.
 
 ### Diversity neighbor cache
 

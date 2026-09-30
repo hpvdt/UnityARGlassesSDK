@@ -84,7 +84,7 @@ impl<const N: usize> MagCalibrator<N> {
         if self.model.working_candidate().is_err() {
             return (false, 0.0, 0.0, 0.0);
         }
-        let coverage = self.model.mean_centered_coverage();
+        let coverage = self.mean_centered_coverage_for_test();
         let radial_fitness = MagModel::<N>::radial_fitness_score(
             self.radial_objective_for_test()
                 .map(|(mean_square, regularization_loss)| mean_square + 2.0 * regularization_loss),
@@ -92,6 +92,26 @@ impl<const N: usize> MagCalibrator<N> {
         let gravity_fitness =
             MagModel::<N>::gravity_fitness_score(self.gravity_mean_square_for_test());
         (true, coverage, radial_fitness, gravity_fitness)
+    }
+
+    /// Independently recomputes the E-optimality coverage of the retained
+    /// rows, mirroring the mean-centered Gram accumulation of the production
+    /// quality pass row by row. Deliberately duplicates the accumulation
+    /// instead of calling production state, so the tests cross-check the
+    /// production path.
+    fn mean_centered_coverage_for_test(&self) -> f32 {
+        let (mu, _) = self.model.stats.normalization();
+        let mut directions = Vec::new();
+        for row in 0..self.model.stats.sample_row_count {
+            let centered = self.model.samples.view(row).sample() - mu;
+            if let Some(direction) = centered.try_normalize(f32::EPSILON) {
+                directions.push(direction);
+            }
+        }
+        MagModel::<N>::coverage_from_gram(
+            &Self::coverage_gram_sum_for_test(&directions),
+            self.model.stats.sample_row_count,
+        )
     }
 
     fn correct_working_for_test(&self, raw_mag: Vector3<f32>) -> Option<Vector3<f32>> {

@@ -266,10 +266,10 @@ impl<const N: usize> MagModel<N> {
 
     /// Feature vector $\varphi(\hat{u})$ of a unit direction $\hat{u}$: the
     /// term whose outer products $\varphi(\hat{u}) \varphi(\hat{u})^T$ build
-    /// the coverage Gram matrix summed by `mean_centered_coverage` and
-    /// scored by `coverage_from_gram`. The nine components are the
-    /// ellipsoid-fit features with $\sqrt{2}$ cross-term weights; with that
-    /// weighting the feature norm equals the rotation-invariant
+    /// the coverage Gram matrix summed by `update_quality` and scored by
+    /// `coverage_from_gram`. The nine components are the ellipsoid-fit
+    /// features with $\sqrt{2}$ cross-term weights; with that weighting the
+    /// feature norm equals the rotation-invariant
     /// $\operatorname{tr}(\hat{u} \hat{u}^T \hat{u} \hat{u}^T)$, so the
     /// induced rotation on feature space is orthogonal and the Gram
     /// eigenvalues are exactly rotation-invariant. Under the uniform
@@ -308,28 +308,6 @@ impl<const N: usize> MagModel<N> {
         let mean_gram = gram_sum / sample_row_count as f32;
         let lambda_min = SymmetricEigen::new(mean_gram).eigenvalues.min();
         (lambda_min / COVERAGE_LAMBDA_REF).clamp(0.0, 1.0)
-    }
-
-    /// Coverage of the retained rows, mean-centered and recomputed from the
-    /// current cache on each quality update. Recomputing keeps every
-    /// direction centered on the current cache mean, so no insertion-time
-    /// snapshots, incremental Gram state, or drift-triggered rebuilds are
-    /// needed. The cache mean is used rather than the fitted hard-iron
-    /// offset: the offset's component along the thinnest data direction is
-    /// itself unconstrained for near-planar support, which destabilizes the
-    /// score exactly where it must be decisive. A near-planar cache stays
-    /// rank-deficient under any centering.
-    pub(super) fn mean_centered_coverage(&self) -> f32 {
-        let (mu /*$\mu$*/, _) = self.stats.normalization();
-        let mut gram_sum = CoverageGramMatrix::zeros();
-        for row in 0..self.stats.sample_row_count {
-            let centered = self.samples.view(row).sample() - mu;
-            if let Some(direction) = centered.try_normalize(f32::EPSILON) {
-                let feature = Self::coverage_feature(direction);
-                gram_sum += feature * feature.transpose();
-            }
-        }
-        Self::coverage_from_gram(&gram_sum, self.stats.sample_row_count)
     }
 
     /// Radial fitness in `[0, 1]`: a linear ramp from 1 at zero RMS to 0 at
@@ -469,6 +447,16 @@ impl<const N: usize> MagModel<N> {
     /// fitness statistics rescan the retained rows, so an expired or
     /// replaced row stops contributing to the reported quality immediately.
     ///
+    /// All three row statistics share one pass over the retained rows: the
+    /// normalization $(\mu, r)$ is derived once from the maintained raw
+    /// moments, each row is read and centered exactly once, and the pass
+    /// accumulates the radial residual sum, the gravity residual sums, and
+    /// the coverage Gram sum together. The merge is bit-equivalent to the
+    /// former three separate scans: every accumulator still sums its
+    /// per-row terms in ascending row order, and the shared normalization
+    /// and centering evaluate the same expressions the separate scans
+    /// evaluated per row.
+    ///
     /// Historical note: with the earlier physical residual
     /// `||A (x_i - b)|| - 1` the Air 1 replay showed block-long post-warmup
     /// radial-fitness dips to zero. The physical residual scales against the
@@ -492,28 +480,66 @@ impl<const N: usize> MagModel<N> {
             }
         };
         self.refresh_gravity_frame(&candidate);
-        // Radial fitness: the mean square of the algebraic ellipsoid
-        // residual `phi(u_i)^T theta - 1` over every retained row, in fixed
-        // ascending row order so the result is bit-deterministic, plus
-        // twice the shape-regularization loss. The sum is exactly twice the
-        // radial online objective $J_r$ the optimizer minimizes in
-        // normalized cache coordinates (the data term is per-observation
-        // averaged while the regularizer enters once, exactly as in $J_r$),
-        // so the fitness ramp below scores the same loss the optimizer
-        // descends: its square root is the RMS-equivalent $\sqrt{2 J_r}$ of
-        // the combined objective. The data term is strictly bounded by the
-        // retained rows, while the regularizer depends only on the working
-        // coefficients. A non-finite accumulation marks the statistic
-        // unusable, matching the zero-quality path above.
+        let (mu /*$\mu$*/, rms_radius /*$r$*/) = self.stats.normalization();
+        // The gravity statistic stays absent (neutral 1 below) when gravity
+        // is disabled, the projection $\kappa$ is not yet seeded, or no
+        // retained row carries gravity.
+        let gravity_kappa = if self.gravity_weight > 0.0 {
+            self.learned_gravity_projection
+        } else {
+            None
+        };
+        // Radial fitness accumulates the mean square of the algebraic
+        // ellipsoid residual `phi(u_i)^T theta - 1` over every retained
+        // row, in fixed ascending row order so the result is
+        // bit-deterministic, plus twice the shape-regularization loss
+        // below — exactly the radial online objective $J_r$ the optimizer
+        // minimizes in normalized cache coordinates (the data term is
+        // per-observation averaged while the regularizer enters once), so
+        // the fitness ramp below scores the same loss the optimizer
+        // descends and its square root is the RMS-equivalent
+        // $\sqrt{2 J_r}$ of the combined objective.
+        //
+        // Gravity fitness accumulates the projection residual
+        // `psi(u_i, g_i)^T theta - kappa` and its scale sum over the
+        // retained rows carrying a gravity direction, normalized by the
+        // projection scale $\sigma_g$ (RMS projection over the same rows,
+        // floored below), exactly as in the online objective: the relative
+        // dip-residual is device-independent, while the raw residual
+        // scales with the field radius $r$.
+        //
+        // Coverage accumulates the Gram sum of the mean-centered unit
+        // directions; the cache mean is the center rather than the fitted
+        // hard-iron offset because the offset's component along the
+        // thinnest data direction is itself unconstrained for near-planar
+        // support, which destabilizes the score exactly where it must be
+        // decisive.
         let mut radial_square_sum = 0.0f32;
+        let mut gravity_square_sum = 0.0f32;
+        let mut gravity_scale_square_sum = 0.0f32;
+        let mut gravity_count = 0usize;
+        let mut gram_sum = CoverageGramMatrix::zeros();
         for row in 0..self.stats.sample_row_count {
-            let residual = Self::features(
-                self.stats
-                    .normalized_sample(self.samples.view(row).sample()),
-            )
-            .dot(&self.parameters)
-                - 1.0;
+            let row_view = self.samples.view(row);
+            let centered = row_view.sample() - mu;
+            let normalized = centered / rms_radius;
+            let residual = Self::features(normalized).dot(&self.parameters) - 1.0;
             radial_square_sum += residual * residual;
+            if let Some(kappa) = gravity_kappa {
+                if let Some(gravity) = row_view.gravity() {
+                    let projection =
+                        Self::gravity_features(normalized, self.preconditioned_gravity(gravity))
+                            .dot(&self.parameters);
+                    let residual = projection - kappa;
+                    gravity_square_sum += residual * residual;
+                    gravity_scale_square_sum += projection * projection;
+                    gravity_count += 1;
+                }
+            }
+            if let Some(direction) = centered.try_normalize(f32::EPSILON) {
+                let feature = Self::coverage_feature(direction);
+                gram_sum += feature * feature.transpose();
+            }
         }
         let regularization_loss = Self::regularization_loss(&self.parameters);
         let radial_objective_mean_square =
@@ -522,42 +548,12 @@ impl<const N: usize> MagModel<N> {
             self.quality = CalibrationQuality::ZERO;
             return None;
         }
-        // Gravity fitness: mean square of the projection residual over the
-        // retained rows that carry a gravity direction, normalized by the
-        // projection scale $\sigma_g$ (RMS projection over the same rows),
-        // exactly as in the online objective: the relative dip-residual is
-        // device-independent, while the raw residual scales with the field
-        // radius $r$. The statistic stays absent (neutral 1 below) when
-        // gravity is disabled, the projection is not yet seeded, or no
-        // retained row carries gravity.
-        let mut gravity_square_sum = 0.0f32;
-        let mut gravity_scale_square_sum = 0.0f32;
-        let mut gravity_count = 0usize;
-        let gravity_mean_square = match self.learned_gravity_projection {
-            Some(kappa) if self.gravity_weight > 0.0 => {
-                for row in 0..self.stats.sample_row_count {
-                    let row = self.samples.view(row);
-                    if let Some(gravity) = row.gravity() {
-                        let projection = Self::gravity_features(
-                            self.stats.normalized_sample(row.sample()),
-                            self.preconditioned_gravity(gravity),
-                        )
-                        .dot(&self.parameters);
-                        let residual = projection - kappa;
-                        gravity_square_sum += residual * residual;
-                        gravity_scale_square_sum += projection * projection;
-                        gravity_count += 1;
-                    }
-                }
-                (gravity_count > 0).then(|| {
-                    let scale_squared =
-                        (gravity_scale_square_sum / gravity_count as f32).max(ONLINE_SCALE_EPSILON);
-                    gravity_square_sum / gravity_count as f32 / scale_squared
-                })
-            }
-            _ => None,
-        };
-        let coverage = self.mean_centered_coverage();
+        let gravity_mean_square = (gravity_count > 0).then(|| {
+            let scale_squared =
+                (gravity_scale_square_sum / gravity_count as f32).max(ONLINE_SCALE_EPSILON);
+            gravity_square_sum / gravity_count as f32 / scale_squared
+        });
+        let coverage = Self::coverage_from_gram(&gram_sum, self.stats.sample_row_count);
         let radial_fitness = Self::radial_fitness_score(Some(radial_objective_mean_square));
         let gravity_fitness = Self::gravity_fitness_score(gravity_mean_square);
         self.quality = CalibrationQuality::new(
