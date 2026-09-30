@@ -360,24 +360,27 @@ impl<const N: usize> MagCalibrator<N> {
     /// `gravity_scale`: $e_{g,i} = (\psi_i^T \theta - \kappa) / \sigma_g$.
     /// The scale is frozen for the duration of one optimizer update (it is
     /// computed from the pre-update parameters), so the evaluated objective
-    /// stays a convex quadratic in $(\theta, \kappa)$.
+    /// stays a convex quadratic in $(\theta, \kappa)$. The feature matrices
+    /// are built once per update by [`Self::apply_minibatch_update`], so the
+    /// repeated evaluations of the bounded half-step search reuse the same
+    /// sampled minibatch instead of resampling and rebuilding it.
     fn minibatch_objective(
-        &self,
+        features: &DMatrix<f32>,
+        gravity_features: &DMatrix<f32>,
+        gravity_weight: f32,
         parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
         kappa: f32,
         gravity_scale: f32,
-        minibatch: MinibatchSpec,
     ) -> f32 {
-        let (features, gravity_features, _) = self.minibatch_feature_matrices(minibatch);
-        let residuals = &features * parameters - DVector::from_element(features.nrows(), 1.0);
+        let residuals = features * parameters - DVector::from_element(features.nrows(), 1.0);
         let mut objective = 0.5 * residuals.norm_squared() / features.nrows() as f32
             + MagModel::<N>::regularization_loss(parameters);
         if gravity_features.nrows() > 0 {
-            let residuals = (&gravity_features * parameters
+            let residuals = (gravity_features * parameters
                 - DVector::from_element(gravity_features.nrows(), kappa))
                 / gravity_scale;
-            objective += 0.5 * self.model.gravity_weight * residuals.norm_squared()
-                / gravity_features.nrows() as f32;
+            objective +=
+                0.5 * gravity_weight * residuals.norm_squared() / gravity_features.nrows() as f32;
         }
         objective
     }
@@ -517,7 +520,14 @@ impl<const N: usize> MagCalibrator<N> {
             return false;
         }
 
-        let old_objective = self.minibatch_objective(&parameters, kappa, gravity_scale, minibatch);
+        let old_objective = Self::minibatch_objective(
+            &features,
+            &gravity_features,
+            self.model.gravity_weight,
+            &parameters,
+            kappa,
+            gravity_scale,
+        );
         let learning_rate = (ONLINE_INITIAL_LEARNING_RATE
             / (1.0 + self.optimizer_steps as f32 / ONLINE_LEARNING_RATE_DECAY_STEPS))
             .max(ONLINE_MIN_LEARNING_RATE);
@@ -525,8 +535,14 @@ impl<const N: usize> MagCalibrator<N> {
         for _ in 0..ONLINE_BACKTRACK_STEPS {
             let trial_parameters = parameters - step_size * descent_direction;
             let trial_kappa = kappa - step_size * kappa_step;
-            let objective =
-                self.minibatch_objective(&trial_parameters, trial_kappa, gravity_scale, minibatch);
+            let objective = Self::minibatch_objective(
+                &features,
+                &gravity_features,
+                self.model.gravity_weight,
+                &trial_parameters,
+                trial_kappa,
+                gravity_scale,
+            );
             if trial_parameters.iter().all(|value| value.is_finite())
                 && trial_kappa.is_finite()
                 && objective.is_finite()
