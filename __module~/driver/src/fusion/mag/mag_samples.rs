@@ -104,4 +104,28 @@ impl<const N: usize> MagSamples<N> {
         self.sample_matrix.set_row(index, &row.sample().transpose());
         self.gravity_directions[index] = row.gravity();
     }
+
+    /// Writes `sample - row_sample` of each of the first `count` retained
+    /// rows into `differences`. Rows at and beyond `count` are left
+    /// untouched. Used by the diversity heuristic's squared-distance scans,
+    /// so per-row differences avoid materializing row vectors one at a time
+    /// through the generic row-view machinery.
+    ///
+    /// Per-row arithmetic is identical to
+    /// `sample - view(index).sample()`: each component is a single f32
+    /// subtraction evaluated in the same x, y, z order.
+    pub(super) fn row_differences(
+        &self,
+        sample: Vector3<f32>,
+        count: usize,
+        differences: &mut [Vector3<f32>],
+    ) {
+        for (index, difference) in differences.iter_mut().enumerate().take(count) {
+            *difference = Vector3::new(
+                sample.x - self.sample_matrix[(index, 0)],
+                sample.y - self.sample_matrix[(index, 1)],
+                sample.z - self.sample_matrix[(index, 2)],
+            );
+        }
+    }
 }

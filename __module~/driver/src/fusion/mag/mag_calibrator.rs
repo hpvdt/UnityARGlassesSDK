@@ -571,11 +571,17 @@ impl<const N: usize> MagCalibrator<N> {
 
     /// Computes squared distances from `mag_sample` to the first `count`
     /// rows of the sample buffer. Entries at and beyond `count` are set to
-    /// infinity so selection never picks them.
+    /// infinity so selection never picks them. Each row's value is
+    /// `(mag_sample - row_sample).norm_squared()`, assembled from the
+    /// cache's bulk row-difference helper.
     fn squared_distances_to(&self, mag_sample: Vector3<f32>, count: usize) -> [f32; N] {
         let mut squared_distances = [f32::INFINITY; N];
+        let mut differences = [Vector3::zeros(); N];
+        self.model
+            .samples
+            .row_differences(mag_sample, count, &mut differences);
         for (j, dist) in squared_distances.iter_mut().enumerate().take(count) {
-            *dist = (mag_sample - self.model.samples.view(j).sample()).norm_squared();
+            *dist = differences[j].norm_squared();
         }
         squared_distances
     }
