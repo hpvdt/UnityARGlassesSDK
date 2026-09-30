@@ -518,7 +518,7 @@ impl<const N: usize> MagModel<N> {
         let mut gravity_square_sum = 0.0f32;
         let mut gravity_scale_square_sum = 0.0f32;
         let mut gravity_count = 0usize;
-        let mut gram_sum = CoverageGramMatrix::zeros();
+        let mut gram_sum = [[0.0f32; CALIBRATION_PARAMETER_COUNT]; CALIBRATION_PARAMETER_COUNT];
         for row in 0..self.stats.sample_row_count {
             let row_view = self.samples.view(row);
             let centered = row_view.sample() - mu;
@@ -538,9 +538,23 @@ impl<const N: usize> MagModel<N> {
             }
             if let Some(direction) = centered.try_normalize(f32::EPSILON) {
                 let feature = Self::coverage_feature(direction);
-                gram_sum += feature * feature.transpose();
+                // Hand-rolled symmetric outer-product accumulation into a
+                // plain array: adds `feature[i] * feature[j]` to every Gram
+                // entry, the same element-wise operations the matrix
+                // expression `gram_sum += feature * feature.transpose()`
+                // performs, without materializing the intermediate 9x9
+                // product or routing each element access through the
+                // generic matrix `Index` machinery.
+                let components = feature.as_slice();
+                for i in 0..CALIBRATION_PARAMETER_COUNT {
+                    let component = components[i];
+                    for j in 0..CALIBRATION_PARAMETER_COUNT {
+                        gram_sum[i][j] += component * components[j];
+                    }
+                }
             }
         }
+        let gram_sum = CoverageGramMatrix::from_fn(|i, j| gram_sum[i][j]);
         let regularization_loss = Self::regularization_loss(&self.parameters);
         let radial_objective_mean_square =
             radial_square_sum / self.stats.sample_row_count as f32 + 2.0 * regularization_loss;
