@@ -779,18 +779,22 @@ impl<const N: usize> MagCalibrator<N> {
             .enumerate()
             .take(self.model.stats.sample_row_count)
         {
-            let row = self.model.samples.view(index).copied();
             if timestamp_us.saturating_sub(self.sample_timestamps_us[index])
                 <= self.max_sample_lifespan_us
             {
                 *map_slot = retained_count as u32;
+                // Rows are only materialized when compaction actually moves
+                // them; the common no-expiry scan keeps every row in place.
                 if retained_count != index {
+                    let row = self.model.samples.view(index).copied();
                     self.model.samples.set_row(retained_count, row);
                     self.sample_timestamps_us[retained_count] = self.sample_timestamps_us[index];
                 }
                 retained_count += 1;
             } else {
-                self.model.stats.remove_raw_moment(row.sample());
+                self.model
+                    .stats
+                    .remove_raw_moment(self.model.samples.view(index).sample());
             }
         }
         if retained_count != self.model.stats.sample_row_count {
