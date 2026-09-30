@@ -9,6 +9,9 @@ cd "$CRATE_DIR"
 
 #cargo clean
 
+echo "[Start Formatting]"
+cargo fmt --all
+
 echo "[Start Compiling]"
 cargo build --release
 
