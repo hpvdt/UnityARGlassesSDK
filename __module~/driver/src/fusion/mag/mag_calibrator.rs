@@ -320,6 +320,12 @@ impl<const N: usize> MagCalibrator<N> {
         minibatch: MinibatchSpec,
     ) -> (DMatrix<f32>, DMatrix<f32>, u64) {
         let mut random_state = minibatch.random_state;
+        // The normalization is derived once per minibatch: the raw moments
+        // cannot change while the features are built, so this leaves every
+        // observation's normalized sample bit-equal to a per-observation
+        // `normalized_sample` call while dropping the fixed-size moment
+        // recomputation that call performs.
+        let (mean, rms_radius) = self.model.stats.normalization();
         let observations = minibatch
             .current_sample
             .map(|sample| (sample, minibatch.current_gravity))
@@ -338,7 +344,7 @@ impl<const N: usize> MagCalibrator<N> {
         let mut radial_rows = Vec::with_capacity(minibatch.random_draws + 1);
         let mut gravity_rows = Vec::with_capacity(minibatch.random_draws + 1);
         for (sample, gravity) in observations {
-            let normalized = self.model.stats.normalized_sample(sample);
+            let normalized = (sample - mean) / rms_radius;
             radial_rows.push(MagModel::<N>::features(normalized));
             if let Some(gravity) =
                 gravity.filter(|_| self.model.learned_gravity_projection.is_some())
