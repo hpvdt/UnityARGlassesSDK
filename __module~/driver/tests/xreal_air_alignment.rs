@@ -6,6 +6,14 @@ use ar_drivers::fusion::{rub_to_frd, MagCalibrator};
 use ar_drivers::xreal_air::XrealAirReplay;
 use ar_drivers::{ARGlasses, GlassesEvent};
 
+/// Highest gravity loss allowed for a single post-warm-up evaluation: the
+/// loss-domain equivalent of the former 0.7 gravity-fitness floor at the
+/// default weight $w_g = 0.01$ (fitness 0.7 corresponds to a relative RMS
+/// dip residual of 0.175, i.e. a mean square of $0.030625$ and a gravity
+/// loss of $0.5 \cdot 0.01 \cdot 0.030625 = 0.000153125$). A disabled or
+/// absent gravity term reports zero.
+const MAX_GRAVITY_LOSS: f32 = 0.000153125;
+
 /// Check actual published magnetic directions, independently of the optimizer's
 /// gravity-projection surrogate. The three ten-second windows share one dip
 /// angle after thirty seconds of warm-up, without adjusting the decoder's
@@ -22,8 +30,8 @@ fn air1_factory_alignment_preserves_corrected_magnetic_dip() {
     let mut first_timestamp = None;
     let mut magnetic_samples = 0;
     let mut angles: [Vec<f64>; 3] = std::array::from_fn(|_| Vec::new());
-    let mut minimum_gravity_fitness = 1.0f32;
-    let mut gravity_fitness_sum = 0.0f64;
+    let mut maximum_gravity_loss = 0.0f32;
+    let mut gravity_loss_sum = 0.0f64;
 
     loop {
         let event = replay.read_event().unwrap();
@@ -58,11 +66,11 @@ fn air1_factory_alignment_preserves_corrected_magnetic_dip() {
                 let window = ((elapsed - 30_000_000) / 10_000_000) as usize;
                 angles[window].push(f64::from(angle));
                 assert!(
-                    result.gravity_fitness.is_finite(),
-                    "non-finite gravity fitness at {timestamp}"
+                    result.gravity_loss.is_finite(),
+                    "non-finite gravity loss at {timestamp}"
                 );
-                minimum_gravity_fitness = minimum_gravity_fitness.min(result.gravity_fitness);
-                gravity_fitness_sum += f64::from(result.gravity_fitness);
+                maximum_gravity_loss = maximum_gravity_loss.max(result.gravity_loss);
+                gravity_loss_sum += f64::from(result.gravity_loss);
             }
             _ => {}
         }
@@ -87,12 +95,12 @@ fn air1_factory_alignment_preserves_corrected_magnetic_dip() {
         .sqrt();
     eprintln!(
         "Air 1 corrected dip: mean={mean_angle:.3} deg, RMS deviation={rms_deviation:.3} deg; \
-         gravity fitness mean={:.6}, minimum={minimum_gravity_fitness:.6}",
-        gravity_fitness_sum / count as f64,
+         gravity loss mean={:.6}, maximum={maximum_gravity_loss:.6}",
+        gravity_loss_sum / count as f64,
     );
     assert!(
-        minimum_gravity_fitness > 0.7,
-        "gravity fitness fell to {minimum_gravity_fitness}"
+        maximum_gravity_loss < MAX_GRAVITY_LOSS,
+        "gravity loss rose to {maximum_gravity_loss}"
     );
     assert!(
         rms_deviation < 10.0,
