@@ -411,3 +411,130 @@ fn replay_hardware_operations_are_unsupported() {
         Err(Error::NotImplemented)
     ));
 }
+
+fn magnetic_factory_calibration() -> JsonValue {
+    let mut calibration: JsonValue = CALIBRATION.parse().unwrap();
+    let object = calibration.get_mut::<HashMap<String, JsonValue>>().unwrap();
+    object.insert("mag_bias".into(), "[0,0,0]".parse().unwrap());
+    object.insert("scale_mag".into(), "[1,1,1]".parse().unwrap());
+    calibration
+}
+
+fn set_calibration_field(calibration: &mut JsonValue, name: &str, value: &str) {
+    calibration
+        .get_mut::<HashMap<String, JsonValue>>()
+        .unwrap()
+        .insert(name.into(), value.parse().unwrap());
+}
+
+fn decoded_magnetic_field(calibration: &JsonValue, samples: [u16; 3]) -> Vector3<f32> {
+    let mut base = XrealAirBase::from_calibration(calibration).unwrap();
+    let mut packet = sensor_packet(43);
+    set_version2_magnetometer(&mut packet, 100, 100, samples, 1);
+    base.push_packet(&packet).unwrap();
+    let GlassesEvent::Magnetometer { magnetometer, .. } = base.pop_event().unwrap() else {
+        panic!("expected factory-calibrated magnetic event");
+    };
+    assert!(matches!(
+        base.pop_event(),
+        Some(GlassesEvent::AccGyro { timestamp: 43, .. })
+    ));
+    assert!(base.pop_event().is_none());
+    magnetometer
+}
+
+#[test]
+fn factory_magnetic_alignment_uses_passive_quaternion_in_native_axes() {
+    let mut calibration = magnetic_factory_calibration();
+    set_calibration_field(
+        &mut calibration,
+        "gyro_q_mag",
+        "[0.353553,0.612372,0.353553,0.612372]",
+    );
+    // Independent native-axis golden vectors for the captured factory rotation.
+    // The six-decimal quaternion limits coefficient accuracy to about 1e-6;
+    // allow 1e-4 at these 100-microtesla test magnitudes.
+    for (samples, expected) in [
+        ([200, 100, 100], Vector3::new(0.0, 0.0, -100.0)),
+        ([100, 200, 100], Vector3::new(86.60252, -50.00003, 0.0)),
+        ([100, 100, 200], Vector3::new(-50.00003, -86.60252, 0.0)),
+    ] {
+        let actual = decoded_magnetic_field(&calibration, samples);
+        assert!(
+            (actual - expected).norm() < 1e-4,
+            "actual={actual:?}, expected={expected:?}"
+        );
+    }
+    let reference = decoded_magnetic_field(&calibration, [200, 300, 400]);
+    set_calibration_field(
+        &mut calibration,
+        "gyro_q_mag",
+        "[0.707106,1.224744,0.707106,1.224744]",
+    );
+    assert_vector_close(
+        decoded_magnetic_field(&calibration, [200, 300, 400]),
+        reference,
+    );
+}
+
+#[test]
+fn factory_identity_alignment_converts_native_magnetic_axes_to_rub() {
+    assert_vector_close(
+        decoded_magnetic_field(&magnetic_factory_calibration(), [120, 130, 140]),
+        Vector3::new(20.0, -30.0, -40.0),
+    );
+}
+
+#[test]
+fn factory_magnetic_alignment_composes_accelerometer_extrinsics() {
+    let mut calibration = magnetic_factory_calibration();
+    set_calibration_field(&mut calibration, "gyro_q_mag", "[1,0,0,1]");
+    set_calibration_field(&mut calibration, "accel_q_gyro", "[0,0,1,1]");
+    // The passive magnetic rotation is -90 degrees about X, followed by the
+    // inverse active acceleration-to-gyro rotation, -90 degrees about Z.
+    // These do not commute; the final RUB transform negates Y and Z.
+    assert_vector_close(
+        decoded_magnetic_field(&calibration, [120, 130, 140]),
+        Vector3::new(40.0, 20.0, 30.0),
+    );
+}
+
+#[test]
+fn factory_magnetic_alignment_preserves_accelerometer_and_gyroscope() {
+    let mut calibration = magnetic_factory_calibration();
+    set_calibration_field(&mut calibration, "gyro_q_mag", "[1,2,3,4]");
+    set_calibration_field(&mut calibration, "accel_q_gyro", "[4,3,2,1]");
+    let mut calibrated = XrealAirBase::from_calibration(&calibration).unwrap();
+    let mut legacy = base();
+    let mut packet = sensor_packet(53);
+    write_i24_le(&mut packet[18..21], 17);
+    write_i24_le(&mut packet[21..24], -31);
+    write_i24_le(&mut packet[24..27], 43);
+    write_i24_le(&mut packet[33..36], -7);
+    write_i24_le(&mut packet[36..39], 11);
+    write_i24_le(&mut packet[39..42], -19);
+    set_version2_magnetometer(&mut packet, 100, 100, [120, 130, 140], 1);
+    calibrated.push_packet(&packet).unwrap();
+    legacy.push_packet(&packet).unwrap();
+    calibrated.pop_event().unwrap();
+    legacy.pop_event().unwrap();
+    let GlassesEvent::AccGyro {
+        accelerometer: expected_acc,
+        gyroscope: expected_gyro,
+        timestamp: expected_time,
+    } = legacy.pop_event().unwrap()
+    else {
+        panic!("expected inertial event");
+    };
+    let GlassesEvent::AccGyro {
+        accelerometer,
+        gyroscope,
+        timestamp,
+    } = calibrated.pop_event().unwrap()
+    else {
+        panic!("expected inertial event");
+    };
+    assert_eq!(accelerometer, expected_acc);
+    assert_eq!(gyroscope, expected_gyro);
+    assert_eq!(timestamp, expected_time);
+}

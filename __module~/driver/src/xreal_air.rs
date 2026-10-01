@@ -363,6 +363,83 @@ fn parse_calibration_vector(calibration: &JsonValue, name: &str) -> Result<Vecto
     Ok(Vector3::from(components))
 }
 
+fn parse_calibration_quaternion(
+    calibration: &JsonValue,
+    name: &str,
+) -> Result<UnitQuaternion<f32>> {
+    let values = calibration
+        .get::<HashMap<String, JsonValue>>()
+        .and_then(|object| object.get(name))
+        .and_then(|value| value.get::<Vec<JsonValue>>())
+        .ok_or(Error::Other(
+            "IMU calibration quaternion is missing or invalid",
+        ))?;
+    if values.len() != 4 {
+        return Err(Error::Other(
+            "IMU calibration quaternion has invalid length",
+        ));
+    }
+    let mut components = [0.0; 4];
+    for (component, value) in components.iter_mut().zip(values) {
+        *component = *value.get::<f64>().ok_or(Error::Other(
+            "IMU calibration quaternion contains a non-number",
+        ))?;
+    }
+    let quaternion = Quaternion::new(components[3], components[0], components[1], components[2]);
+    if !quaternion.norm_squared().is_finite() || quaternion.norm_squared() <= 0.0 {
+        return Err(Error::Other(
+            "IMU calibration quaternion is not finite and nonzero",
+        ));
+    }
+    Ok(UnitQuaternion::new_normalize(quaternion).cast())
+}
+
+struct XrealMagneticCalibration {
+    correction: Matrix3<f32>,
+}
+
+impl XrealMagneticCalibration {
+    fn from_calibration(calibration: &JsonValue) -> Result<Option<Self>> {
+        let object = calibration
+            .get::<HashMap<String, JsonValue>>()
+            .ok_or(Error::Other("IMU calibration must be a JSON object"))?;
+        // Records without magnetic bias/scale data keep their previous wire
+        // decoding; factory records use their magnetic frame alignment.
+        if !object.contains_key("mag_bias") && !object.contains_key("scale_mag") {
+            return Ok(None);
+        }
+        let magnetic_to_gyro = parse_calibration_quaternion(calibration, "gyro_q_mag")?.inverse();
+        let gyro_to_accelerometer = if object.contains_key("accel_q_gyro") {
+            // The factory's active acceleration-to-gyro rotation must also be
+            // inverted to keep magnetic output in the unchanged acceleration frame.
+            parse_calibration_quaternion(calibration, "accel_q_gyro")?.inverse()
+        } else {
+            UnitQuaternion::identity()
+        };
+        // ar-glass-lib (678c4d552ef123022683a1ce6bdd9c7780c74017), XrealFactoryCalibration,
+        // uses passive quaternions for magnetic frame alignment.
+        // Apply them to native magnetic axes, before the SDK's [Y, Z, X] permutation.
+        // Monado (045931d12f1cc9afde942f7905db08e6f51b9d8e), post_biased_coordinate_system,
+        // converts the calibration frame to RUB by negating Y and Z. The Air 1 capture checks
+        // this convention through its constant corrected magnetic/gravity angle.
+        let correction = Matrix3::from_diagonal(&Vector3::new(1.0, -1.0, -1.0))
+            * (gyro_to_accelerometer * magnetic_to_gyro)
+                .to_rotation_matrix()
+                .matrix();
+        if !correction.iter().all(|value| value.is_finite()) {
+            return Err(Error::Other(
+                "IMU magnetic calibration matrix is not finite",
+            ));
+        }
+        Ok(Some(Self { correction }))
+    }
+
+    fn correct(&self, wire_field: Vector3<f32>) -> Vector3<f32> {
+        let native_field = Vector3::new(wire_field.z, wire_field.x, wire_field.y);
+        self.correction * native_field
+    }
+}
+
 fn decode_packet_log_line(line: &str, expected_packet_size: usize) -> Result<Vec<u8>> {
     if line.len() != expected_packet_size * 2 {
         return Err(Error::Other("Packet log line has invalid length"));
@@ -737,6 +814,7 @@ struct XrealAirBase {
     pending_events: VecDeque<GlassesEvent>,
     gyro_bias: Vector3<f32>,
     accelerometer_bias: Vector3<f32>,
+    magnetic_calibration: Option<XrealMagneticCalibration>,
 }
 
 impl XrealAirBase {
@@ -745,6 +823,7 @@ impl XrealAirBase {
             pending_events: VecDeque::new(),
             gyro_bias: parse_calibration_vector(calibration, "gyro_bias")?,
             accelerometer_bias: parse_calibration_vector(calibration, "accel_bias")?,
+            magnetic_calibration: XrealMagneticCalibration::from_calibration(calibration)?,
         })
     }
 
@@ -805,14 +884,22 @@ impl XrealAirBase {
             // report's primary device timestamp, as ar-glass-lib does.
             let _sensor_timestamp_nanos = sensor_timestamp_nanos;
             if is_valid_magnetic_observation(&magnetic_field) {
-                // Send magnetometer event first so that clients can match the most
-                // recent magnetometer event to the most recent accgyro event and not get
-                // out of sync. This is necessary because the magnetometer event is
-                // optional.
-                ret.push(GlassesEvent::Magnetometer {
-                    magnetometer: magnetic_field,
-                    timestamp,
-                });
+                let magnetic_field = self
+                    .magnetic_calibration
+                    .as_ref()
+                    .map_or(magnetic_field, |calibration| {
+                        calibration.correct(magnetic_field)
+                    });
+                if is_valid_magnetic_observation(&magnetic_field) {
+                    // Send magnetometer event first so that clients can match the most
+                    // recent magnetometer event to the most recent accgyro event and not get
+                    // out of sync. This is necessary because the magnetometer event is
+                    // optional.
+                    ret.push(GlassesEvent::Magnetometer {
+                        magnetometer: magnetic_field,
+                        timestamp,
+                    });
+                }
             }
         }
 
