@@ -400,6 +400,7 @@ struct XrealMagneticCalibration {
 }
 
 impl XrealMagneticCalibration {
+    // TODO: JsonValue deserialisation can be so much simpler, with a proper struct schema definition
     fn from_calibration(calibration: &JsonValue) -> Result<Option<Self>> {
         let object = calibration
             .get::<HashMap<String, JsonValue>>()
