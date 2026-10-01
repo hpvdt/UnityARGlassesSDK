@@ -38,6 +38,12 @@ const ERROR_DEGRADATION_MARGIN_DEGREES: f64 = 5.0;
 /// the one measured beyond the first checkpoint.
 const CONFIDENCE_DEGRADATION_MARGIN: f64 = 0.1;
 
+/// Lowest mean radial or gravity fitness allowed beyond every warm-up
+/// checkpoint. The stability margins above bound only error and confidence,
+/// so nothing else bounds checkpoint fitness; this absolute floor keeps both
+/// components of every checkpoint average on the fit side of the boundary.
+const MIN_CHECKPOINT_FITNESS: f64 = 0.4;
+
 /// Whether the calibrator is fed a co-timestamped simulated accelerometer reading with each sample.
 #[derive(Clone, Copy)]
 enum AttitudeMode {
@@ -364,6 +370,22 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
             first_checkpoint.evals_after_first_success,
             first_checkpoint.mean_confidence,
         );
+    }
+    // fitness floor: the radial and gravity fitness averaged from every
+    // warm-up checkpoint onward must stay above the absolute floor
+    for checkpoint in &stats.checkpoints {
+        for (label, fitness) in [
+            ("radial", checkpoint.mean_radial),
+            ("gravity", checkpoint.mean_gravity),
+        ] {
+            assert!(
+                fitness > MIN_CHECKPOINT_FITNESS,
+                "post-correction mean {label} fitness measured from evaluation {} onward \
+                 ({fitness:.6}) was not above {MIN_CHECKPOINT_FITNESS}: seed={seed}, \
+                 mode={mode_label}",
+                checkpoint.evals_after_first_success,
+            );
+        }
     }
 
     println!("- evaluate_correct");

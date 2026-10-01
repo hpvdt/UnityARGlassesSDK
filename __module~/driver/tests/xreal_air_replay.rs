@@ -39,6 +39,12 @@ const CONFIDENCE_DEGRADATION_MARGIN: f64 = 0.1;
 /// that known drop to keep accepting the current behavior while still
 /// catching a further regression.
 const FITNESS_DEGRADATION_MARGIN: f64 = 0.3;
+/// Lowest mean radial or gravity fitness allowed beyond every warm-up
+/// checkpoint. The degradation margin only bounds fitness relative to the
+/// first checkpoint and `MIN_AVERAGE_FITNESS` only bounds the whole
+/// post-correction phase, so this absolute floor keeps both components of
+/// every checkpoint average on the fit side of the boundary.
+const MIN_CHECKPOINT_FITNESS: f64 = 0.4;
 
 /// One magnetometer evaluation after the first successful correction,
 /// retained so every checkpoint can aggregate the span from that checkpoint
@@ -418,6 +424,21 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
                  onward ({reference:.6}) by more than {FITNESS_DEGRADATION_MARGIN}",
                 checkpoint.evals_after_first_success,
                 first_checkpoint.evals_after_first_success,
+            );
+        }
+    }
+    // fitness floor: the radial and gravity fitness averaged from every
+    // warm-up checkpoint onward must stay above the absolute floor
+    for checkpoint in &checkpoints {
+        for (label, fitness) in [
+            ("radial", checkpoint.mean_radial),
+            ("gravity", checkpoint.mean_gravity),
+        ] {
+            assert!(
+                fitness > MIN_CHECKPOINT_FITNESS,
+                "Air 1 replay {mode} post-correction mean {label} fitness measured from \
+                 evaluation {} onward ({fitness:.6}) was not above {MIN_CHECKPOINT_FITNESS}",
+                checkpoint.evals_after_first_success,
             );
         }
     }
