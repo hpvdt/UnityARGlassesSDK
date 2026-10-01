@@ -83,7 +83,7 @@ impl NaiveCF {
 
     const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; //microseconds
 
-    const REGRESS_ROLL_FACTOR: f32 = 0.05; // TODO: should be zero
+    const REGRESS_ROLL_FACTOR: f32 = 0.0;
 
     const G_ACC_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
     //const NORTH_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -1.0);
