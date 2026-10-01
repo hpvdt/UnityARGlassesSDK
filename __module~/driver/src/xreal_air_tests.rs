@@ -486,6 +486,18 @@ fn factory_identity_alignment_converts_native_magnetic_axes_to_rub() {
 }
 
 #[test]
+fn factory_magnetic_intrinsics_precede_alignment() {
+    let mut calibration = magnetic_factory_calibration();
+    set_calibration_field(&mut calibration, "mag_bias", "[1,2,3]");
+    set_calibration_field(&mut calibration, "scale_mag", "[2,3,4]");
+    set_calibration_field(&mut calibration, "skew_mag", "[0.1,0.2,0.3]");
+    assert_vector_close(
+        decoded_magnetic_field(&calibration, [120, 130, 140]),
+        Vector3::new(48.2, -95.1, -148.0),
+    );
+}
+
+#[test]
 fn factory_magnetic_alignment_composes_accelerometer_extrinsics() {
     let mut calibration = magnetic_factory_calibration();
     set_calibration_field(&mut calibration, "gyro_q_mag", "[1,0,0,1]");
@@ -497,6 +509,80 @@ fn factory_magnetic_alignment_composes_accelerometer_extrinsics() {
         decoded_magnetic_field(&calibration, [120, 130, 140]),
         Vector3::new(40.0, 20.0, 30.0),
     );
+}
+
+#[test]
+fn factory_magnetic_calibration_rejects_incomplete_or_invalid_parameters() {
+    for (name, value) in [
+        ("mag_bias", "null"),
+        ("mag_bias", "[0,0]"),
+        ("scale_mag", "null"),
+        ("scale_mag", "[1,0,1]"),
+        ("scale_mag", "[1,-1,1]"),
+        ("skew_mag", "[0,0]"),
+        ("gyro_q_mag", "null"),
+        ("gyro_q_mag", "[0,0,1]"),
+        ("gyro_q_mag", "[0,0,0,0]"),
+        ("gyro_q_mag", "[0,0,0,\"1\"]"),
+        ("accel_q_gyro", "[0,0,0,0]"),
+    ] {
+        let mut calibration = magnetic_factory_calibration();
+        set_calibration_field(&mut calibration, name, value);
+        assert!(
+            XrealAirBase::from_calibration(&calibration).is_err(),
+            "accepted {name}={value}"
+        );
+    }
+    for missing in ["mag_bias", "scale_mag", "gyro_q_mag"] {
+        let mut calibration = magnetic_factory_calibration();
+        calibration
+            .get_mut::<HashMap<String, JsonValue>>()
+            .unwrap()
+            .remove(missing);
+        assert!(
+            XrealAirBase::from_calibration(&calibration).is_err(),
+            "accepted missing {missing}"
+        );
+    }
+    for name in [
+        "mag_bias",
+        "scale_mag",
+        "skew_mag",
+        "gyro_q_mag",
+        "accel_q_gyro",
+    ] {
+        let mut calibration = magnetic_factory_calibration();
+        let size = if matches!(name, "gyro_q_mag" | "accel_q_gyro") {
+            4
+        } else {
+            3
+        };
+        let mut values = vec![JsonValue::Number(1.0); size];
+        values[0] = JsonValue::Number(f64::INFINITY);
+        calibration
+            .get_mut::<HashMap<String, JsonValue>>()
+            .unwrap()
+            .insert(name.into(), JsonValue::Array(values));
+        assert!(
+            XrealAirBase::from_calibration(&calibration).is_err(),
+            "accepted non-finite {name}"
+        );
+    }
+}
+
+#[test]
+fn factory_correction_does_not_emit_zero_vectors_or_drop_inertial_events() {
+    let mut calibration = magnetic_factory_calibration();
+    set_calibration_field(&mut calibration, "mag_bias", "[20,30,40]");
+    let mut base = XrealAirBase::from_calibration(&calibration).unwrap();
+    let mut packet = sensor_packet(47);
+    set_version2_magnetometer(&mut packet, 100, 100, [120, 130, 140], 1);
+    base.push_packet(&packet).unwrap();
+    assert!(matches!(
+        base.pop_event(),
+        Some(GlassesEvent::AccGyro { timestamp: 47, .. })
+    ));
+    assert!(base.pop_event().is_none());
 }
 
 #[test]

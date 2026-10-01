@@ -395,6 +395,7 @@ fn parse_calibration_quaternion(
 }
 
 struct XrealMagneticCalibration {
+    bias: Vector3<f32>,
     correction: Matrix3<f32>,
 }
 
@@ -404,9 +405,27 @@ impl XrealMagneticCalibration {
             .get::<HashMap<String, JsonValue>>()
             .ok_or(Error::Other("IMU calibration must be a JSON object"))?;
         // Records without magnetic bias/scale data keep their previous wire
-        // decoding; factory records use their magnetic frame alignment.
+        // decoding; once present, validate the complete magnetic calibration.
         if !object.contains_key("mag_bias") && !object.contains_key("scale_mag") {
             return Ok(None);
+        }
+        let bias = parse_calibration_vector(calibration, "mag_bias")?;
+        let scale = parse_calibration_vector(calibration, "scale_mag")?;
+        let skew = if object.contains_key("skew_mag") {
+            parse_calibration_vector(calibration, "skew_mag")?
+        } else {
+            Vector3::zeros()
+        };
+        if !bias
+            .iter()
+            .chain(scale.iter())
+            .chain(skew.iter())
+            .all(|value| value.is_finite())
+            || scale.iter().any(|value| *value <= 0.0)
+        {
+            return Err(Error::Other(
+                "IMU magnetic calibration is not finite with positive scales",
+            ));
         }
         let magnetic_to_gyro = parse_calibration_quaternion(calibration, "gyro_q_mag")?.inverse();
         let gyro_to_accelerometer = if object.contains_key("accel_q_gyro") {
@@ -416,8 +435,11 @@ impl XrealMagneticCalibration {
         } else {
             UnitQuaternion::identity()
         };
+        let intrinsic = Matrix3::new(
+            scale.x, skew.x, skew.y, 0.0, scale.y, skew.z, 0.0, 0.0, scale.z,
+        );
         // ar-glass-lib (678c4d552ef123022683a1ce6bdd9c7780c74017), XrealFactoryCalibration,
-        // uses passive quaternions for magnetic frame alignment.
+        // uses passive quaternions and an upper-triangular scale/skew matrix.
         // Apply them to native magnetic axes, before the SDK's [Y, Z, X] permutation.
         // Monado (045931d12f1cc9afde942f7905db08e6f51b9d8e), post_biased_coordinate_system,
         // converts the calibration frame to RUB by negating Y and Z. The Air 1 capture checks
@@ -425,18 +447,19 @@ impl XrealMagneticCalibration {
         let correction = Matrix3::from_diagonal(&Vector3::new(1.0, -1.0, -1.0))
             * (gyro_to_accelerometer * magnetic_to_gyro)
                 .to_rotation_matrix()
-                .matrix();
+                .matrix()
+            * intrinsic;
         if !correction.iter().all(|value| value.is_finite()) {
             return Err(Error::Other(
                 "IMU magnetic calibration matrix is not finite",
             ));
         }
-        Ok(Some(Self { correction }))
+        Ok(Some(Self { bias, correction }))
     }
 
     fn correct(&self, wire_field: Vector3<f32>) -> Vector3<f32> {
         let native_field = Vector3::new(wire_field.z, wire_field.x, wire_field.y);
-        self.correction * native_field
+        self.correction * (native_field - self.bias)
     }
 }
 
