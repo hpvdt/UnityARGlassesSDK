@@ -400,15 +400,11 @@ struct XrealMagnetometerReport {
 // Ported from ar-glass-lib's decode_xreal_imu at
 // c172403f8df2108de5708c8663bb4c2359b0bf5b.
 fn decode_xreal_magnetometer_report(report: &[u8]) -> Option<XrealMagnetometerReport> {
-    if report.len() < 64 || report[0] != 1 {
+    if report.len() < 64 || !report.starts_with(&[1, 2]) {
         return None;
     }
     let (offset_field, denominator_field, values_field, sensor_timestamp_field, freshness_field) =
-        match report[1] {
-            1 => (36, 38, 42, 48, 56),
-            2 => (42, 44, 48, 54, 62),
-            _ => return None,
-        };
+        (42, 44, 48, 54, 62);
     let offset = LittleEndian::read_u16(&report[offset_field..]) as f64;
     let denominator = LittleEndian::read_u32(&report[denominator_field..]) as f64;
     let mut scaled = [0.0f32; 3];

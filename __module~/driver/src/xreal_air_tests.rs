@@ -166,26 +166,6 @@ fn version2_magnetometer_is_little_endian_and_mapped_directly_to_rub() {
 }
 
 #[test]
-fn upstream_version1_magnetometer_layout_is_deserialized_by_absolute_offset() {
-    let mut packet = [0u8; 0x40];
-    packet[0] = 1;
-    packet[1] = 1;
-    let offset = 0x1234u16;
-    packet[36..38].copy_from_slice(&offset.to_le_bytes());
-    packet[38..42].copy_from_slice(&0x0100u32.to_le_bytes());
-    packet[42..44].copy_from_slice(&(offset + 0x0100).to_le_bytes());
-    packet[44..46].copy_from_slice(&(offset + 0x0200).to_le_bytes());
-    packet[46..48].copy_from_slice(&(offset + 0x0300).to_le_bytes());
-    packet[48..56].copy_from_slice(&TEST_SENSOR_TIMESTAMP_NANOS.to_le_bytes());
-    packet[56] = 1;
-
-    let decoded = decode_xreal_magnetometer_report(&packet).unwrap();
-    assert_eq!(decoded.magnetic_field, Vector3::new(200.0, 300.0, 100.0));
-    assert_eq!(decoded.sensor_timestamp_nanos, TEST_SENSOR_TIMESTAMP_NANOS);
-    assert!(decoded.fresh);
-}
-
-#[test]
 fn upstream_decoder_rejects_invalid_report_envelopes() {
     assert!(decode_xreal_magnetometer_report(&[1, 2]).is_none());
     let mut packet = sensor_packet(1);
