@@ -860,7 +860,6 @@ impl<const N: usize> MagCalibrator<N> {
             // TODO: candidate_score_includes_replaced_victim
             // Compare both scores against the rows retained after replacement.
             // Keep the original distances intact for neighbor-cache updates.
-            // The tracked issue stays open until this fix is merged.
             let mut candidate_squared_distances = squared_distances;
             candidate_squared_distances[replacement_row] = f32::INFINITY;
             let candidate_mean_distance =
