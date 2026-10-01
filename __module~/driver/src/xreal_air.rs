@@ -779,17 +779,17 @@ impl XrealAirBase {
             (gyro_y * gyro_mul / gyro_div).to_radians() as f32 + self.gyro_bias.z,
         );
 
-        let acc_mul = reader.read_u16::<LittleEndian>()? as f32;
-        let acc_div = reader.read_u32::<LittleEndian>()? as f32;
-        let acc_x = reader.read_i24::<LittleEndian>()? as f32;
-        let acc_y = reader.read_i24::<LittleEndian>()? as f32;
-        let acc_z = reader.read_i24::<LittleEndian>()? as f32;
+        let acc_mul = reader.read_u16::<LittleEndian>()? as f64;
+        let acc_div = reader.read_u32::<LittleEndian>()? as f64;
+        let acc_x = reader.read_i24::<LittleEndian>()? as f64;
+        let acc_y = reader.read_i24::<LittleEndian>()? as f64;
+        let acc_z = reader.read_i24::<LittleEndian>()? as f64;
         let accelerometer = Vector3::new(
             // The bias fields do not correspond to the raw fields, but for some reason
             // this looks like the correct zero.
-            -(acc_x * acc_mul / acc_div) * 9.81 - self.accelerometer_bias.x,
-            (acc_z * acc_mul / acc_div) * 9.81 + self.accelerometer_bias.y,
-            (acc_y * acc_mul / acc_div) * 9.81 + self.accelerometer_bias.z,
+            (-(acc_x * acc_mul / acc_div) * 9.8) as f32 - self.accelerometer_bias.x,
+            ((acc_z * acc_mul / acc_div) * 9.8) as f32 + self.accelerometer_bias.y,
+            ((acc_y * acc_mul / acc_div) * 9.8) as f32 + self.accelerometer_bias.z,
         );
 
         if let Some(XrealMagnetometerReport {

@@ -82,7 +82,7 @@ fn replay_cycles_through_packets() {
 }
 
 #[test]
-fn base_preserves_accelerometer_and_gyroscope_decoding() {
+fn base_applies_factory_bias_after_sensor_conversion() {
     let calibration: JsonValue = concat!(
         r#"{"accel_bias":[0.4,0.5,0.6],"#,
         r#""gyro_bias":[0.1,0.2,0.3],"#,
@@ -125,7 +125,7 @@ fn base_preserves_accelerometer_and_gyroscope_decoding() {
     );
     assert_vector_close(
         accelerometer,
-        Vector3::new(-3.0 * 9.81 - 0.4, 9.0 * 9.81 + 0.5, -6.0 * 9.81 + 0.6),
+        Vector3::new(-3.0 * 9.8 - 0.4, 9.0 * 9.8 + 0.5, -6.0 * 9.8 + 0.6),
     );
     assert!(base.pop_event().is_none());
 }
@@ -153,6 +153,32 @@ fn gyroscope_scales_signed_boundaries_before_rounding_to_float() {
     assert_eq!(
         gyroscope.map(f32::to_bits),
         Vector3::new(0x440e_f9a6, 0x42a8_55dc, 0x440e_f9a4)
+    );
+}
+
+#[test]
+fn accelerometer_scales_signed_boundaries_before_rounding_to_float() {
+    let mut base = base();
+    let mut packet = sensor_packet(17);
+    packet[27..29].copy_from_slice(&u16::MAX.to_le_bytes());
+    packet[29..33].copy_from_slice(&16_777_217u32.to_le_bytes());
+    write_i24_le(&mut packet[33..36], -8_388_608);
+    write_i24_le(&mut packet[36..39], 8_388_607);
+    write_i24_le(&mut packet[39..42], 1_234_567);
+    base.push_packet(&packet).unwrap();
+    let GlassesEvent::AccGyro {
+        accelerometer,
+        timestamp,
+        ..
+    } = base.pop_event().unwrap()
+    else {
+        panic!("expected accelerometer/gyroscope event");
+    };
+    assert_eq!(timestamp, 17);
+    // Golden float bits from double-precision scaling with the device's gravity factor.
+    assert_eq!(
+        accelerometer.map(f32::to_bits),
+        Vector3::new(0x489c_cc2f, 0x4738_9c0b, 0x489c_cc2e)
     );
 }
 
