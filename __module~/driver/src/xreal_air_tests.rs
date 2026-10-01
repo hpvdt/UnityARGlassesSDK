@@ -244,6 +244,50 @@ fn upstream_decoder_rejects_invalid_report_envelopes() {
 }
 
 #[test]
+fn truncated_sensor_reports_return_errors_without_queuing_events() {
+    let mut base = base();
+    let packet = sensor_packet(37);
+    for length in 0..64 {
+        assert!(matches!(
+            base.decode_sensor_report(&packet[..length]),
+            Err(Error::Other("XREAL sensor report is shorter than 64 bytes"))
+        ));
+        if length >= 2 {
+            assert!(base.push_packet(&packet[..length]).is_err());
+        } else {
+            base.push_packet(&packet[..length]).unwrap();
+        }
+        assert!(base.pop_event().is_none());
+    }
+}
+
+#[test]
+fn padded_sensor_reports_decode_the_complete_sensor_prefix() {
+    let mut base = base();
+    let mut packet = sensor_packet(41);
+    set_version2_magnetometer(&mut packet, 100, 10, [110, 120, 130], 1);
+    for length in [64, 128, 512] {
+        let mut padded = vec![0xa5; length];
+        padded[..64].copy_from_slice(&packet);
+        base.push_packet(&padded).unwrap();
+        let GlassesEvent::Magnetometer {
+            magnetometer,
+            timestamp,
+        } = base.pop_event().unwrap()
+        else {
+            panic!("expected magnetic event before accelerometer/gyroscope");
+        };
+        assert_eq!(timestamp, 41);
+        assert_eq!(magnetometer, Vector3::new(200.0, 300.0, 100.0));
+        assert!(matches!(
+            base.pop_event(),
+            Some(GlassesEvent::AccGyro { timestamp: 41, .. })
+        ));
+        assert!(base.pop_event().is_none());
+    }
+}
+
+#[test]
 fn captured_packet_matches_upstream_deserialization() {
     let trace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")

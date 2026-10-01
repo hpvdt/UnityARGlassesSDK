@@ -761,6 +761,9 @@ impl XrealAirBase {
     }
 
     fn decode_sensor_report(&self, packet_data: &[u8]) -> Result<Vec<GlassesEvent>> {
+        if packet_data.len() < 64 {
+            return Err(Error::Other("XREAL sensor report is shorter than 64 bytes"));
+        }
         let mut ret = Vec::with_capacity(2);
         // TODO: This skips over a 2 byte temperature field that may be useful.
         let mut reader = std::io::Cursor::new(&packet_data[4..]);
