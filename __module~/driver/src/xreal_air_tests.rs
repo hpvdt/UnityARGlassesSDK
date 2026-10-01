@@ -131,6 +131,32 @@ fn base_preserves_accelerometer_and_gyroscope_decoding() {
 }
 
 #[test]
+fn gyroscope_scales_signed_boundaries_before_rounding_to_float() {
+    let mut base = base();
+    let mut packet = sensor_packet(13);
+    packet[12..14].copy_from_slice(&u16::MAX.to_le_bytes());
+    packet[14..18].copy_from_slice(&16_777_217u32.to_le_bytes());
+    write_i24_le(&mut packet[18..21], -8_388_608);
+    write_i24_le(&mut packet[21..24], 8_388_607);
+    write_i24_le(&mut packet[24..27], 1_234_567);
+    base.push_packet(&packet).unwrap();
+    let GlassesEvent::AccGyro {
+        gyroscope,
+        timestamp,
+        ..
+    } = base.pop_event().unwrap()
+    else {
+        panic!("expected accelerometer/gyroscope event");
+    };
+    assert_eq!(timestamp, 13);
+    // Golden float bits from double-precision scaling and radians conversion.
+    assert_eq!(
+        gyroscope.map(f32::to_bits),
+        Vector3::new(0x440e_f9a6, 0x42a8_55dc, 0x440e_f9a4)
+    );
+}
+
+#[test]
 fn version2_magnetometer_is_little_endian_and_mapped_directly_to_rub() {
     let mut base = base();
     let mut packet = sensor_packet(19);

@@ -766,17 +766,17 @@ impl XrealAirBase {
         let mut reader = std::io::Cursor::new(&packet_data[4..]);
 
         let timestamp = reader.read_u64::<LittleEndian>()? / 1000;
-        let gyro_mul = reader.read_u16::<LittleEndian>()? as f32;
-        let gyro_div = reader.read_u32::<LittleEndian>()? as f32;
-        let gyro_x = reader.read_i24::<LittleEndian>()? as f32;
-        let gyro_y = reader.read_i24::<LittleEndian>()? as f32;
-        let gyro_z = reader.read_i24::<LittleEndian>()? as f32;
+        let gyro_mul = reader.read_u16::<LittleEndian>()? as f64;
+        let gyro_div = reader.read_u32::<LittleEndian>()? as f64;
+        let gyro_x = reader.read_i24::<LittleEndian>()? as f64;
+        let gyro_y = reader.read_i24::<LittleEndian>()? as f64;
+        let gyro_z = reader.read_i24::<LittleEndian>()? as f64;
         let gyroscope = Vector3::new(
             // The bias fields do not correspond to the raw fields, but for some reason
             // this looks like the correct zero.
-            -(gyro_x * gyro_mul / gyro_div).to_radians() - self.gyro_bias.x,
-            (gyro_z * gyro_mul / gyro_div).to_radians() + self.gyro_bias.y,
-            (gyro_y * gyro_mul / gyro_div).to_radians() + self.gyro_bias.z,
+            -(gyro_x * gyro_mul / gyro_div).to_radians() as f32 - self.gyro_bias.x,
+            (gyro_z * gyro_mul / gyro_div).to_radians() as f32 + self.gyro_bias.y,
+            (gyro_y * gyro_mul / gyro_div).to_radians() as f32 + self.gyro_bias.z,
         );
 
         let acc_mul = reader.read_u16::<LittleEndian>()? as f32;
