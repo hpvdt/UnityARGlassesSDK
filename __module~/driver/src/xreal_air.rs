@@ -944,8 +944,9 @@ impl XrealAirBase {
         // 7. Rewrite only the version-2 magnetometer path. Treat ar-glass-lib, Monado, and XRLinuxDriver as
         //    competing hypotheses rather than ground truth; reject stale, non-finite, zero-divisor, and
         //    zero-norm magnetic observations without changing accelerometer or gyroscope output.
-        // 8. Require `fitness`, `radial_fitness`, and `gravity_fitness` to remain at least 0.8 for the final
-        //    five seconds of fresh observations after calibration becomes usable, then remove this TODO.
+        // 8. Require `radial_loss` to remain below 0.005 and `gravity_loss` below 0.0001125 (the loss-domain
+        //    equivalents of the former 0.8 fitness floors) for the final five seconds of fresh observations after
+        //    calibration becomes usable, then remove this TODO.
 
         // TODO: Check checksum
         ret.push(GlassesEvent::AccGyro {

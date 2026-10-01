@@ -19,11 +19,11 @@ const FOOTER_HEIGHT: u16 = 8;
 
 fn format_quality(quality: &CalibrationQuality) -> String {
     format!(
-        "confidence={:.3}, coverage={:.3}, radial_fitness={:.3}, gravity_fitness={:.3}",
+        "confidence={:.3}, coverage={:.3}, radial_loss={:.6}, gravity_loss={:.6}",
         quality.confidence(),
         quality.coverage,
-        quality.radial_fitness,
-        quality.gravity_fitness
+        quality.radial_loss,
+        quality.gravity_loss
     )
 }
 

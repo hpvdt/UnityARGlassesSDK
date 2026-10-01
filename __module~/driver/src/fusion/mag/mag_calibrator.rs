@@ -209,7 +209,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// in microseconds. The default is one hour.
     ///
     /// Expiry strictly bounds cache membership and the live quality history:
-    /// coverage and both fitness statistics are recomputed from the retained
+    /// coverage and both loss statistics are recomputed from the retained
     /// rows on every quality update. Only the online-optimizer parameter
     /// history outlives the rows that produced it, diluting through the
     /// floored learning rate (see "Known adaptation limitation" in the fusion
@@ -225,8 +225,8 @@ impl<const N: usize> MagCalibrator<N> {
     /// The default is `DEFAULT_GRAVITY_WEIGHT` (0.01): with the
     /// preconditioned surrogate the projection target converges to the exact
     /// magnetic dip, so a retained gravity direction always informs the fit.
-    /// Pass `0` to opt out, reducing the objective and the live fitness to
-    /// the purely radial terms even when rows carry gravity.
+    /// Pass `0` to opt out, reducing the objective and the live loss record
+    /// to the purely radial terms even when rows carry gravity.
     pub fn gravity_weight(self, gravity_weight: f32) -> Self {
         Self {
             model: MagModel {
@@ -478,9 +478,9 @@ impl<const N: usize> MagCalibrator<N> {
         // residual by $\sigma_g$ makes the data term measure the magnetic
         // dip's relative consistency instead of absolute equation units that
         // scale with the raw field radius: without it the gravity term's
-        // effective pull and its fitness ramp would drift with the device
-        // calibration state (the hint-noise residual of a real trace scales
-        // with the sample radius $r$).
+        // effective pull and the reported loss scale would drift with the
+        // device calibration state (the hint-noise residual of a real trace
+        // scales with the sample radius $r$).
         let mut gravity_scale /*$\sigma_g$*/ = 1.0;
         if gravity_features.nrows() > 0 {
             let projections = &gravity_features * parameters;

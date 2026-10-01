@@ -16,29 +16,6 @@ pub(super) const CALIBRATION_PARAMETER_COUNT: usize = 9;
 pub(super) type CoverageGramMatrix =
     SMatrix<f32, CALIBRATION_PARAMETER_COUNT, CALIBRATION_PARAMETER_COUNT>;
 const MAX_CORRECTION_CONDITION: f32 = 1.0e1;
-/// RMS-equivalent radial objective $\sqrt{2 J_r}$ at which the radial
-/// fitness reaches 0, ramping linearly from 1 at 0. $J_r$ is the full
-/// radial online objective: the mean square algebraic residual scaled by
-/// $1/2$ plus the shape regularizer, so the scored RMS-equivalent is
-/// `sqrt(mean_square + lambda * ||Q - c * I||_F^2)`. The residual lives in
-/// normalized cache coordinates, so the constant is calibrated against the
-/// fixed-seed SimMotion regression, where converged fits score roughly
-/// `0.06`–`0.15`, and against the Air 1 replay, where the post-warmup
-/// average stays near `0.11`; the regularizer adds only a small offset at
-/// convergence. The former physical corrected-radius residual
-/// (`MAX_RADIAL_RMS` `0.1`) lived on a different scale — algebraically the
-/// two differ by roughly `2 * gamma` plus quadratic outlier weighting — so
-/// the old constant does not transfer.
-pub(super) const MAX_RADIAL_RMS: f32 = 0.5;
-/// Gravity-projection RMS residual below which the gravity fitness is 1.
-/// The residual is relative to the projection scale $\sigma_g$, so the floor
-/// is a dip-inconsistency fraction: at 0.1 the dip projection of the
-/// retained rows may spread by a tenth of its own mean magnitude before the
-/// fitness leaves the plateau. A perfect fit under clean hints keeps a
-/// residual far below this; the floor absorbs the transient spread while the
-/// preconditioner frame is still converging — and under its clamp bound —
-/// so that transient bias never drags down a good calibration.
-const GRAVITY_RMS_FLOOR: f32 = 0.1;
 /// Eigenvalue bounds of the gravity preconditioner `gravity_frame`
 /// ($A_w^{-1}$), as multiples of the frame's mean eigenvalue. While the
 /// working correction converges, preconditioning is a fixed-point iteration:
@@ -57,15 +34,6 @@ const GRAVITY_RMS_FLOOR: f32 = 0.1;
 const MIN_GRAVITY_FRAME_EIGENVALUE: f32 = 0.25;
 /// Upper eigenvalue bound of `gravity_frame`; see `MIN_GRAVITY_FRAME_EIGENVALUE`.
 const MAX_GRAVITY_FRAME_EIGENVALUE: f32 = 4.0;
-/// Gravity-projection RMS residual at which the gravity fitness reaches 0,
-/// ramping linearly down from 1 at `GRAVITY_RMS_FLOOR`. The residual is
-/// relative to the projection scale $\sigma_g$ (a dip-inconsistency
-/// fraction), so the constant transfers across devices and field radii; it
-/// is calibrated against the synthetic consistent/contradictory gravity
-/// tests (a fully contradictory hint stream has a relative RMS near 1) and
-/// against the Air 1 trace, whose steady accelerometer-hint spread centers
-/// near 0.2.
-const MAX_GRAVITY_RMS: f32 = 0.35;
 /// Weight of the shape regularizer in the radial online objective
 /// $J_r = \frac{1}{2 n} \sum_i e_{r,i}^2 + \frac{\lambda}{2} \|Q - c I\|_F^2$.
 pub(super) const SHAPE_REGULARIZATION /*$\lambda$*/: f32 = 1.0e-3;
@@ -164,7 +132,7 @@ impl<const N: usize> MagModel<N> {
     /// Shape-regularization loss of the packed coefficients:
     /// $\frac{\lambda}{2} \|Q - c I\|_F^2$. This is the regularization term
     /// of the radial online objective $J_r$; the optimizer adds it once per
-    /// update (not per observation), and the live radial fitness scores the
+    /// update (not per observation), and the live radial loss reports the
     /// same combined objective, so the term is shared here.
     pub(super) fn regularization_loss(
         parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
@@ -317,45 +285,6 @@ impl<const N: usize> MagModel<N> {
         (lambda_min / COVERAGE_LAMBDA_REF).clamp(0.0, 1.0)
     }
 
-    /// Radial fitness in `[0, 1]`: a linear ramp from 1 at zero RMS to 0 at
-    /// `MAX_RADIAL_RMS`, applied to the mean square of the algebraic
-    /// ellipsoid residual `phi(u_i)^T theta - 1` plus twice the
-    /// shape-regularization loss — i.e. the RMS-equivalent `sqrt(2 J_r)` of
-    /// the full radial objective — recomputed over the retained rows with
-    /// the current working parameters. This is exactly the radial loss
-    /// $J_r$ the online optimizer minimizes, so a fitness drop directly
-    /// signals optimization regress rather than a mismatch between two
-    /// differently scaled residuals. A missing or unusable statistic scores
-    /// 0.
-    pub(super) fn radial_fitness_score(mean_square: Option<f32>) -> f32 {
-        match mean_square {
-            Some(mean_square) if mean_square.is_finite() && mean_square >= 0.0 => {
-                (1.0 - mean_square.sqrt() / MAX_RADIAL_RMS).clamp(0.0, 1.0)
-            }
-            _ => 0.0,
-        }
-    }
-
-    /// Gravity fitness in `[0, 1]`: a linear ramp from 1 at the
-    /// `GRAVITY_RMS_FLOOR` residual to 0 at `MAX_GRAVITY_RMS`, applied to
-    /// the mean square gravity-projection residual `psi^T theta - kappa`
-    /// recomputed over the retained rows carrying a gravity direction, with
-    /// `psi` built from the preconditioned direction $\tilde{g}_i$. Unlike
-    /// the radial score, a missing statistic maps to a neutral 1: gravity
-    /// is optional, so an absent or disabled gravity term must never
-    /// penalize a magnetometer-only calibration. Preconditioning removes
-    /// the surrogate's anisotropic soft-iron bias as the frame converges;
-    /// the remaining transient bias stays inside the floor.
-    pub(super) fn gravity_fitness_score(mean_square: Option<f32>) -> f32 {
-        match mean_square {
-            Some(mean_square) if mean_square.is_finite() && mean_square >= 0.0 => {
-                let rms = mean_square.sqrt();
-                ((MAX_GRAVITY_RMS - rms) / (MAX_GRAVITY_RMS - GRAVITY_RMS_FLOOR)).clamp(0.0, 1.0)
-            }
-            _ => 1.0,
-        }
-    }
-
     fn condition_number(eigenvalues: &Vector3<f32>) -> f32 {
         let min = eigenvalues.min();
         let max = eigenvalues.max();
@@ -463,7 +392,7 @@ impl<const N: usize> MagModel<N> {
 
     /// Updates the live quality of the current working candidate.
     /// Normalization uses the maintained raw moments; coverage and both
-    /// fitness statistics rescan the retained rows, so an expired or
+    /// loss statistics rescan the retained rows, so an expired or
     /// replaced row stops contributing to the reported quality immediately.
     ///
     /// All three row statistics share one pass over the retained rows: the
@@ -478,14 +407,14 @@ impl<const N: usize> MagModel<N> {
     ///
     /// Historical note: with the earlier physical residual
     /// `||A (x_i - b)|| - 1` the Air 1 replay showed block-long post-warmup
-    /// radial-fitness dips to zero. The physical residual scales against the
-    /// optimizer's algebraic residual by the state-dependent factor
-    /// `2 * gamma` and warps outliers differently, so the statistic could
-    /// degrade while the optimizer kept descending its own objective.
-    /// Recomputing fitness from the algebraic residual
+    /// dips in the reported radial statistic. The physical residual scales
+    /// against the optimizer's algebraic residual by the state-dependent
+    /// factor `2 * gamma` and warps outliers differently, so the statistic
+    /// could degrade while the optimizer kept descending its own objective.
+    /// Recomputing the loss from the algebraic residual
     /// `phi(u_i)^T theta - 1` — the optimizer's own data term — removed the
-    /// dips: the Air 1 post-warmup fitness now stays above the 0.5
-    /// stability floor for thousands of consecutive evaluations.
+    /// dips: the Air 1 post-warmup radial loss stayed low for thousands of
+    /// consecutive evaluations.
     pub(super) fn update_quality(&mut self) -> Option<CalibrationCandidate> {
         if self.stats.sample_row_count < CALIBRATION_PARAMETER_COUNT {
             self.quality = CalibrationQuality::ZERO;
@@ -500,26 +429,23 @@ impl<const N: usize> MagModel<N> {
         };
         self.refresh_gravity_frame(&candidate);
         let (mu /*$\mu$*/, rms_radius /*$r$*/) = self.stats.normalization();
-        // The gravity statistic stays absent (neutral 1 below) when gravity
-        // is disabled, the projection $\kappa$ is not yet seeded, or no
+        // The gravity loss stays absent (zero below) when gravity is
+        // disabled, the projection $\kappa$ is not yet seeded, or no
         // retained row carries gravity.
         let gravity_kappa = if self.gravity_weight > 0.0 {
             self.learned_gravity_projection
         } else {
             None
         };
-        // Radial fitness accumulates the mean square of the algebraic
+        // The radial loss accumulates the square of the algebraic
         // ellipsoid residual `phi(u_i)^T theta - 1` over every retained
         // row, in fixed ascending row order so the result is
-        // bit-deterministic, plus twice the shape-regularization loss
-        // below — exactly the radial online objective $J_r$ the optimizer
+        // bit-deterministic, and the shape-regularization loss below adds
+        // once — exactly the radial online objective $J_r$ the optimizer
         // minimizes in normalized cache coordinates (the data term is
-        // per-observation averaged while the regularizer enters once), so
-        // the fitness ramp below scores the same loss the optimizer
-        // descends and its square root is the RMS-equivalent
-        // $\sqrt{2 J_r}$ of the combined objective.
+        // per-observation averaged while the regularizer enters once).
         //
-        // Gravity fitness accumulates the projection residual
+        // The gravity loss accumulates the projection residual
         // `psi(u_i, g_i)^T theta - kappa` and its scale sum over the
         // retained rows carrying a gravity direction, normalized by the
         // projection scale $\sigma_g$ (RMS projection over the same rows,
@@ -575,9 +501,9 @@ impl<const N: usize> MagModel<N> {
         }
         let gram_sum = CoverageGramMatrix::from_fn(|i, j| gram_sum[i][j]);
         let regularization_loss = Self::regularization_loss(&self.parameters);
-        let radial_objective_mean_square =
-            radial_square_sum / self.stats.sample_row_count as f32 + 2.0 * regularization_loss;
-        if !radial_objective_mean_square.is_finite() {
+        let radial_loss =
+            0.5 * radial_square_sum / self.stats.sample_row_count as f32 + regularization_loss;
+        if !radial_loss.is_finite() {
             self.quality = CalibrationQuality::ZERO;
             return None;
         }
@@ -586,15 +512,17 @@ impl<const N: usize> MagModel<N> {
                 (gravity_scale_square_sum / gravity_count as f32).max(ONLINE_SCALE_EPSILON);
             gravity_square_sum / gravity_count as f32 / scale_squared
         });
+        // The gravity term of the online objective over the retained rows:
+        // $J_g = \frac{w_g}{2 n_g} \sum_i e_{g,i}^2$. A missing or non-finite
+        // statistic reports zero, like a disabled gravity term: the
+        // objective then contains no gravity term to report.
+        let gravity_loss = gravity_mean_square
+            .map(|mean_square| 0.5 * self.gravity_weight * mean_square)
+            .filter(|loss| loss.is_finite())
+            .unwrap_or(0.0);
         let coverage = Self::coverage_from_gram(&gram_sum, self.stats.sample_row_count);
-        let radial_fitness = Self::radial_fitness_score(Some(radial_objective_mean_square));
-        let gravity_fitness = Self::gravity_fitness_score(gravity_mean_square);
-        self.quality = CalibrationQuality::new(
-            coverage,
-            radial_fitness,
-            regularization_loss,
-            gravity_fitness,
-        );
+        self.quality =
+            CalibrationQuality::new(coverage, radial_loss, regularization_loss, gravity_loss);
         Some(candidate)
     }
 }

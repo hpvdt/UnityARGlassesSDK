@@ -29,7 +29,7 @@ accelerate cold-start convergence.
 
 The calibrator maintains the raw first moment and second outer-product moment when rows are appended, replaced, or
 expired; cache normalization is derived from these fixed-size statistics without a row scan. Directional coverage and
-both live fitness statistics are recomputed from the current cache on each quality update: coverage is the smallest
+both live loss statistics are recomputed from the current cache on each quality update: coverage is the smallest
 eigenvalue of the $9 \times 9$ Gram matrix of the mean-centered unit directions. Before nine retained samples,
 calibration is explicitly pending with confidence zero; beyond that model minimum, publication follows the
 sustained-quality rule under "Candidate conversion and live quality" below.
@@ -140,7 +140,7 @@ so $s_i = \gamma\, r\, g_i^T A_w^{-1} A m_i$: as the working correction $A_w$ co
 $\kappa / (\gamma r)$ converges to the exact dip projection $g_i^T m_i$, rather than the anisotropy-biased
 $g_i^T A m_i$ of the unpreconditioned form. The normalized residual is device-independent: the raw projection
 carries the $\gamma r$ scale of the ellipsoid equation (SimMotion's cache radius is near $14$, the Air 1
-trace's near $44$), so without normalization both the term's effective pull and its fitness ramp would drift
+trace's near $44$), so without normalization both the term's effective pull and the reported loss scale would drift
 with the field radius. The anisotropy sweep that regressed under the unpreconditioned surrogate now improves
 in every case (`mag_calibrator_gravity_surrogate_survives_strong_anisotropy`), and the Air 1 replay holds the
 relative dip residual of a walking accelerometer-hint trace near `0.2` at a stable $\kappa$. Any change to the
@@ -241,36 +241,31 @@ still-forming cache keep chord-like directions, which collapses the smallest eig
 survives that drift. The cache mean is the center, not the fitted hard-iron offset: the offset's component along the
 thinnest data direction is itself unconstrained for near-planar support, which destabilizes the score exactly where it
 must be decisive. Rank deficiency detects lower-dimensional support by construction: near-planar motion leaves the Gram
-matrix rank-deficient and scores near zero, so partial-arc caches cannot inflate coverage. Radial fitness
-scores the full radial objective $J_r$ of the online optimizer — the mean square of the algebraic ellipsoid
+matrix rank-deficient and scores near zero, so partial-arc caches cannot inflate coverage. Radial loss reports
+the full radial objective $J_r$ of the online optimizer — half the mean square of the algebraic ellipsoid
 residual $e_{r,i} = \phi(u_i)^T \theta - 1$ over the retained rows plus the shape regularizer, summed exactly
 as in $J_r$ where the regularizer enters once rather than per observation — recomputed with the current working
-parameters on each quality update, sharing the same $O(N)$ cache rescan as coverage. The scored statistic is
-$2 J_r$, so the ramp below operates on its RMS-equivalent $\sqrt{2 J_r}$, and a fitness drop directly signals
-optimizer regress rather than a mismatch between two differently scaled residuals. The data term is strictly
-bounded by the retained cache and never outlives the rows that produced it; the regularizer depends only on the
-working coefficients and is also reported separately as `regularization_loss`. Radial fitness is a linear ramp
-from `1` at radial RMS `0` to `0` at radial RMS `0.5`; the ceiling is calibrated against the fixed-seed
-SimMotion regression, under which converged fits sit at $\sqrt{2 J_r}$ roughly `0.06`–`0.15`. The previous
+parameters on each quality update, sharing the same $O(N)$ cache rescan as coverage. The reported value is
+exactly the loss the online optimizer descends, so a loss rise directly signals optimizer regress rather than
+a mismatch between two differently scaled residuals. The data term is strictly bounded by the retained cache
+and never outlives the rows that produced it; the regularizer depends only on the working coefficients and is
+also reported separately as `regularization_loss`. The former bounded fitness score ramped this loss into
+$[0, 1]$ against ceiling constants; the ramp was removed in favor of reporting the loss directly. The earlier
 physical residual $\|A (x_i - b)\| - 1$ scaled against the
-algebraic residual by the state-dependent factor $2 \gamma$ and weighted outliers differently, so fitness could
-saturate while the optimizer kept descending its own objective (the Air 1 replay showed block-long post-warmup
-radial-fitness dips to zero, which vanished once fitness moved to the algebraic residual).
+algebraic residual by the state-dependent factor $2 \gamma$ and weighted outliers differently, so the reported
+statistic could degrade while the optimizer kept descending its own objective (the Air 1 replay showed
+block-long post-warmup dips, which vanished once the statistic moved to the algebraic residual).
 
-Gravity fitness likewise recomputes the mean square of the normalized gravity-projection residual
-$e_{g,i} = (\psi(u_i, \tilde{g}_i)^T \theta - \kappa) / \sigma_g$ over the retained rows that carry a valid
-gravity direction — exactly the optimizer's gravity data term, with $\sigma_g$ recomputed from the same rows —
-and ramps linearly from `1` at the `0.1` RMS floor to `0` at the `0.35` ceiling, both expressed as dip-
-inconsistency fractions of the projection scale. The floor absorbs the transient residual while the
-preconditioner frame is still converging: even a perfect fit keeps an irreducible residual until then, and the
-ramp keeps that transient out of the recorded value. A
-missing statistic — gravity disabled (`gravity_weight(0)`), the projection $\kappa$ not yet seeded from a gravity
-observation, or carried by no retained row — maps to a neutral `1` rather than `0`, marking the statistic as
-unavailable, unlike the mandatory radial statistic whose absence scores `0`.
+Gravity loss likewise reports the gravity objective $J_g = \frac{w_g}{2 n_g} \sum_i e_{g,i}^2$ over the
+retained rows that carry a valid gravity direction — exactly the optimizer's gravity data term, with
+$e_{g,i} = (\psi(u_i, \tilde{g}_i)^T \theta - \kappa) / \sigma_g$ and $\sigma_g$ recomputed from the same
+rows. A missing term — gravity disabled (`gravity_weight(0)`), the projection $\kappa$ not yet seeded from a
+gravity observation, or carried by no retained row — reports `0.0`, the objective then containing no gravity
+term: an absent term and a perfect fit both report zero. Both losses are unbounded above; lower is better.
 
-The fitness statistics and `regularization_loss` are reported for diagnostics only: they take no part in the
+The loss statistics and `regularization_loss` are reported for diagnostics only: they take no part in the
 confidence, which is the coverage factor alone, clamped to $[0, 1]$. `MagCalibrationResult` reports
-`confidence`, `coverage`, `radial_fitness`, `regularization_loss`, and `gravity_fitness`.
+`confidence`, `coverage`, `radial_loss`, `regularization_loss`, and `gravity_loss`.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
 change only after 55 valid updates at confidence at least `0.0125`, including while the cache is partial. Confidence in
@@ -292,8 +287,8 @@ For a minibatch of size $|B|$:
 - cold-start replay adds $O(10\, p\, B_r)$ for $p$ ramped replay updates of size $B_r$, only until first publication;
 - candidate conversion uses fixed $3 \times 3$ operations;
 - normalization uses fixed-size raw moments and is $O(1)$ in $N$;
-- coverage, radial fitness, and gravity fitness share one $O(N)$ pass over the retained rows (Gram-matrix accumulation
-  plus both residual mean squares, each row read and centered once against a once-derived normalization) and one
+- coverage, radial loss, and gravity loss share one $O(N)$ pass over the retained rows (Gram-matrix accumulation
+  plus both residual sums, each row read and centered once against a once-derived normalization) and one
   $9 \times 9$ symmetric eigendecomposition per quality update;
 - diversity maintenance is expected $O(N)$ for a full cache;
 - persistent online-optimizer, moment, and quality state is $O(1)$ in $N$.
@@ -310,7 +305,7 @@ selection operates on squared values and takes square roots only for selected ne
 
 ### Known adaptation limitation
 
-Fitness and coverage are recomputed from the retained rows on every quality update, so `max_sample_lifespan_us`
+The losses and coverage are recomputed from the retained rows on every quality update, so `max_sample_lifespan_us`
 strictly bounds their history. Only the online-optimizer parameters, including the learned gravity projection
 $\kappa$, retain historical gradient influence after a row is replaced or expires, diluting through the floored
 learning rate; that residual history is non-strict by design. The backlog tracks explicit replay or forgetting work

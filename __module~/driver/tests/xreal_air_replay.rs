@@ -11,17 +11,31 @@ use ar_drivers::{ARGlasses, GlassesEvent};
 use nalgebra::Vector3;
 
 const MAX_CALIBRATION_TIME_US: u64 = 60_000_000;
-const MIN_AVERAGE_FITNESS: f64 = 0.5;
-/// Stability is judged over the whole post-correction phase. Both fitness
+/// Highest radial loss allowed for the whole post-correction phase
+/// average: the loss-domain equivalent of the former 0.5 radial-fitness
+/// floor (fitness 0.5 corresponds to an RMS-equivalent objective
+/// $\sqrt{2 J_r} = 0.25$, i.e. a radial loss $J_r = 0.25^2 / 2 = 0.03125$).
+const MAX_AVERAGE_RADIAL_LOSS: f64 = 0.03125;
+/// Highest gravity loss allowed for the whole post-correction phase
+/// average: the loss-domain equivalent of the former 0.5 gravity-fitness
+/// floor at the default weight $w_g = 0.01$ (fitness 0.5 corresponds to a
+/// relative RMS dip residual of 0.225, i.e. a mean square of $0.050625$
+/// and a gravity loss of $0.5 \cdot 0.01 \cdot 0.050625 \approx 0.00025$,
+/// rounded down to keep the bound at most as permissive as the former
+/// floor). A disabled or absent gravity term reports zero.
+const MAX_AVERAGE_GRAVITY_LOSS: f64 = 0.00025;
+/// Stability is judged over the whole post-correction phase. Both loss
 /// statistics are recomputed from the retained rows on every quality update
-/// and radial fitness now uses the optimizer's own algebraic residual, so
-/// block-long post-correction fitness dips to zero no longer occur. Stability
-/// nevertheless means a consecutive streak of post-correction evaluations
-/// above `FITNESS_FLOOR` of at least `MIN_STABLE_STREAK` for both fitness
-/// components at once, which leaves room for transient jitter on
-/// challenging trace segments without weakening the constant bound into a
-/// global average.
-const FITNESS_FLOOR: f32 = 0.5;
+/// and report the online optimizer's own objective, so block-long
+/// post-correction loss spikes no longer occur. Stability nevertheless
+/// means a consecutive streak of post-correction evaluations keeping both
+/// losses at or below the streak ceilings — the loss-domain equivalents of
+/// the former 0.5 fitness floors, derived exactly as the averages above —
+/// of at least `MIN_STABLE_STREAK` for both components at once, which
+/// leaves room for transient jitter on challenging trace segments without
+/// weakening the constant bound into a global average.
+const MAX_STABLE_RADIAL_LOSS: f32 = 0.03125;
+const MAX_STABLE_GRAVITY_LOSS: f32 = 0.00025;
 const MIN_STABLE_STREAK: usize = 60;
 /// Interval, in evaluations after the first successful correction, marking the
 /// checkpoints of the reported series. Each checkpoint aggregates the samples
@@ -33,18 +47,27 @@ const CHECKPOINT_INTERVAL: u64 = 500;
 /// How far the mean confidence measured beyond a checkpoint may fall below
 /// the one measured beyond the first checkpoint.
 const CONFIDENCE_DEGRADATION_MARGIN: f64 = 0.1;
-/// Same, for the radial/gravity fitness component means. The trace's middle
-/// segment produces notably lower radial fitness than the rest (suffix mean
-/// drops by ~0.27 around it before recovering), so the margin must stay above
-/// that known drop to keep accepting the current behavior while still
-/// catching a further regression.
-const FITNESS_DEGRADATION_MARGIN: f64 = 0.3;
-/// Lowest mean radial or gravity fitness allowed beyond every warm-up
-/// checkpoint. The degradation margin only bounds fitness relative to the
-/// first checkpoint and `MIN_AVERAGE_FITNESS` only bounds the whole
-/// post-correction phase, so this absolute floor keeps both components of
-/// every checkpoint average on the fit side of the boundary.
-const MIN_CHECKPOINT_FITNESS: f64 = 0.4;
+/// How far the mean radial or gravity loss measured beyond a checkpoint may
+/// exceed the one measured beyond the first checkpoint before the run counts
+/// as unstable. The former fitness margins (0.3 of a linear-in-RMS ramp) do
+/// not translate into constant loss margins, so these are calibrated
+/// against the trace itself: the trace's middle segment raises the suffix
+/// mean radial loss by about 0.025 and the gravity loss by well under
+/// 0.0001 before both recover, so these margins accept that known rise
+/// while still catching a further regression.
+const RADIAL_LOSS_DEGRADATION_MARGIN: f64 = 0.03;
+const GRAVITY_LOSS_DEGRADATION_MARGIN: f64 = 0.0001;
+/// Highest mean radial or gravity loss allowed beyond every warm-up
+/// checkpoint. These are the loss-domain equivalents of the former 0.4
+/// fitness floors: radial fitness 0.4 corresponds to a radial loss of
+/// $0.3^2 / 2 = 0.045$, and gravity fitness 0.4 at the default weight
+/// corresponds to a gravity loss of $0.5 \cdot 0.01 \cdot 0.25^2 =
+/// 0.0003125$. The degradation margins only bound the losses relative to
+/// the first checkpoint and the averages above only bound the whole
+/// post-correction phase, so these absolute ceilings keep every checkpoint
+/// average on the converged side of the boundary.
+const MAX_CHECKPOINT_RADIAL_LOSS: f64 = 0.045;
+const MAX_CHECKPOINT_GRAVITY_LOSS: f64 = 0.0003125;
 
 /// One magnetometer evaluation after the first successful correction,
 /// retained so every checkpoint can aggregate the span from that checkpoint
@@ -53,9 +76,9 @@ const MIN_CHECKPOINT_FITNESS: f64 = 0.4;
 struct PostCorrectionSample {
     latency: u64,
     confidence: f32,
-    radial: f32,
-    regularization: f32,
-    gravity: f32,
+    radial_loss: f32,
+    regularization_loss: f32,
+    gravity_loss: f32,
     coverage: f32,
 }
 
@@ -65,14 +88,14 @@ struct PostCorrectionSample {
 struct CheckpointStats {
     evals_after_first_success: u64,
     mean_confidence: f64,
-    mean_radial: f64,
-    mean_regularization: f64,
-    mean_gravity: f64,
+    mean_radial_loss: f64,
+    mean_regularization_loss: f64,
+    mean_gravity_loss: f64,
     mean_coverage: f64,
     min_confidence: f32,
-    min_confidence_radial: f32,
-    min_confidence_regularization: f32,
-    min_confidence_gravity: f32,
+    min_confidence_radial_loss: f32,
+    min_confidence_regularization_loss: f32,
+    min_confidence_gravity_loss: f32,
     min_confidence_coverage: f32,
 }
 
@@ -104,16 +127,17 @@ fn build_checkpoints(samples: &[PostCorrectionSample]) -> Vec<CheckpointStats> {
             CheckpointStats {
                 evals_after_first_success: latency,
                 mean_confidence: mean(|sample| sample.confidence),
-                mean_radial: mean(|sample| sample.radial),
-                mean_regularization: mean(|sample| sample.regularization),
-                mean_gravity: mean(|sample| sample.gravity),
+                mean_radial_loss: mean(|sample| sample.radial_loss),
+                mean_regularization_loss: mean(|sample| sample.regularization_loss),
+                mean_gravity_loss: mean(|sample| sample.gravity_loss),
                 mean_coverage: mean(|sample| sample.coverage),
                 min_confidence: worst_confidence_sample.map_or(0.0, |sample| sample.confidence),
-                min_confidence_radial: worst_confidence_sample.map_or(0.0, |sample| sample.radial),
-                min_confidence_regularization: worst_confidence_sample
-                    .map_or(0.0, |sample| sample.regularization),
-                min_confidence_gravity: worst_confidence_sample
-                    .map_or(0.0, |sample| sample.gravity),
+                min_confidence_radial_loss: worst_confidence_sample
+                    .map_or(0.0, |sample| sample.radial_loss),
+                min_confidence_regularization_loss: worst_confidence_sample
+                    .map_or(0.0, |sample| sample.regularization_loss),
+                min_confidence_gravity_loss: worst_confidence_sample
+                    .map_or(0.0, |sample| sample.gravity_loss),
                 min_confidence_coverage: worst_confidence_sample
                     .map_or(0.0, |sample| sample.coverage),
             }
@@ -165,8 +189,8 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
     let mut post_correction_samples: Vec<PostCorrectionSample> = Vec::new();
     let mut tail_samples: Vec<(u64, f32, f32)> = Vec::new();
     let mut quality_samples = 0usize;
-    let mut radial_fitness_sum = 0.0f64;
-    let mut gravity_fitness_sum = 0.0f64;
+    let mut radial_loss_sum = 0.0f64;
+    let mut gravity_loss_sum = 0.0f64;
 
     loop {
         let event = replay.read_event().unwrap();
@@ -217,8 +241,8 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
                 }
                 if first_success_count.is_some() {
                     quality_samples += 1;
-                    radial_fitness_sum += f64::from(quality.radial_fitness);
-                    gravity_fitness_sum += f64::from(quality.gravity_fitness);
+                    radial_loss_sum += f64::from(quality.radial_loss);
+                    gravity_loss_sum += f64::from(quality.gravity_loss);
                 }
 
                 // post-correction samples accumulate from the first successful
@@ -231,12 +255,12 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
                 post_correction_samples.push(PostCorrectionSample {
                     latency,
                     confidence: quality.confidence(),
-                    radial: quality.radial_fitness,
-                    regularization: quality.regularization_loss,
-                    gravity: quality.gravity_fitness,
+                    radial_loss: quality.radial_loss,
+                    regularization_loss: quality.regularization_loss,
+                    gravity_loss: quality.gravity_loss,
                     coverage: quality.coverage,
                 });
-                tail_samples.push((timestamp, quality.radial_fitness, quality.gravity_fitness));
+                tail_samples.push((timestamp, quality.radial_loss, quality.gravity_loss));
             }
             _ => {}
         }
@@ -280,8 +304,8 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
     );
 
     let quality_count = quality_samples.max(1) as f64;
-    let radial_fitness_average = radial_fitness_sum / quality_count;
-    let gravity_fitness_average = gravity_fitness_sum / quality_count;
+    let radial_loss_average = radial_loss_sum / quality_count;
+    let gravity_loss_average = gravity_loss_sum / quality_count;
 
     eprintln!("- trace");
     eprintln!("  - duration: {duration_us} us");
@@ -311,16 +335,20 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
         checkpoint_series(&checkpoints, |checkpoint| checkpoint.mean_confidence, 6),
     );
     eprintln!(
-        "    - radial: {}",
-        checkpoint_series(&checkpoints, |checkpoint| checkpoint.mean_radial, 6),
+        "    - radial loss: {}",
+        checkpoint_series(&checkpoints, |checkpoint| checkpoint.mean_radial_loss, 6),
     );
     eprintln!(
-        "    - regularization: {}",
-        checkpoint_series(&checkpoints, |checkpoint| checkpoint.mean_regularization, 6),
+        "    - regularization loss: {}",
+        checkpoint_series(
+            &checkpoints,
+            |checkpoint| checkpoint.mean_regularization_loss,
+            6
+        ),
     );
     eprintln!(
-        "    - gravity: {}",
-        checkpoint_series(&checkpoints, |checkpoint| checkpoint.mean_gravity, 6),
+        "    - gravity loss: {}",
+        checkpoint_series(&checkpoints, |checkpoint| checkpoint.mean_gravity_loss, 6),
     );
     eprintln!(
         "    - coverage: {}",
@@ -335,26 +363,26 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
         ),
     );
     eprintln!(
-        "    - radial: {}",
+        "    - radial loss: {}",
         checkpoint_series(
             &checkpoints,
-            |checkpoint| f64::from(checkpoint.min_confidence_radial),
+            |checkpoint| f64::from(checkpoint.min_confidence_radial_loss),
             6
         ),
     );
     eprintln!(
-        "    - regularization: {}",
+        "    - regularization loss: {}",
         checkpoint_series(
             &checkpoints,
-            |checkpoint| f64::from(checkpoint.min_confidence_regularization),
+            |checkpoint| f64::from(checkpoint.min_confidence_regularization_loss),
             6
         ),
     );
     eprintln!(
-        "    - gravity: {}",
+        "    - gravity loss: {}",
         checkpoint_series(
             &checkpoints,
-            |checkpoint| f64::from(checkpoint.min_confidence_gravity),
+            |checkpoint| f64::from(checkpoint.min_confidence_gravity_loss),
             6
         ),
     );
@@ -369,8 +397,8 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
 
     let mut longest_streak = 0usize;
     let mut current_streak = 0usize;
-    for (_, radial, gravity) in &tail_samples {
-        if *radial >= FITNESS_FLOOR && *gravity >= FITNESS_FLOOR {
+    for (_, radial_loss, gravity_loss) in &tail_samples {
+        if *radial_loss <= MAX_STABLE_RADIAL_LOSS && *gravity_loss <= MAX_STABLE_GRAVITY_LOSS {
             current_streak += 1;
             longest_streak = longest_streak.max(current_streak);
         } else {
@@ -405,51 +433,61 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
             first_checkpoint.evals_after_first_success,
             first_checkpoint.mean_confidence,
         );
-        for (label, current, reference) in [
+        for (label, current, reference, margin) in [
             (
                 "radial",
-                checkpoint.mean_radial,
-                first_checkpoint.mean_radial,
+                checkpoint.mean_radial_loss,
+                first_checkpoint.mean_radial_loss,
+                RADIAL_LOSS_DEGRADATION_MARGIN,
             ),
             (
                 "gravity",
-                checkpoint.mean_gravity,
-                first_checkpoint.mean_gravity,
+                checkpoint.mean_gravity_loss,
+                first_checkpoint.mean_gravity_loss,
+                GRAVITY_LOSS_DEGRADATION_MARGIN,
             ),
         ] {
             assert!(
-                current >= reference - FITNESS_DEGRADATION_MARGIN,
-                "Air 1 replay {mode} post-correction mean {label} fitness measured from \
-                 evaluation {} onward ({current:.6}) fell below the one from evaluation {} \
-                 onward ({reference:.6}) by more than {FITNESS_DEGRADATION_MARGIN}",
+                current <= reference + margin,
+                "Air 1 replay {mode} post-correction mean {label} loss measured from \
+                 evaluation {} onward ({current:.6}) exceeded the one from evaluation {} \
+                 onward ({reference:.6}) by more than {margin}",
                 checkpoint.evals_after_first_success,
                 first_checkpoint.evals_after_first_success,
             );
         }
     }
-    // fitness floor: the radial and gravity fitness averaged from every
-    // warm-up checkpoint onward must stay above the absolute floor
+    // loss ceiling: the radial and gravity losses averaged from every
+    // warm-up checkpoint onward must stay below the absolute ceilings
     for checkpoint in &checkpoints {
-        for (label, fitness) in [
-            ("radial", checkpoint.mean_radial),
-            ("gravity", checkpoint.mean_gravity),
+        for (label, loss, ceiling) in [
+            (
+                "radial",
+                checkpoint.mean_radial_loss,
+                MAX_CHECKPOINT_RADIAL_LOSS,
+            ),
+            (
+                "gravity",
+                checkpoint.mean_gravity_loss,
+                MAX_CHECKPOINT_GRAVITY_LOSS,
+            ),
         ] {
             assert!(
-                fitness > MIN_CHECKPOINT_FITNESS,
-                "Air 1 replay {mode} post-correction mean {label} fitness measured from \
-                 evaluation {} onward ({fitness:.6}) was not above {MIN_CHECKPOINT_FITNESS}",
+                loss < ceiling,
+                "Air 1 replay {mode} post-correction mean {label} loss measured from \
+                 evaluation {} onward ({loss:.6}) was not below {ceiling}",
                 checkpoint.evals_after_first_success,
             );
         }
     }
 
     assert!(
-        radial_fitness_average > MIN_AVERAGE_FITNESS,
-        "Air 1 replay {mode} average radial_fitness {radial_fitness_average:.6} must be greater than {MIN_AVERAGE_FITNESS}"
+        radial_loss_average < MAX_AVERAGE_RADIAL_LOSS,
+        "Air 1 replay {mode} average radial_loss {radial_loss_average:.6} must be below {MAX_AVERAGE_RADIAL_LOSS}"
     );
     assert!(
-        gravity_fitness_average > MIN_AVERAGE_FITNESS,
-        "Air 1 replay {mode} average gravity_fitness {gravity_fitness_average:.6} must be greater than {MIN_AVERAGE_FITNESS}"
+        gravity_loss_average < MAX_AVERAGE_GRAVITY_LOSS,
+        "Air 1 replay {mode} average gravity_loss {gravity_loss_average:.6} must be below {MAX_AVERAGE_GRAVITY_LOSS}"
     );
     assert!(
         !tail_samples.is_empty(),
@@ -457,7 +495,8 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
     );
     assert!(
         longest_streak >= MIN_STABLE_STREAK,
-        "Air 1 replay {mode} held both fitness components above {FITNESS_FLOOR} for at most {longest_streak} consecutive post-correction evaluations, below {MIN_STABLE_STREAK}"
+        "Air 1 replay {mode} held both losses at or below the streak ceilings for at most \
+         {longest_streak} consecutive post-correction evaluations, below {MIN_STABLE_STREAK}"
     );
 }
 

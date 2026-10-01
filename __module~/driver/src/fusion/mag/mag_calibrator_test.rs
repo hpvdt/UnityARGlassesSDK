@@ -85,13 +85,17 @@ impl<const N: usize> MagCalibrator<N> {
             return (false, 0.0, 0.0, 0.0);
         }
         let coverage = self.mean_centered_coverage_for_test();
-        let radial_fitness = MagModel::<N>::radial_fitness_score(
-            self.radial_objective_for_test()
-                .map(|(mean_square, regularization_loss)| mean_square + 2.0 * regularization_loss),
-        );
-        let gravity_fitness =
-            MagModel::<N>::gravity_fitness_score(self.gravity_mean_square_for_test());
-        (true, coverage, radial_fitness, gravity_fitness)
+        let radial_loss = self
+            .radial_objective_for_test()
+            .map_or(0.0, |(mean_square, regularization_loss)| {
+                0.5 * mean_square + regularization_loss
+            });
+        let gravity_loss = self
+            .gravity_mean_square_for_test()
+            .map_or(0.0, |mean_square| {
+                0.5 * self.model.gravity_weight * mean_square
+            });
+        (true, coverage, radial_loss, gravity_loss)
     }
 
     /// Independently recomputes the E-optimality coverage of the retained
@@ -136,14 +140,6 @@ impl<const N: usize> MagCalibrator<N> {
             gram_sum += feature * feature.transpose();
         }
         gram_sum
-    }
-
-    fn fitness_score_for_test(mean_square: Option<f32>) -> f32 {
-        MagModel::<N>::radial_fitness_score(mean_square)
-    }
-
-    fn gravity_fitness_score_for_test(mean_square: Option<f32>) -> f32 {
-        MagModel::<N>::gravity_fitness_score(mean_square)
     }
 
     fn raw_moments_for_test(&self) -> (usize, Vector3<f64>, Matrix3<f64>) {
@@ -426,7 +422,7 @@ fn mag_calibrator_keeps_last_correction_after_rejected_refit() {
 }
 
 #[test]
-fn mag_calibrator_fitness_recovers_after_full_expiry() {
+fn mag_calibrator_loss_recovers_after_full_expiry() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let mut calibrator = seeded_calibrator::<63>(offset, distortion).max_sample_lifespan_us(0);
@@ -447,7 +443,7 @@ fn mag_calibrator_fitness_recovers_after_full_expiry() {
         0.05,
     );
 
-    // The statistic that produced the pre-expiry fitness is gone with the
+    // The statistic that produced the pre-expiry loss is gone with the
     // expired rows: while fewer than nine fresh rows are retained, live
     // quality stays explicitly pending at zero.
     for i in 0..7 {
@@ -461,11 +457,11 @@ fn mag_calibrator_fitness_recovers_after_full_expiry() {
         );
     }
 
-    // Once enough fresh rows are retained, the reported fitness is exactly
-    // the radial objective recomputed over the calibrator's own retained
-    // cache with its current working parameters — the mean square algebraic
-    // residual plus twice the shape-regularization loss; nothing from the
-    // expired rows survives in it.
+    // Once enough fresh rows are retained, the reported losses are exactly
+    // the online objectives recomputed over the calibrator's own retained
+    // cache with its current working parameters — the radial loss as half
+    // the mean square algebraic residual plus the shape-regularization
+    // loss; nothing from the expired rows survives in them.
     let mut result = None;
     for i in 7..63 {
         let raw = offset + distortion * sample_direction(i, 63);
@@ -476,19 +472,17 @@ fn mag_calibrator_fitness_recovers_after_full_expiry() {
         .radial_objective_for_test()
         .expect("recovered cache produced no working candidate");
     assert_eq!(
-        result.radial_fitness,
-        MagCalibrator::<63>::fitness_score_for_test(Some(
-            radial_mean_square + 2.0 * regularization_loss
-        ))
+        result.radial_loss,
+        0.5 * radial_mean_square + regularization_loss
     );
     assert_eq!(result.regularization_loss, regularization_loss);
-    // No gravity direction was ever supplied, so the gravity factor stays
-    // neutral.
-    assert_eq!(result.gravity_fitness, 1.0);
+    // No gravity direction was ever supplied, so the objective contains no
+    // gravity term.
+    assert_eq!(result.gravity_loss, 0.0);
 }
 
 #[test]
-fn mag_calibrator_fitness_depends_only_on_retained_rows() {
+fn mag_calibrator_loss_depends_only_on_retained_rows() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
     let sample = |i: usize| offset + distortion * sample_direction(i, 63);
@@ -512,7 +506,7 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
     // Calibrator B ingests only the rows that survive in A, in the same
     // order. Its optimizer history differs from A's (B never saw the
     // expired prefix), which is the non-strict-by-design part; only the
-    // caches and the cache-derived fitness semantics are pinned here.
+    // caches and the cache-derived loss semantics are pinned here.
     let mut survivors_only = MagCalibrator::<63>::new().max_sample_lifespan_us(100);
     for timestamp_us in 53..=59 {
         let index = timestamp_us as usize - 50;
@@ -539,52 +533,50 @@ fn mag_calibrator_fitness_depends_only_on_retained_rows() {
     }
     assert_caches_identical(&lifespan_a, &survivors_only);
 
-    // A's reported fitness is a pure function of its retained rows and its
-    // current working parameters, recomputed independently here row by row. Fitness
-    // itself is NOT asserted bitwise equal to B's: A and B share the cache
-    // but not the online-optimizer parameter history, which legitimately
-    // still carries the expired rows' gradients (non-strict by design; see
-    // "Known adaptation limitation" in the fusion AGENTS.md).
+    // A's reported losses are pure functions of its retained rows and its
+    // current working parameters, recomputed independently here row by row.
+    // The losses themselves are NOT asserted bitwise equal to B's: A and B
+    // share the cache but not the online-optimizer parameter history, which
+    // legitimately still carries the expired rows' gradients (non-strict by
+    // design; see "Known adaptation limitation" in the fusion AGENTS.md).
     let result_a = result_a.unwrap().unwrap();
     let (radial_mean_square, regularization_loss) = lifespan_a
         .radial_objective_for_test()
         .expect("retained cache produced no working candidate");
     assert_eq!(
-        result_a.radial_fitness,
-        MagCalibrator::<63>::fitness_score_for_test(Some(
-            radial_mean_square + 2.0 * regularization_loss
-        ))
+        result_a.radial_loss,
+        0.5 * radial_mean_square + regularization_loss
     );
     assert_eq!(result_a.regularization_loss, regularization_loss);
     let gravity_mean_square = lifespan_a
         .gravity_mean_square_for_test()
         .expect("retained cache carried no gravity statistic");
     assert_eq!(
-        result_a.gravity_fitness,
-        MagCalibrator::<63>::gravity_fitness_score_for_test(Some(gravity_mean_square))
+        result_a.gravity_loss,
+        0.5 * lifespan_a.model.gravity_weight * gravity_mean_square
     );
 }
 
 #[test]
-fn mag_calibrator_radial_fitness_scores_the_full_objective() {
+fn mag_calibrator_radial_loss_reports_the_full_objective() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
 
-    // Pending quality (fewer than nine retained rows) reports no
-    // regularization statistic.
+    // Pending quality (fewer than nine retained rows) reports no loss
+    // statistics.
     let mut calibrator = MagCalibrator::<63>::new();
     let result = calibrator
         .evaluate_correct(offset + distortion * sample_direction(0, 63), None, 0)
         .unwrap();
     assert_eq!(result.confidence(), 0.0);
     assert_eq!(result.regularization_loss, 0.0);
+    assert_eq!(result.radial_loss, 0.0);
 
     // Once the working candidate has moved off the prior, the
-    // regularization loss is positive and the radial fitness scores the
-    // full radial objective — the data residual mean square plus twice the
-    // loss, i.e. the RMS-equivalent of 2 * J_r — so it is strictly below
-    // what a data-only score would report, just as the objective the
-    // optimizer descends exceeds its data term.
+    // regularization loss is positive and the radial loss reports the
+    // full radial objective — half the data residual mean square plus the
+    // loss — so it is strictly above what a data-only record would report,
+    // just as the objective the optimizer descends exceeds its data term.
     let mut calibrator = seeded_calibrator::<63>(offset, distortion);
     let result = calibrator
         .evaluate_correct(offset + distortion * sample_direction(0, 63), None, 1)
@@ -594,12 +586,10 @@ fn mag_calibrator_radial_fitness_scores_the_full_objective() {
         .expect("seeded calibrator produced no working candidate");
     assert!(regularization_loss > 0.0);
     assert_eq!(result.regularization_loss, regularization_loss);
-    let data_only = MagCalibrator::<63>::fitness_score_for_test(Some(radial_mean_square));
-    let combined = MagCalibrator::<63>::fitness_score_for_test(Some(
-        radial_mean_square + 2.0 * regularization_loss,
-    ));
-    assert!(combined < data_only);
-    assert_eq!(result.radial_fitness, combined);
+    let data_only = 0.5 * radial_mean_square;
+    let combined = 0.5 * radial_mean_square + regularization_loss;
+    assert!(combined > data_only);
+    assert_eq!(result.radial_loss, combined);
 }
 
 /// Asserts that two calibrators retain exactly the same rows with the same
@@ -1025,22 +1015,30 @@ fn mag_calibrator_uses_gravity_by_default() {
         hinted_result = Some(hinted.evaluate_correct(raw, Some(body_gravity), i as u64));
     }
     let hinted_result = hinted_result.unwrap().unwrap();
-    // The gravity statistic is live and, with a consistent hint stream, sits
-    // on its fitness plateau; it also shifts the working fit, so the hinted
-    // run cannot remain bit-identical to the hint-free one.
-    assert_eq!(hinted_result.gravity_fitness, 1.0);
+    // The gravity term is live and, with a consistent hint stream,
+    // converged: the loss sits at or below the converged bound — the
+    // loss-domain equivalent of the former fitness plateau, whose RMS
+    // residual floor 0.1 maps to a mean square of 0.01 and a loss of
+    // `0.5 * 0.01 * 0.01 = 5.0e-5` at the default weight. It also shifts
+    // the working fit, so the hinted run cannot remain bit-identical to
+    // the hint-free one.
+    assert!(
+        hinted_result.gravity_loss <= 5.0e-5,
+        "gravity_loss={}",
+        hinted_result.gravity_loss
+    );
     assert!(
         hinted.model.parameters != plain.model.parameters,
         "default gravity surrogate left the fit untouched"
     );
 
-    // The statistic stays neutral when no valid gravity direction exists:
-    // a hinted-but-disabled calibrator has no seed and no residual scan.
+    // No gravity term exists when gravity is disabled: a hinted-but-disabled
+    // calibrator has no seed and no residual scan.
     assert_eq!(opted_out.model.learned_gravity_projection, None);
     let opted_out_result = opted_out
         .evaluate_correct(offset + distortion * sample_direction(0, 63), None, 17 * 63)
         .unwrap();
-    assert_eq!(opted_out_result.gravity_fitness, 1.0);
+    assert_eq!(opted_out_result.gravity_loss, 0.0);
 }
 
 /// One independently rederived online update against production: both the
@@ -1382,64 +1380,6 @@ fn design_coverage_is_rotation_invariant_and_detects_rank_deficiency() {
 }
 
 #[test]
-fn live_quality_ramps_match_the_specification() {
-    use super::super::mag_model::MAX_RADIAL_RMS;
-
-    // Radial RMS ramps fitness linearly from 1 at 0 to 0 at the
-    // `MAX_RADIAL_RMS` ceiling; the residual is the algebraic ellipsoid
-    // residual `phi(u_i)^T theta - 1`, matching the optimizer's data term.
-    assert_eq!(MagCalibrator::<9>::fitness_score_for_test(Some(0.0)), 1.0);
-    let fitness = MagCalibrator::<9>::fitness_score_for_test(Some((0.5 * MAX_RADIAL_RMS).powi(2)));
-    assert!((fitness - 0.5).abs() < 1.0e-6, "fitness={fitness}");
-    // At and beyond the ceiling, and for unusable statistics, fitness is 0.
-    assert_eq!(
-        MagCalibrator::<9>::fitness_score_for_test(Some(MAX_RADIAL_RMS.powi(2))),
-        0.0
-    );
-    assert_eq!(
-        MagCalibrator::<9>::fitness_score_for_test(Some(f32::NAN)),
-        0.0
-    );
-    assert_eq!(MagCalibrator::<9>::fitness_score_for_test(Some(-1.0)), 0.0);
-}
-
-#[test]
-fn gravity_fitness_ramps_between_floor_and_ceiling_and_defaults_to_one() {
-    // 1 at and below the 0.1 RMS floor, 0 at and beyond the 0.35 ceiling,
-    // linear in between. The ceiling was raised from 0.3 when the statistic
-    // changed to the cache-wide mean square, which rides above the
-    // trailing-window estimate the old ceiling was tuned against.
-    assert_eq!(
-        MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.0)),
-        1.0
-    );
-    assert_eq!(
-        MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.1f32.powi(2))),
-        1.0
-    );
-    let fitness = MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.225f32.powi(2)));
-    assert!((fitness - 0.5).abs() < 1.0e-6, "fitness={fitness}");
-    assert_eq!(
-        MagCalibrator::<9>::gravity_fitness_score_for_test(Some(0.35f32.powi(2))),
-        0.0
-    );
-    // Unlike the radial score, a missing or unusable statistic is neutral:
-    // gravity is optional and must not penalize magnetometer-only input.
-    assert_eq!(
-        MagCalibrator::<9>::gravity_fitness_score_for_test(None),
-        1.0
-    );
-    assert_eq!(
-        MagCalibrator::<9>::gravity_fitness_score_for_test(Some(f32::NAN)),
-        1.0
-    );
-    assert_eq!(
-        MagCalibrator::<9>::gravity_fitness_score_for_test(Some(-1.0)),
-        1.0
-    );
-}
-
-#[test]
 fn mag_calibrator_reports_confidence_factors() {
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let distortion = Matrix3::new(1.4, 0.2, -0.1, 0.2, 0.9, 0.15, -0.1, 0.15, 1.2);
@@ -1453,13 +1393,15 @@ fn mag_calibrator_reports_confidence_factors() {
         plain_result = Some(plain.evaluate_correct(raw, None, i as u64).unwrap());
     }
     let plain = plain_result.unwrap();
-    assert_eq!(plain.gravity_fitness, 1.0);
+    // Without gravity the objective contains no gravity term, and
+    // confidence is the coverage factor alone.
+    assert_eq!(plain.gravity_loss, 0.0);
     assert_eq!(plain.confidence(), plain.coverage.clamp(0.0, 1.0));
 
-    // With a consistent co-rotating gravity direction the gravity factor is
-    // live in [0, 1]. Gravity fixed in the body frame while the attitude
-    // rotates is physically contradictory: no constant dip angle exists,
-    // the projection residual stays large, and the factor drops.
+    // With a consistent co-rotating gravity direction the gravity term is
+    // live. Gravity fixed in the body frame while the attitude rotates is
+    // physically contradictory: no constant dip angle exists, the
+    // projection residual stays large, and the loss rises.
     let world_mag = Vector3::new(0.8, 0.1, 0.5).normalize();
     let world_gravity = Vector3::z();
     // The default weight keeps the surrogate active in both calibrators.
@@ -1492,22 +1434,23 @@ fn mag_calibrator_reports_confidence_factors() {
     let opposed = opposed_result.unwrap();
     // With the preconditioned surrogate, a consistent co-rotating gravity
     // direction is fit exactly once the frame converges: the projection
-    // residual drops at or below the GRAVITY_RMS_FLOOR and the factor
-    // saturates at 1. The unbiased surrogate is expected to reach the top
-    // of the range, so the interior assertion is now an exact plateau.
-    assert_eq!(
-        refined.gravity_fitness, 1.0,
-        "gravity_fitness={}",
-        refined.gravity_fitness
+    // residual collapses to the converged bound — at or below `5.0e-5`,
+    // the loss-domain equivalent of the former fitness plateau (an RMS
+    // residual at or below 0.1, i.e. a mean square at or below 0.01, at
+    // the default weight 0.01).
+    assert!(
+        refined.gravity_loss <= 5.0e-5,
+        "gravity_loss={}",
+        refined.gravity_loss
     );
-    // Confidence is the clamped coverage factor alone: the fitness
+    // Confidence is the clamped coverage factor alone: the loss
     // diagnostics are reported but take no part in it.
     assert_eq!(refined.confidence(), refined.coverage.clamp(0.0, 1.0));
     assert!(
-        opposed.gravity_fitness < refined.gravity_fitness,
+        opposed.gravity_loss > refined.gravity_loss,
         "opposed={} refined={}",
-        opposed.gravity_fitness,
-        refined.gravity_fitness
+        opposed.gravity_loss,
+        refined.gravity_loss
     );
 }
 
