@@ -413,10 +413,7 @@ fn decode_xreal_magnetometer_report(report: &[u8]) -> Option<XrealMagnetometerRe
         *value = (100.0 * (raw - offset) / denominator) as f32;
     }
     Some(XrealMagnetometerReport {
-        // The ar-glass-lib transcription kept positive signs on axes 1 and 2, which
-        // breaks the constant magnetic-gravity inner product on the captured
-        // calibration dance. The fixture requires (scaled[1], -scaled[2], -scaled[0]).
-        magnetic_field: Vector3::new(scaled[1], -scaled[2], -scaled[0]),
+        magnetic_field: Vector3::new(scaled[1], scaled[2], scaled[0]),
         sensor_timestamp_nanos: LittleEndian::read_u64(&report[sensor_timestamp_field..]),
         fresh: report[freshness_field] != 0,
     })

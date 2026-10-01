@@ -166,6 +166,21 @@ fn version2_magnetometer_is_little_endian_and_mapped_directly_to_rub() {
 }
 
 #[test]
+fn version2_magnetometer_samples_below_offset_remain_negative() {
+    let mut base = base();
+    let mut packet = sensor_packet(21);
+    set_version2_magnetometer(&mut packet, 0x8000, 0x0100, [0x7f00, 0x8100, 0x7e00], 1);
+
+    let decoded = decode_xreal_magnetometer_report(&packet).unwrap();
+    assert_eq!(decoded.magnetic_field, Vector3::new(100.0, -200.0, -100.0));
+    base.push_packet(&packet).unwrap();
+    let GlassesEvent::Magnetometer { magnetometer, .. } = base.pop_event().unwrap() else {
+        panic!("expected magnetic event");
+    };
+    assert_eq!(magnetometer, decoded.magnetic_field);
+}
+
+#[test]
 fn upstream_decoder_rejects_invalid_report_envelopes() {
     assert!(decode_xreal_magnetometer_report(&[1, 2]).is_none());
     let mut packet = sensor_packet(1);
