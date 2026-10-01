@@ -857,24 +857,12 @@ impl<const N: usize> MagCalibrator<N> {
             let neighbor_count = self.neighbor_count.min(N.saturating_sub(1));
             let (replacement_row, replacement_mean_distance) = self.lowest_mean_distance_by_index();
             let squared_distances = self.squared_distances_to(mag_sample, N);
-            // The candidate has no self-entry in the buffer, so its mean
-            // distance covers the true k nearest buffered rows.
-            //
             // TODO: candidate_score_includes_replaced_victim
-            // The victim's diversity score (`replacement_mean_distance`) is
-            // its mean distance to its `k` nearest OTHER rows, because
-            // `replacement_row` excludes itself, so its pool is `N - 1` rows.
-            // The candidate below is instead scored against all `N` old rows,
-            // including the victim row it would replace, so its pool is `N`
-            // rows. A candidate close to the victim can therefore be wrongly
-            // rejected because the soon-to-be-evicted row lowers its
-            // nearest-neighbor score.
-            // Recommended fix: set
-            // `candidate_squared_distances[replacement_row] = f32::INFINITY`
-            // before selecting the `k` nearest neighbors so both scores use
-            // the same `N - 1` retained rows, and update the incremental
-            // neighbor cache only after accepting the replacement.
+            // Compare both scores against the rows retained after replacement.
+            // Keep the original distances intact for neighbor-cache updates.
+            // The tracked issue stays open until this fix is merged.
             let mut candidate_squared_distances = squared_distances;
+            candidate_squared_distances[replacement_row] = f32::INFINITY;
             let candidate_mean_distance =
                 Self::mean_of_smallest(&mut candidate_squared_distances, neighbor_count);
             if replacement_mean_distance < candidate_mean_distance {

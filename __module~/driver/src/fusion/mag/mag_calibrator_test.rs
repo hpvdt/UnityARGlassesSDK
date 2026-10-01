@@ -1583,6 +1583,7 @@ fn mag_calibrator_neighbor_cache_matches_naive_rescan() {
         let mut calibrator = MagCalibrator::<12>::new()
             .num_neighbors(k)
             .max_sample_lifespan_us(25);
+        let mut expected_rows: Vec<(Vector3<f32>, u64)> = Vec::new();
         let mut timestamp_us = 0;
         for _ in 0..4000 {
             timestamp_us += 1 + next() % 3;
@@ -1593,7 +1594,39 @@ fn mag_calibrator_neighbor_cache_matches_naive_rescan() {
             let xy_radius = (1.0 - z * z).max(0.0).sqrt();
             let direction = Vector3::new(xy_radius * azimuth.cos(), xy_radius * azimuth.sin(), z);
             let sample = Vector3::new(11.0, -7.0, 5.0) + 40.0 * direction;
+            expected_rows.retain(|(_, time)| timestamp_us.saturating_sub(*time) <= 25);
+            if expected_rows.len() < 12 {
+                expected_rows.push((sample, timestamp_us));
+            } else {
+                let mean_distance = |point: Vector3<f32>, excluded: usize| {
+                    let mut distances: Vec<f32> = expected_rows
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| *index != excluded)
+                        .map(|(_, (other, _))| (point - other).norm())
+                        .collect();
+                    distances.sort_unstable_by(f32::total_cmp);
+                    distances[..k].iter().sum::<f32>() / k as f32
+                };
+                let (victim, score) = expected_rows
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (point, _))| (index, mean_distance(*point, index)))
+                    .min_by(|(_, left), (_, right)| left.total_cmp(right))
+                    .unwrap();
+                if mean_distance(sample, victim) > score {
+                    expected_rows[victim] = (sample, timestamp_us);
+                }
+            }
             calibrator.evaluate_sample_vec(sample, None, timestamp_us);
+            assert_eq!(calibrator.model.stats.sample_row_count, expected_rows.len());
+            for (index, (expected_sample, expected_time)) in expected_rows.iter().enumerate() {
+                assert_eq!(
+                    calibrator.model.samples.view(index).sample(),
+                    *expected_sample
+                );
+                assert_eq!(calibrator.sample_timestamps_us[index], *expected_time);
+            }
             calibrator
                 .check_neighbor_cache()
                 .unwrap_or_else(|message| panic!("k={k} timestamp_us={timestamp_us}: {message}"));
@@ -1605,7 +1638,6 @@ fn mag_calibrator_neighbor_cache_matches_naive_rescan() {
 }
 
 #[test]
-#[ignore = "open issue: candidate diversity is scored against the victim row it would replace"]
 fn mag_calibrator_candidate_score_includes_replaced_victim() {
     // Cluster of three near-duplicate rows around `victim` (distance 0.01),
     // with nine well-separated rows far away. The victim is the unique row
@@ -1643,11 +1675,13 @@ fn mag_calibrator_candidate_score_includes_replaced_victim() {
     // Correct post-replacement behavior: the victim is evicted and the
     // candidate takes its row. This assertion fails while the candidate is
     // still scored against the victim row it would replace.
-    assert_ne!(
+    assert_eq!(
         calibrator.model.samples.view(replacement_row).sample(),
-        victim,
+        candidate,
         "candidate adjacent to the victim was wrongly rejected"
     );
+    calibrator.check_neighbor_cache().unwrap();
+    calibrator.check_raw_moments().unwrap();
 }
 
 fn seeded_calibrator<const N: usize>(
