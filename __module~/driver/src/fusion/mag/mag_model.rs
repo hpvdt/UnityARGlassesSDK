@@ -40,14 +40,20 @@ pub(super) const MAX_RADIAL_RMS: f32 = 0.5;
 /// so that transient bias never drags down a good calibration.
 const GRAVITY_RMS_FLOOR: f32 = 0.1;
 /// Eigenvalue bounds of the gravity preconditioner `gravity_frame`
-/// ($A_w^{-1}$). While the working correction converges, preconditioning is a
-/// fixed-point iteration: each refresh retargets the surrogate at the current
-/// working anisotropy and the optimizer then moves the correction. Clamping
-/// bounds the anisotropy the iteration can inject per refresh, keeping the
-/// moving target stable. Only anisotropy matters to the surrogate — a common
-/// scale factor of the frame is absorbed by the learned projection $\kappa$ —
-/// so a well-converged frame sits comfortably inside these bounds and the
-/// clamp engages only while the working shape is still far off.
+/// ($A_w^{-1}$), as multiples of the frame's mean eigenvalue. While the
+/// working correction converges, preconditioning is a fixed-point iteration:
+/// each refresh retargets the surrogate at the current working anisotropy and
+/// the optimizer then moves the correction. Clamping bounds the anisotropy
+/// the iteration can inject per refresh, keeping the moving target stable.
+/// Only anisotropy matters to the surrogate — a common scale factor of the
+/// frame is absorbed by the learned projection $\kappa$ — and the frame's
+/// eigenvalue scale tracks the raw sample radius $r$ (tens of microtesla on
+/// real traces), so the bounds are relative to the mean eigenvalue rather
+/// than absolute: absolute bounds would saturate every eigenvalue of a
+/// real-scale frame at the ceiling and erase the anisotropy the
+/// preconditioner exists to remove. A well-converged frame sits comfortably
+/// inside these relative bounds and the clamp engages only while the working
+/// shape is still far off.
 const MIN_GRAVITY_FRAME_EIGENVALUE: f32 = 0.25;
 /// Upper eigenvalue bound of `gravity_frame`; see `MIN_GRAVITY_FRAME_EIGENVALUE`.
 const MAX_GRAVITY_FRAME_EIGENVALUE: f32 = 4.0;
@@ -119,8 +125,9 @@ pub(super) struct MagModel<const N: usize> {
     //  the instance here will be optional, indicating that LearnedState are either available or not
     pub(super) learned_gravity_projection: Option<f32>, /*$\kappa$*/
     /// Gravity preconditioner frame $A_w^{-1}$: the inverse of the current
-    /// working soft-iron correction, symmetrized with eigenvalues clamped to
-    /// [`MIN_GRAVITY_FRAME_EIGENVALUE`, `MAX_GRAVITY_FRAME_EIGENVALUE`]. The
+    /// working soft-iron correction, symmetrized with each eigenvalue clamped
+    /// to [`MIN_GRAVITY_FRAME_EIGENVALUE`, `MAX_GRAVITY_FRAME_EIGENVALUE`]
+    /// multiples of the frame's mean eigenvalue. The
     /// surrogate residual uses the preconditioned direction
     /// $\tilde{g}_i = A_w^{-1} g_i$, so it pins
     /// $\tilde{g}_i^T n_i = \gamma r\, g_i^T A_w^{-1} A m_i$, which reduces
@@ -420,13 +427,15 @@ impl<const N: usize> MagModel<N> {
 
     /// Refreshes the gravity preconditioner frame from a valid working
     /// candidate: $A_w^{-1}$ is the inverse of the candidate's correction,
-    /// symmetrized, with eigenvalues clamped to
-    /// [`MIN_GRAVITY_FRAME_EIGENVALUE`, `MAX_GRAVITY_FRAME_EIGENVALUE`]. The
-    /// candidate correction is already SPD with bounded condition, so the
-    /// inverse is well-defined; the clamp bounds the per-refresh target
-    /// motion of the fixed-point iteration between preconditioner and fit.
-    /// The frame is refreshed even when the surrogate is weight-disabled, so
-    /// a later opt-in never starts from a stale frame.
+    /// symmetrized, with each eigenvalue clamped to
+    /// [`MIN_GRAVITY_FRAME_EIGENVALUE`, `MAX_GRAVITY_FRAME_EIGENVALUE`]
+    /// multiples of the frame's mean eigenvalue. The candidate correction is
+    /// already SPD with bounded condition, so the inverse is well-defined;
+    /// the mean-relative clamp bounds the anisotropy the iteration can inject
+    /// per refresh while preserving the frame's common scale, keeping the
+    /// moving target of the fixed-point iteration between preconditioner and
+    /// fit stable. The frame is refreshed even when the surrogate is
+    /// weight-disabled, so a later opt-in never starts from a stale frame.
     pub(super) fn refresh_gravity_frame(&mut self, candidate: &CalibrationCandidate) {
         // Defensive: a valid working candidate is SPD with bounded condition,
         // so inversion cannot fail; keep the previous frame if it ever does.
@@ -435,9 +444,19 @@ impl<const N: usize> MagModel<N> {
         };
         let symmetrized = 0.5 * (inverse + inverse.transpose());
         let eigen = symmetrized.symmetric_eigen();
-        let clamped = eigen
-            .eigenvalues
-            .map(|value| value.clamp(MIN_GRAVITY_FRAME_EIGENVALUE, MAX_GRAVITY_FRAME_EIGENVALUE));
+        // The frame's eigenvalue scale tracks the raw sample radius $r$, so
+        // the anisotropy clamp is applied relative to the mean eigenvalue:
+        // only anisotropy matters to the surrogate, and the common scale the
+        // clamp preserves is absorbed by the learned projection $\kappa$.
+        let mean_eigenvalue = eigen.eigenvalues.sum() / 3.0;
+        if !mean_eigenvalue.is_finite() || mean_eigenvalue <= f32::EPSILON {
+            return;
+        }
+        let clamped = eigen.eigenvalues.map(|value| {
+            (value / mean_eigenvalue)
+                .clamp(MIN_GRAVITY_FRAME_EIGENVALUE, MAX_GRAVITY_FRAME_EIGENVALUE)
+                * mean_eigenvalue
+        });
         self.gravity_frame =
             eigen.eigenvectors * Matrix3::from_diagonal(&clamped) * eigen.eigenvectors.transpose();
     }

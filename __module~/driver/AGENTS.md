@@ -277,7 +277,8 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$A$:** Soft-iron correction matrix, $A = D^{-1} = M^{1/2} / r$ (code field `soft_iron_correction` of
   `MagCalibrator`, candidate field `CalibrationCandidate::correction`); $3 \times 3$.
 - **$A_w$:** Current working soft-iron correction used as the gravity preconditioner; the code field
-  `gravity_frame` stores $A_w^{-1}$ with eigenvalues clamped to $[0.25, 4]$; $3 \times 3$.
+  `gravity_frame` stores $A_w^{-1}$ with each eigenvalue clamped to $[0.25, 4]$ multiples of the frame's mean
+  eigenvalue; $3 \times 3$.
 - **$B$:** Online-optimizer minibatch; $|B|$ is its observation count (code field `minibatch_size`).
 - **$B_r$:** Replay minibatch size (`replay_minibatch_size`).
 - **$b$:** Hard-iron offset vector, $b = \mu + r d$ (code field `hard_iron_offset` of `MagCalibrator`, candidate

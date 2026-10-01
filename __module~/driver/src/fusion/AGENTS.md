@@ -100,8 +100,9 @@ n_i = Q\, u_i + q / 2
 $$
 
 and the preconditioned gravity direction $\tilde{g}_i = A_w^{-1} g_i$, where $A_w$ is the current working
-soft-iron correction: the code field `gravity_frame` stores the symmetrized $A_w^{-1}$ with eigenvalues clamped
-to $[0.25, 4]$, refreshed from every valid working candidate and identity until the first one. The projection
+soft-iron correction: the code field `gravity_frame` stores the symmetrized $A_w^{-1}$ with each eigenvalue clamped
+to $[0.25, 4]$ multiples of the frame's mean eigenvalue, refreshed from every valid working candidate and identity
+until the first one. The projection
 $s_i = \tilde{g}_i^T n_i$ is linear in $\theta$ through the feature vector
 
 $$
