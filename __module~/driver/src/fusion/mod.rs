@@ -249,6 +249,7 @@ impl AhrsCorrection {
     /// Attitude as Euler angles (roll, pitch, yaw) in the configured frame, in radians.
     pub fn attitude_euler_rad(&self) -> Vector3<f32> {
         let (roll, pitch, yaw) = self.attitude_quaternion_frd().euler_angles();
+        // TODO: add roundtrip test
         let frd = Vector3::new(roll, pitch, yaw);
         let biased = frd + self.euler_bias;
         let ordered = self.euler_order.map(|v| {

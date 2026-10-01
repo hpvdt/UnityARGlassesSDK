@@ -338,7 +338,7 @@ impl NaiveCF {
 
     fn renormalize(&mut self) {
         // self.attitude.renormalize_fast(); // TODO: switch to it after rigorous testing
-        self.integrate_regress_roll();
+        // self.integrate_regress_roll();
         self.state.attitude.renormalize();
     }
 }
@@ -367,8 +367,8 @@ impl Fusion for NaiveCF {
                 timestamp,
             } => {
                 // self.integrate_gyro(&gyroscope, timestamp);
-                // self.integrate_acc(&accelerometer, timestamp);
-                // self.renormalize();
+                self.integrate_acc(&accelerometer, timestamp);
+                self.renormalize();
             }
 
             GlassesEvent::Magnetometer {
