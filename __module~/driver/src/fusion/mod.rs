@@ -164,7 +164,7 @@ pub struct FusionState {
     /// Boxed: the calibrator is ~104 KB inline, and constructing it by value
     /// through the `FusionState::new`/`NaiveCF::new` chain overflowed the
     /// 1 MiB Windows main-thread stack in debug builds.
-    pub magCalibrator: Box<MagCalibrator<1023>>,
+    pub mag_calibrator: Box<MagCalibrator<1023>>,
 }
 
 impl FusionState {
@@ -174,7 +174,7 @@ impl FusionState {
             glasses,
             attitude: UnitQuaternion::identity(),
             corrections: NineAxis::default(),
-            magCalibrator: Box::new(MagCalibrator::new()),
+            mag_calibrator: Box::new(MagCalibrator::new()),
         }
     }
 }

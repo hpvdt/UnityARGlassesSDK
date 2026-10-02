@@ -152,7 +152,7 @@ fn format_event(
                 mag_frd.x, mag_frd.y, mag_frd.z, timestamp
             );
             let calibration = match fusion
-                .magCalibrator
+                .mag_calibrator
                 .evaluate_correct(mag_frd, *gravity, timestamp)
             {
                 Ok(MagCalibrationResult {

@@ -129,7 +129,7 @@ impl NaiveCF {
         };
         let mag_corrected: Vector3<f32> = match self
             .state
-            .magCalibrator
+            .mag_calibrator
             .evaluate_correct(mag_raw, gravity_hint, t)
             .ok()
             .and_then(|result| result.direction)

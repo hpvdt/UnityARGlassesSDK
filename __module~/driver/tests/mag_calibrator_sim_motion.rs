@@ -244,13 +244,13 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
         };
         let eval_start = Instant::now();
         let result = fusion
-            .magCalibrator
+            .mag_calibrator
             .evaluate_correct(raw_frd, gravity_direction, timestamp);
         stats.eval_time += eval_start.elapsed();
         stats.eval_count += 1;
         let (confidence, radial_loss, regularization_loss, gravity_loss, coverage) =
             result.as_ref().map_or_else(
-                |_| (fusion.magCalibrator.get_confidence(), 0.0, 0.0, 0.0, 0.0),
+                |_| (fusion.mag_calibrator.get_confidence(), 0.0, 0.0, 0.0, 0.0),
                 |result| {
                     (
                         result.confidence(),
@@ -339,7 +339,7 @@ fn run_calibration(config: Config, attitude_mode: AttitudeMode) -> RunStats {
              seed={seed}, mode={mode_label}, timestamp={last_timestamp}, \
              current_confidence={}, max_confidence={max_confidence}, \
              quality_streak={quality_streak}, max_quality_streak={max_quality_streak}",
-            fusion.magCalibrator.get_confidence(),
+            fusion.mag_calibrator.get_confidence(),
         )
     });
     stats.count_until_first_success = count_until_first_success;

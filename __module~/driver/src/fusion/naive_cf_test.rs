@@ -12,7 +12,7 @@ fn update_mag_uses_shared_mag_calibrator() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let scale = Vector3::new(3.0, 2.0, 1.5);
-    fusion.state.magCalibrator = Box::new(seeded_calibrator(offset, scale));
+    fusion.state.mag_calibrator = Box::new(seeded_calibrator(offset, scale));
     fusion.state.attitude = UnitQuaternion::identity();
     fusion.state.corrections.mag = Default::default();
 
@@ -31,7 +31,7 @@ fn update_mag_ignores_magnetic_dip_angle() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let scale = Vector3::new(3.0, 2.0, 1.5);
-    fusion.state.magCalibrator = Box::new(seeded_calibrator(offset, scale));
+    fusion.state.mag_calibrator = Box::new(seeded_calibrator(offset, scale));
     fusion.state.attitude = UnitQuaternion::identity();
     fusion.state.corrections.mag = Default::default();
 
@@ -47,7 +47,7 @@ fn update_mag_ignores_magnetic_dip_angle() {
 #[test]
 fn update_mag_discards_ill_conditioned_calibration() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
-    fusion.state.magCalibrator = Box::new(nearly_collinear_calibrator());
+    fusion.state.mag_calibrator = Box::new(nearly_collinear_calibrator());
     fusion.state.attitude = UnitQuaternion::identity();
     fusion.state.corrections.mag = Default::default();
 
