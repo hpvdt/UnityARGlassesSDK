@@ -234,6 +234,7 @@ appear in this list. Add a new acronym here in the same change that introduces i
 - **RMS:** Root Mean Square.
 - **RUB:** Right-Up-Back Android sensor coordinate frame.
 - **SGD:** Stochastic Gradient Descent.
+- **SDK:** Software Development Kit.
 - **SPD:** Symmetric Positive-Definite.
 - **SVD:** Singular Value Decomposition.
 
