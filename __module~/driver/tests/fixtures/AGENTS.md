@@ -49,7 +49,7 @@ firmware fusion parameters below pass through unused. Values shown are the Air 1
 ### Mount Rotation Extrinsics
 
 - **`gyro_q_mag`** `[0.353553, 0.612372, 0.353553, 0.612372]`: Magnetometer-to-gyroscope frame rotation as a
-  `[x, y, z, w]` quaternion — a $\arccos(-1/4) \approx 104.48^\circ$ rotation about the axis
+  `[x, y, z, w]` quaternion — an $\arccos(-1/4) \approx 104.48^\circ$ rotation about the axis
   $(1, \sqrt{3}, 1)/\sqrt{5}$, so the magnetometer is mounted at a non-axis-aligned angle relative to the gyroscope.
 - **`accel_q_gyro`** `[0, 0, 0, 1]`: Accelerometer-to-gyroscope frame rotation; identity in this capture.
 - The firmware stores both quaternions in the passive JPL convention, the transpose of the active Hamilton rotation
