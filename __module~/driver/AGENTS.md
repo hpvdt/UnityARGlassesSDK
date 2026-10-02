@@ -224,6 +224,10 @@ appear in this list. Add a new acronym here in the same change that introduces i
 - **ESKF:** Error-State Kalman Filter.
 - **FFI:** Foreign Function Interface.
 - **FRD:** Forward-Right-Down aerospace coordinate frame.
+- **HID:** Human Interface Device.
+- **IMU:** Inertial Measurement Unit.
+- **JPL:** Jet Propulsion Laboratory quaternion convention.
+- **JSON:** JavaScript Object Notation.
 - **KF:** Kalman Filter.
 - **LLM:** Large Language Model.
 - **PRNG:** Pseudo-Random Number Generator.
