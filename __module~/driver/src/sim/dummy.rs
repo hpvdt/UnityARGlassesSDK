@@ -1,12 +1,17 @@
+//! Minimal simulated glasses that emit a constant level attitude, for smoke tests.
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nalgebra::{Isometry3, Vector3};
 
 use crate::{ARGlasses, DisplayMode, GlassesEvent, Side};
 
+/// Accelerometer reading of a motionless device under gravity, in the RUB frame (m/s²).
 pub static GRAVITY_UP: Vector3<f32> = Vector3::new(0.0, 9.81, 0.0);
+/// Gyroscope reading of a motionless device, in the RUB frame (rad/s).
 pub static ZERO: Vector3<f32> = Vector3::new(0.0, 0.0, 0.0);
 
+/// Simulated glasses that always report a motionless, level attitude.
 pub struct Dummy {}
 
 impl Dummy {}
