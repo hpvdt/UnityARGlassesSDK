@@ -263,7 +263,7 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$\tilde{S}_2$:** Low-frequency state-sensor reading (accelerometer gravity or magnetometer) correcting the
   complementary filter.
 - **$d\tilde{S}_1$:** High-frequency rate-sensor reading (gyroscope), the dead-reckoning increment rate of the
-  complementary filter (code variable `d_s1_t1` holds the increment $d\tilde{S}_1\, dt_1$).
+  complementary filter.
 - **$x_i$:** Raw retained magnetometer sample vector; $3 \times 1$.
 
 #### Complementary Filter
@@ -275,7 +275,7 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$S$:** Current estimated attitude state (unit quaternion) of the naive complementary filter (code field
   `FusionState::attitude`).
 - **$S^{-}$:** Previous estimated attitude state of the naive complementary filter.
-- **$dt_1$:** Time elapsed since the last rate-sensor sample (code variable `d_t1`).
+- **$dt_1$:** Time elapsed since the last rate-sensor sample.
 
 #### Magnetometer Calibration
 

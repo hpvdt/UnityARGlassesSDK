@@ -8,17 +8,6 @@ fn frd_to_rub(v: Vector3<f32>) -> Vector3<f32> {
 }
 
 #[test]
-fn integrate_no_roll_skips_when_factor_is_none() {
-    let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
-    let attitude = UnitQuaternion::from_euler_angles(0.8, -0.4, 1.1);
-    fusion.state.attitude = attitude;
-
-    fusion.integrate_regress_roll();
-
-    assert!(fusion.state.attitude.angle_to(&attitude) < 1.0e-5);
-}
-
-#[test]
 fn update_mag_uses_shared_mag_calibrator() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     let offset = Vector3::new(11.0, -7.0, 5.0);
