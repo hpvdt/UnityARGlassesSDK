@@ -65,9 +65,9 @@ impl CalibrationQuality {
     /// `coverage`. The loss diagnostics are deliberately excluded, so a
     /// transiently poor fit does not mask good directional support.
     pub fn confidence(&self) -> f32 {
-        let quality = self.coverage;
-        if quality.is_finite() {
-            quality.clamp(0.0, 1.0)
+        let result = self.coverage;
+        if result.is_finite() {
+            result.clamp(0.0, 1.0)
         } else {
             0.0
         }

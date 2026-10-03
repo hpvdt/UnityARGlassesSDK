@@ -25,10 +25,13 @@ use self::naive_cf::NaiveCF;
 use crate::{any_glasses_or_dummy, ARGlasses, Result};
 
 mod mag;
+use crate::fusion::inconsistency::{Correction, FusionInconsistency};
 pub use mag::{
     BadCalibration, BadMagCause, BadReading, CalibrationQuality, MagCalibrationResult,
     MagCalibrator,
 };
+
+mod inconsistency;
 mod naive_cf;
 #[cfg(test)]
 mod naive_cf_test;
@@ -36,18 +39,6 @@ mod naive_cf_test;
 /// Converts a raw sensor vector from RUB (right, up, back) into FRD (forward, right, down).
 pub fn rub_to_frd(v: &Vector3<f32>) -> Vector3<f32> {
     Vector3::new(-v.z, v.x, -v.y)
-}
-
-/// Non-overridable fusion inconsistency computation.
-pub trait FusionInconsistency {
-    /// use FRD frame as error in Quaternion is multiplicative & is over-defined
-    fn inconsistency(&self) -> f32;
-}
-
-impl<T: Fusion + ?Sized> FusionInconsistency for T {
-    fn inconsistency(&self) -> f32 {
-        self.corrections().total_avg()
-    }
 }
 
 /// Sensor fusion algorithm interface: consumes raw glasses events and produces an attitude estimate.
@@ -76,44 +67,6 @@ impl dyn Fusion {
     }
 }
 
-/// Last and averaged correction magnitudes for a sensor.
-#[derive(Clone, Copy, Debug)]
-pub struct Correction {
-    /// Most recent correction magnitude in radians.
-    pub prev: f32, // previous
-    /// Exponential moving average of correction magnitude in radians.
-    pub avg: f32, // average
-}
-
-impl Correction {
-    /// Exponential averaging decay rate.
-    pub const AVG_DECAY: f32 = 0.90;
-
-    fn new() -> Self {
-        Self {
-            prev: 0.0,
-            avg: 0.0,
-        }
-    }
-
-    fn record(&mut self, correction: f32) -> () {
-        self.prev = correction;
-        self.avg = self.avg * Self::AVG_DECAY + correction * (1.0 - Self::AVG_DECAY);
-    }
-}
-
-impl Default for Correction {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl fmt::Display for Correction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "prev={:10.7}, avg={:10.7}", self.prev, self.avg)
-    }
-}
-
 /// Per-sensor (acc/gyro/mag) triplet of homogeneous values.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NineAxis<T> {
@@ -125,13 +78,7 @@ pub struct NineAxis<T> {
     pub mag: T,
 }
 
-impl NineAxis<Correction> {
-    fn total_avg(&self) -> f32 {
-        self.acc.avg + self.gyro.avg + self.mag.avg
-    }
-}
-
-impl fmt::Display for NineAxis<Correction> {
+impl<T: fmt::Display> fmt::Display for NineAxis<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
