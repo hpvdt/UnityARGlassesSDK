@@ -210,100 +210,99 @@ impl NaiveCF {
         scaled_opt
     }
 
-    // ponytail: kept for temporary debugging; remove together with the rest of the rotation helpers
-    #[allow(dead_code)]
-    pub fn get_rotation(
-        acc: &Vector3<f32>,
-        rotation: &UnitQuaternion<f32>,
-    ) -> Option<UnitQuaternion<f32>> {
-        Self::get_rotation_raw(acc, rotation)
-    }
+    // #[allow(dead_code)]
+    // pub fn get_rotation(
+    //     acc: &Vector3<f32>,
+    //     rotation: &UnitQuaternion<f32>,
+    // ) -> Option<UnitQuaternion<f32>> {
+    //     Self::get_rotation_raw(acc, rotation)
+    // }
 
-    #[allow(dead_code)]
-    fn get_rotation_raw(
-        acc: &Vector3<f32>,
-        rotation: &UnitQuaternion<f32>,
-    ) -> Option<UnitQuaternion<f32>> {
-        let uncorrected = rotation * Self::G_ACC_FRD;
-        let correction_opt = UnitQuaternion::scaled_rotation_between(&uncorrected, &acc, 1.0);
-        correction_opt
-    }
+    // #[allow(dead_code)]
+    // fn get_rotation_raw(
+    //     acc: &Vector3<f32>,
+    //     rotation: &UnitQuaternion<f32>,
+    // ) -> Option<UnitQuaternion<f32>> {
+    //     let uncorrected = rotation * Self::G_ACC_FRD;
+    //     let correction_opt = UnitQuaternion::scaled_rotation_between(&uncorrected, &acc, 1.0);
+    //     correction_opt
+    // }
 
-    #[allow(dead_code)]
-    fn get_rotation_verified(
-        acc: &Vector3<f32>,
-        rotation: &UnitQuaternion<f32>,
-    ) -> Option<UnitQuaternion<f32>> {
-        let raw = Self::get_rotation_raw(acc, rotation);
-        match raw {
-            Some(correction) => {
-                //round-trip verification
-
-                let corrected = correction * rotation;
-
-                let should_be_zero = Self::get_rotation_raw(acc, &corrected).unwrap().angle();
-
-                if should_be_zero > 0.001 {
-                    println!("residual={}", should_be_zero);
-                    println!(
-                        "compute: {}, {} => {}",
-                        acc.transpose(),
-                        rotation,
-                        correction
-                    );
-
-                    {
-                        let norm = rotation.norm();
-                        assert!(norm > 0.999 && norm < 1.001, "norm={}", norm);
-                    }
-
-                    {
-                        let reconstructed = UnitQuaternion::from_axis_angle(
-                            &rotation.axis().unwrap(),
-                            rotation.angle(),
-                        );
-
-                        assert!((rotation * reconstructed.inverse()).angle() < 0.001);
-
-                        assert!(
-                            (rotation * Self::G_ACC_FRD.normalize()
-                                - reconstructed * Self::G_ACC_FRD.normalize())
-                            .norm()
-                                < 0.01
-                        )
-                    }
-
-                    {
-                        let again = Self::get_rotation_raw(acc, rotation);
-                        assert!(raw == again)
-                    }
-
-                    {
-                        // verify rotation
-                        let inv = rotation.inverse();
-                        assert!((inv * rotation).angle() < 0.001);
-                        assert!((rotation * inv).angle() < 0.001);
-                    }
-
-                    {
-                        // verity acc
-                        let q = UnitQuaternion::scaled_rotation_between(&Self::G_ACC_FRD, acc, 1.0)
-                            .unwrap();
-
-                        let round1 = (q * Self::G_ACC_FRD.normalize() - acc.normalize()).norm();
-                        assert!(round1 < 0.001, "round1={}", round1);
-
-                        let round2 =
-                            (q.inverse() * acc.normalize() - Self::G_ACC_FRD.normalize()).norm();
-                        assert!(round2 < 0.001, "round2={}", round2);
-                    }
-                }
-
-                raw
-            }
-            None => raw,
-        }
-    }
+    // #[allow(dead_code)]
+    // fn get_rotation_verified(
+    //     acc: &Vector3<f32>,
+    //     rotation: &UnitQuaternion<f32>,
+    // ) -> Option<UnitQuaternion<f32>> {
+    //     let raw = Self::get_rotation_raw(acc, rotation);
+    //     match raw {
+    //         Some(correction) => {
+    //             //round-trip verification
+    //
+    //             let corrected = correction * rotation;
+    //
+    //             let should_be_zero = Self::get_rotation_raw(acc, &corrected).unwrap().angle();
+    //
+    //             if should_be_zero > 0.001 {
+    //                 println!("residual={}", should_be_zero);
+    //                 println!(
+    //                     "compute: {}, {} => {}",
+    //                     acc.transpose(),
+    //                     rotation,
+    //                     correction
+    //                 );
+    //
+    //                 {
+    //                     let norm = rotation.norm();
+    //                     assert!(norm > 0.999 && norm < 1.001, "norm={}", norm);
+    //                 }
+    //
+    //                 {
+    //                     let reconstructed = UnitQuaternion::from_axis_angle(
+    //                         &rotation.axis().unwrap(),
+    //                         rotation.angle(),
+    //                     );
+    //
+    //                     assert!((rotation * reconstructed.inverse()).angle() < 0.001);
+    //
+    //                     assert!(
+    //                         (rotation * Self::G_ACC_FRD.normalize()
+    //                             - reconstructed * Self::G_ACC_FRD.normalize())
+    //                         .norm()
+    //                             < 0.01
+    //                     )
+    //                 }
+    //
+    //                 {
+    //                     let again = Self::get_rotation_raw(acc, rotation);
+    //                     assert!(raw == again)
+    //                 }
+    //
+    //                 {
+    //                     // verify rotation
+    //                     let inv = rotation.inverse();
+    //                     assert!((inv * rotation).angle() < 0.001);
+    //                     assert!((rotation * inv).angle() < 0.001);
+    //                 }
+    //
+    //                 {
+    //                     // verity acc
+    //                     let q = UnitQuaternion::scaled_rotation_between(&Self::G_ACC_FRD, acc, 1.0)
+    //                         .unwrap();
+    //
+    //                     let round1 = (q * Self::G_ACC_FRD.normalize() - acc.normalize()).norm();
+    //                     assert!(round1 < 0.001, "round1={}", round1);
+    //
+    //                     let round2 =
+    //                         (q.inverse() * acc.normalize() - Self::G_ACC_FRD.normalize()).norm();
+    //                     assert!(round2 < 0.001, "round2={}", round2);
+    //                 }
+    //             }
+    //
+    //             raw
+    //         }
+    //         None => raw,
+    //     }
+    // }
 
     fn renormalize(&mut self) {
         // self.attitude.renormalize_fast(); // TODO: switch to it after rigorous testing
