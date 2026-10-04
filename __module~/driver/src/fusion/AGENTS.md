@@ -13,6 +13,17 @@ Treat shared sensor-event documentation and the fusion module as the source of t
 transformations explicit and centralized, document device-specific deviations, and use the existing linear-algebra
 types.
 
+## Estimator consistency reporting
+
+`consistency.rs` drafts the ArduPilot/PX4-style `Consistency` report: each observation source gets a
+`SourceConsistency` tracking the innovation magnitude $\nu$, its exponential moving average, the gate-normalized
+test ratio $\rho = (\nu / \sigma)^2$ and its average $\bar{\rho}$, plus sample and outlier counts; $\bar{\rho}$
+below 1 reports a consistent source. Recording is estimator-agnostic: the complementary filter reconstructs $\nu$
+from the post-blend correction and the blend ratio (`SourceConsistency::record_scaled`), while a Kalman filter
+passes the innovation with its live innovation variance (`SourceConsistency::record_with_variance`). The report is
+not yet wired into the `Fusion` trait; `NineAxis<Correction>` in `FusionState` remains the live counter until
+fusion implementations adopt `Consistency`.
+
 ## Magnetometer calibration
 
 `MagCalibrator<N>` retains finite, nonzero FRD magnetometer samples. Each row may also carry an optional normalized,

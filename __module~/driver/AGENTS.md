@@ -277,6 +277,19 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$S^{-}$:** Previous estimated attitude state of the naive complementary filter.
 - **$dt_1$:** Time elapsed since the last rate-sensor sample.
 
+#### Consistency Reporting
+
+- **$\Sigma$:** Live innovation variance delivered alongside a Kalman filter observation (code parameter
+  `innovation_variance` of `SourceConsistency::record_with_variance`); scalar in the 9-axis attitude context.
+- **$\nu$:** Innovation magnitude of one attitude observation: the pre-correction residual between the measurement
+  and the prediction, in radians for the 9-axis sources (code field `latest` of `SourceConsistency`).
+- **$\bar{\nu}$:** Exponential moving average of $\nu$ (code field `avg` of `SourceConsistency`).
+- **$\rho$:** Test ratio $\rho = (\nu / \sigma)^2$ (code field `test_ratio` of `SourceConsistency`).
+- **$\bar{\rho}$:** Exponential moving average of $\rho$ (code field `avg_test_ratio` of `SourceConsistency`);
+  values at or above 1 report an inconsistent source.
+- **$\sigma$:** Innovation gate: the expected 1-standard-deviation spread of $\nu$ (code field `gate` of
+  `SourceConsistency`).
+
 #### Magnetometer Calibration
 
 - **$A$:** Soft-iron correction matrix, $A = D^{-1} = M^{1/2} / r$ (code field `soft_iron_correction` of

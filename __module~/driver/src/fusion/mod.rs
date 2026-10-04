@@ -31,6 +31,9 @@ pub use mag::{
     MagCalibrator,
 };
 
+mod consistency;
+pub use consistency::{Consistency, ConsistencyStatus, SourceConsistency};
+
 mod inconsistency;
 mod naive_cf;
 #[cfg(test)]
