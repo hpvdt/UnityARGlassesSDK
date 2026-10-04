@@ -279,16 +279,19 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 
 #### Consistency Reporting
 
-- **$\Sigma$:** Live innovation variance delivered alongside a Kalman filter observation (code parameter
-  `innovation_variance` of `SourceConsistency::record_with_variance`); scalar in the 9-axis attitude context.
+- **$\Sigma$:** Innovation variance of one attitude observation: the expected squared spread of the innovation, in
+  squared radians for the 9-axis sources (code field/parameter `innovation_variance` of `SourceConsistency`;
+  counterparts ArduPilot `varInnovMag`/`varInnovVelPos`, PX4 `innovation_variance`).
+- **$\eta$:** Innovation consistency gate in multiples of $\sqrt{\Sigma}$, floored at 1 (code field
+  `innovation_gate` of `SourceConsistency`; counterparts ArduPilot `EK3_*_I_GATE` parameters, PX4 `EKF2_*_GATE`).
 - **$\nu$:** Innovation magnitude of one attitude observation: the pre-correction residual between the measurement
-  and the prediction, in radians for the 9-axis sources (code field `latest` of `SourceConsistency`).
-- **$\bar{\nu}$:** Exponential moving average of $\nu$ (code field `avg` of `SourceConsistency`).
-- **$\rho$:** Test ratio $\rho = (\nu / \sigma)^2$ (code field `test_ratio` of `SourceConsistency`).
-- **$\bar{\rho}$:** Exponential moving average of $\rho$ (code field `avg_test_ratio` of `SourceConsistency`);
-  values at or above 1 report an inconsistent source.
-- **$\sigma$:** Innovation gate: the expected 1-standard-deviation spread of $\nu$ (code field `gate` of
-  `SourceConsistency`).
+  and the prediction, in radians for the 9-axis sources (code field `innovation` of `SourceConsistency`).
+- **$\bar{\nu}$:** Exponential moving average of $\nu$ (code field `innovation_filtered` of `SourceConsistency`).
+- **$\rho$:** Test ratio $\rho = \nu^2 / (\eta^2 \Sigma)$ (code field `test_ratio` of `SourceConsistency`;
+  counterparts ArduPilot `*TestRatio`, PX4 `test_ratio`); a sample fails the consistency check at or above 1.
+- **$\bar{\rho}$:** Exponential moving average of $\rho$ (code field `test_ratio_filtered` of
+  `SourceConsistency`); values at or above 1 report an inconsistent source, and the MAVLink-style export is
+  $\sqrt{\max \bar{\rho}}$ (ArduPilot `EKF_STATUS_REPORT` `*_variance`, PX4 `estimator_status` `*_test_ratio`).
 
 #### Magnetometer Calibration
 

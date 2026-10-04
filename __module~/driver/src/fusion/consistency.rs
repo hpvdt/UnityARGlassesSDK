@@ -1,29 +1,39 @@
 //!
 //! ArduPilot/PX4-style estimator consistency reporting for the fusion pipeline (draft).
 //!
-//! Both flight stacks report estimator health through normalized innovations. For each
-//! observation source, the residual magnitude $\nu$ between the measurement and the prediction
-//! is divided by its expected spread $\sigma$, and the test ratio $\rho = (\nu / \sigma)^2$
-//! plus its filtered value $\bar{\rho}$ are published (ArduPilot `EKF_STATUS_REPORT` variance
-//! fields, PX4 `estimator_status` `*_test_ratio` fields). A filtered ratio below 1.0 means the
-//! source agrees with the estimator within its declared noise level; sustained values at or
-//! above 1.0 report inconsistency.
+//! Both flight stacks report estimator health through *innovation consistency checks*: for each
+//! observation source ("aiding source" in PX4) the innovation $\nu$ (residual between
+//! measurement and prediction) is squared against its expected variance $\Sigma$ and an
+//! innovation gate $\eta$ in multiples of the innovation standard deviation $\sqrt{\Sigma}$:
+//!
+//! $$\rho = \frac{\nu^2}{\eta^2 \, \Sigma}$$
+//!
+//! A sample with `test_ratio` $\rho \ge 1$ fails the check (ArduPilot `magTestRatio`,
+//! `yawTestRatio`, `velTestRatio`, `posTestRatio`, `hgtTestRatio`; PX4 aid-source `test_ratio`),
+//! and the source is healthy while the ratio stays below 1 (ArduPilot `magHealth`,
+//! `velCheckPassed`, `posCheckPassed`). The filtered value $\bar{\rho}$ is the published
+//! estimator-health signal: PX4's aid-source `test_ratio_filtered`, which `estimator_status`
+//! exports as `*_test_ratio = sqrt(max(|test_ratio_filtered|))`, and ArduPilot's
+//! `EKF_STATUS_REPORT` `*_variance` fields, exported as $\sqrt{\rho}$.
 //!
 //! [`SourceConsistency`] is estimator-agnostic:
 //!
 //! - complementary filter (e.g. `NaiveCF`): $\nu$ is the pre-correction angular residual and
-//!   $\sigma$ a configured noise gate. [`SourceConsistency::record_scaled`] reconstructs $\nu$
-//!   from the post-blend correction the filter already stores in `NineAxis<Correction>`:
-//!   `UnitQuaternion::scaled_rotation_between` scales the rotation angle exactly, so the
-//!   residual is the applied correction divided by the blend ratio (code constants
-//!   `BASE_GRAV_RATIO`, `BASE_MAG_RATIO`).
-//! - EKF/ESKF: $\nu$ is the observation innovation and $\sigma = \sqrt{\Sigma}$ the live
-//!   innovation spread; [`SourceConsistency::record_with_variance`] consumes both per sample.
+//!   $\Sigma$ a configured innovation variance. [`SourceConsistency::record_scaled`]
+//!   reconstructs $\nu$ from the post-blend correction the filter already stores in
+//!   `NineAxis<Correction>`: `UnitQuaternion::scaled_rotation_between` scales the rotation
+//!   angle exactly, so the residual is the applied correction divided by the blend ratio (code
+//!   constants `BASE_GRAV_RATIO`, `BASE_MAG_RATIO`).
+//! - EKF/ESKF: $\nu$ is the observation innovation and $\Sigma$ the live innovation variance;
+//!   [`SourceConsistency::record_with_variance`] consumes both per sample.
 //!
-//! [`Consistency`] aggregates the acc/gyro/mag sources and fuses their verdicts. Angular
-//! magnitudes are frame-free scalars; the residuals derive from FRD vectors per the module
-//! convention. The report is not yet wired into `Fusion`: when `NaiveCF` and a future EKF both
-//! fill one, a `Fusion::consistency()` accessor supersedes `Fusion::corrections()`.
+//! [`Consistency`] aggregates the acc/gyro/mag sources and fuses their verdicts, mirroring the
+//! per-source fields of PX4 `EstimatorAidSource1d.msg` (`observation`/`observation_variance` are
+//! deliberately omitted: the measurement and prediction live in the estimator, this tracker
+//! only sees innovations) and ArduPilot's `NavEKF3_core` `*TestRatio`/`*InnovGate` members.
+//! Angular magnitudes are frame-free scalars; the residuals derive from FRD vectors per the
+//! module convention. The report is not yet wired into `Fusion`: when `NaiveCF` and a future
+//! EKF both fill one, a `Fusion::consistency()` accessor supersedes `Fusion::corrections()`.
 //!
 use std::fmt;
 
@@ -33,8 +43,10 @@ use super::NineAxis;
 #[path = "consistency_tests.rs"]
 mod consistency_tests;
 
-/// Consistency verdict of one observation source or of the whole estimator, mirroring the
-/// pass/fail semantics of ArduPilot `EKF_STATUS_REPORT` and PX4 `estimator_status`.
+/// Consistency verdict of one observation source or of the whole estimator. Mirrors the
+/// pass/fail semantics of ArduPilot's `magHealth`/`velCheckPassed` health booleans and PX4's
+/// `estimator_status.innovation_check_flags` bitmask; `Pending` is the startup state both
+/// stacks implement by waiting for a few samples (ArduPilot `_mag_counter > 3`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ConsistencyStatus {
     /// Fewer than [`SourceConsistency::MIN_SAMPLES`] innovations recorded; no verdict yet.
@@ -43,74 +55,137 @@ pub enum ConsistencyStatus {
     /// Filtered test ratio $\bar{\rho} < 1$.
     Consistent,
     /// Filtered test ratio $\bar{\rho} \ge 1$: the source disagrees with the estimator by more
-    /// than its declared noise level.
+    /// than the gated innovation spread $\eta \sqrt{\Sigma}$.
     Inconsistent,
 }
 
-/// Innovation statistics of one observation source: the per-source row of an ArduPilot
-/// `EKF_STATUS_REPORT`. Angular sources (all three in the 9-axis pipeline) use radians.
+/// Innovation consistency statistics of one observation source ("aiding source" in PX4 terms):
+/// the per-source row reported by ArduPilot `EKF_STATUS_REPORT` and PX4
+/// `EstimatorAidSource1d/2d/3d.msg` + `estimator_status`.
+/// Field names match their ArduPilot/PX4 counterparts, converted to `snake_case`.
+/// Angular sources (all three in the 9-axis pipeline) use radians.
 #[derive(Clone, Copy, Debug)]
 pub struct SourceConsistency {
-    /// Innovation gate $\sigma$: the expected 1-standard-deviation spread of the innovation
-    /// in source units. Configured for a complementary filter; for a Kalman filter this field
-    /// tracks the live innovation spread recorded through
-    /// [`SourceConsistency::record_with_variance`].
-    pub gate: f32,
+    /// Innovation variance $\Sigma$: the expected squared spread of the innovation, in squared
+    /// source units. Configured for a complementary filter (the configured source-unit noise
+    /// $\sigma$ enters as $\Sigma = \sigma^2$); for a Kalman filter this field tracks the live
+    /// innovation variance recorded through [`SourceConsistency::record_with_variance`].
+    ///
+    /// Counterparts: ArduPilot `varInnovMag`/`varInnovVelPos`/`varInnov`, PX4
+    /// `innovation_variance`.
+    pub innovation_variance: f32,
+
+    /// Innovation consistency gate $\eta$ in multiples of $\sqrt{\Sigma}$, floored at
+    /// [`Self::MIN_INNOVATION_GATE`]. Configured per source.
+    ///
+    /// Counterparts: ArduPilot `EK3_*_I_GATE` parameters (`_magInnovGate`, `_yawInnovGate`,
+    /// `_gpsVelInnovGate`, `_gpsPosInnovGate`, in centi-standard-deviations, floored at 1 via
+    /// `MAX(0.01f * _magInnovGate, 1.0f)`), PX4 `innovation_gate` (parameter `EKF2_MAG_GATE`,
+    /// floored at 1 via `math::max(_params.ekf2_mag_gate, 1.f)`).
+    pub innovation_gate: f32,
+
     /// Latest innovation magnitude $\nu$ (pre-correction residual), in source units.
-    pub latest: f32,
+    ///
+    /// Counterparts: ArduPilot `innovMag`/`innovYaw`/`innovVelPos`/`innovVtas`, PX4 `innovation`.
+    pub innovation: f32,
+
     /// Exponential moving average $\bar{\nu}$ of the innovation magnitude.
-    pub avg: f32,
-    /// Latest test ratio $\rho = (\nu / \sigma)^2$ (unitless, PX4 `*_test_ratio` semantics).
+    ///
+    /// Counterpart: PX4 `innovation_filtered` (first-order filter with dt-dependent gain,
+    /// here a fixed exponential average; ArduPilot has no filtered innovation).
+    pub innovation_ema: f32,
+
+    /// Latest test ratio $\rho = \nu^2 / (\eta^2 \Sigma)$ (unitless, already gate-normalized).
+    ///
+    /// Counterparts: ArduPilot `magTestRatio`/`yawTestRatio`/`velTestRatio`/`posTestRatio`/
+    /// `hgtTestRatio` = `sq(innov) / (sq(gate) * varInnov)`, PX4 aid-source `test_ratio` =
+    /// `sq(innovation) / (sq(innovation_gate) * innovation_variance)`.
     pub test_ratio: f32,
-    /// Exponential moving average $\bar{\rho}$ of the test ratio, the ArduPilot
-    /// `EKF_STATUS_REPORT` variance fields' semantics; the filtered verdict threshold is 1.0.
-    pub avg_test_ratio: f32,
+
+    /// Exponential moving average $\bar{\rho}$ of the test ratio; the consistency verdict
+    /// threshold is 1.0.
+    ///
+    /// Counterpart: PX4 aid-source `test_ratio_filtered` (signed first-order filter, here
+    /// unsigned fixed-decay) and the `estimator_status` `*_test_ratio` exports
+    /// `sqrt(max(|test_ratio_filtered|))`; ArduPilot exports `sqrt(*TestRatio)` as the
+    /// `EKF_STATUS_REPORT` `*_variance` fields.
+    pub test_ratio_ema: f32,
+
+    /// Whether the latest sample failed the consistency check ($\rho \ge 1$); a Kalman filter
+    /// would refuse to fuse it (ArduPilot `fuse*Data = false`, `posCheckPassed`).
+    ///
+    /// Counterpart: PX4 `innovation_rejected`.
+    pub innovation_rejected: bool,
+
     /// Total innovations recorded since construction.
-    pub samples: u64,
-    /// Innovations whose normalized magnitude exceeded [`SourceConsistency::REJECT_GATE`];
-    /// a Kalman filter would have refused to fuse them.
-    pub rejected: u64,
+    pub samples_count: u64,
+
+    /// Innovations that failed the consistency check since construction (ArduPilot ages them
+    /// via `last*PassTime_ms` timeout bookkeeping instead of counting).
+    pub rejected_count: u64,
 }
 
 impl SourceConsistency {
     /// Exponential averaging decay per sample, shared with the legacy `Correction` counters.
+    /// At factor 0.9 the filter's continuous-equivalent time constant is
+    /// $\tau \approx -dt / \ln 0.9 \approx 9.5$ samples ($\approx 0.48$ s at a 20 Hz
+    /// magnetometer rate, $\approx 0.1$ s at 100 Hz). PX4's `test_ratio_filtered` instead uses
+    /// a dt-dependent gain $\alpha = dt / (dt + \tau)$ with a fixed $\tau = 0.5$ s, so its
+    /// memory is rate-independent; switching this to a dt-dependent gain is a refinement for
+    /// when sample timestamps are wired in.
     pub const AVG_DECAY: f32 = 0.90;
 
     /// Minimum recorded samples before [`Self::status`] leaves [`ConsistencyStatus::Pending`].
+    /// Mirrors ArduPilot's `_mag_counter > 3` startup guard.
     pub const MIN_SAMPLES: u64 = 5;
 
-    /// Normalized-innovation outlier gate: an innovation beyond 3 standard deviations occurs
-    /// at ~0.3% rate under consistent Gaussian noise and counts as a rejected observation.
-    pub const REJECT_GATE: f32 = 3.0;
+    /// Default innovation gate: 3 standard deviations, the ArduPilot `EK3_MAG_I_GATE` /
+    /// `EK3_YAW_I_GATE` default (300 centi-$\sigma$).
+    pub const DEFAULT_INNOVATION_GATE: f32 = 3.0;
 
-    /// Numerical floor of `gate`, guarding the test-ratio division against a zero or
-    /// negative configured spread. Far below any physical noise level; configure real gates
-    /// orders of magnitude above it.
-    pub const MIN_GATE: f32 = 1e-6;
+    /// Lower bound of the innovation gate: both stacks floor it at one standard deviation
+    /// (ArduPilot `MAX(0.01f * _magInnovGate, 1.0f)`, PX4 `math::max(ekf2_mag_gate, 1.f)`).
+    pub const MIN_INNOVATION_GATE: f32 = 1.0;
 
-    /// Generic starting gate (0.2 rad) so `Default` construction stays usable; production
-    /// pipelines should prefer per-source gates, e.g. [`Consistency::attitude_defaults`].
-    pub const DEFAULT_GATE: f32 = 0.2;
+    /// Numerical floor of `innovation_variance`, guarding the test-ratio division against a
+    /// zero or negative configured spread; both stacks floor the innovation variance at the
+    /// measurement-noise variance (`if (varInnovMag < R_MAG)`) rather than at zero, so
+    /// production configurations stay orders of magnitude above this guard.
+    pub const MIN_INNOVATION_VARIANCE: f32 = 1e-12;
 
-    /// Create a tracker with the given innovation gate $\sigma$ in source units.
-    pub fn new(gate: f32) -> Self {
+    /// Generic starting innovation variance (rad$^2$, i.e. $\sigma = 0.2$ rad) so `Default`
+    /// construction stays usable; production pipelines should prefer per-source variances,
+    /// e.g. [`Consistency::attitude_defaults`].
+    pub const DEFAULT_INNOVATION_VARIANCE: f32 = 0.04;
+
+    /// Create a tracker for a source with the given innovation variance $\Sigma$ in squared
+    /// source units.
+    pub fn new(innovation_variance: f32) -> Self {
         Self {
-            gate,
-            latest: 0.0,
-            avg: 0.0,
+            innovation_variance,
+            innovation_gate: Self::DEFAULT_INNOVATION_GATE,
+            innovation: 0.0,
+            innovation_ema: 0.0,
             test_ratio: 0.0,
-            avg_test_ratio: 0.0,
-            samples: 0,
-            rejected: 0,
+            test_ratio_ema: 0.0,
+            innovation_rejected: false,
+            samples_count: 0,
+            rejected_count: 0,
         }
     }
 
-    /// Record an innovation $\nu$ against the configured gate and return the updated verdict.
-    ///
-    /// The returned status lets a complementary filter adapt its blend ratio online without a
-    /// second read.
+    /// Configure the innovation gate $\eta$ in multiples of $\sqrt{\Sigma}$ (ArduPilot
+    /// `EK3_*_I_GATE`, PX4 `EKF2_*_GATE`).
+    pub fn innovation_gate(mut self, innovation_gate: f32) -> Self {
+        self.innovation_gate = innovation_gate;
+        self
+    }
+
+    /// Record an innovation $\nu$ against the configured variance and gate, and return the
+    /// updated verdict. The returned status lets a complementary filter adapt its blend ratio
+    /// online without a second read.
     pub fn record(&mut self, innovation: f32) -> ConsistencyStatus {
-        self.record_gated(innovation, self.gate)
+        self.record_gated(innovation, self.innovation_variance)
     }
 
     /// Record an innovation reconstructed from a complementary filter's post-blend correction:
@@ -128,9 +203,9 @@ impl SourceConsistency {
     }
 
     /// Record an innovation with its live innovation variance $\Sigma$ (Kalman filter path):
-    /// the sample is gated by $\sqrt{\Sigma}$ rather than by the configured gate, and the
-    /// stored `gate` tracks the live spread through the same exponential average so reporting
-    /// stays meaningful while the filter covariance breathes.
+    /// the sample is gated by the live variance rather than by the configured one, and the
+    /// stored `innovation_variance` tracks the live spread through the same exponential
+    /// average so reporting stays meaningful while the filter covariance breathes.
     ///
     /// Returns `None` without recording for a non-finite or non-positive variance, which
     /// carries no meaningful normalization.
@@ -142,49 +217,43 @@ impl SourceConsistency {
         if !innovation_variance.is_finite() || innovation_variance <= 0.0 {
             return None;
         }
-        let live_gate = innovation_variance.sqrt();
-        self.gate = self.gate * Self::AVG_DECAY + live_gate * (1.0 - Self::AVG_DECAY);
-        Some(self.record_gated(innovation, live_gate))
-    }
-
-    /// Latest innovation in gate units ($\nu / \sigma$); values above [`Self::REJECT_GATE`]
-    /// are outliers a Kalman filter would refuse to fuse.
-    pub fn normalized_latest(&self) -> f32 {
-        self.latest / self.gate.max(Self::MIN_GATE)
-    }
-
-    /// Whether the latest innovation exceeded [`Self::REJECT_GATE`].
-    pub fn is_rejected(&self) -> bool {
-        self.normalized_latest() > Self::REJECT_GATE
+        self.innovation_variance = self.innovation_variance * Self::AVG_DECAY
+            + innovation_variance * (1.0 - Self::AVG_DECAY);
+        Some(self.record_gated(innovation, innovation_variance))
     }
 
     /// Filtered verdict: [`ConsistencyStatus::Pending`] before [`Self::MIN_SAMPLES`], then
     /// [`ConsistencyStatus::Inconsistent`] while $\bar{\rho} \ge 1$ and
-    /// [`ConsistencyStatus::Consistent`] below. The exponential average already damps
-    /// single-sample flapping across the boundary; a stronger hysteresis can be layered on by
-    /// the caller if devices near the threshold prove unstable.
+    /// [`ConsistencyStatus::Consistent`] below, the same threshold both stacks use for their
+    /// per-source health booleans (`magHealth = magTestRatio < 1.0f && ...`,
+    /// `velTestRatio < 1.0f`). The exponential average already damps single-sample flapping
+    /// across the boundary; a stronger hysteresis can be layered on by the caller if devices
+    /// near the threshold prove unstable.
     pub fn status(&self) -> ConsistencyStatus {
-        if self.samples < Self::MIN_SAMPLES {
+        if self.samples_count < Self::MIN_SAMPLES {
             return ConsistencyStatus::Pending;
         }
-        if self.avg_test_ratio >= 1.0 {
+        if self.test_ratio_ema >= 1.0 {
             ConsistencyStatus::Inconsistent
         } else {
             ConsistencyStatus::Consistent
         }
     }
 
-    fn record_gated(&mut self, innovation: f32, gate: f32) -> ConsistencyStatus {
-        let gate = gate.max(Self::MIN_GATE);
-        self.samples += 1;
-        self.latest = innovation;
-        self.avg = self.avg * Self::AVG_DECAY + innovation * (1.0 - Self::AVG_DECAY);
-        let normalized = innovation / gate;
-        self.test_ratio = normalized * normalized;
-        self.avg_test_ratio =
-            self.avg_test_ratio * Self::AVG_DECAY + self.test_ratio * (1.0 - Self::AVG_DECAY);
-        if normalized > Self::REJECT_GATE {
-            self.rejected += 1;
+    fn record_gated(&mut self, innovation: f32, innovation_variance: f32) -> ConsistencyStatus {
+        let innovation_variance = innovation_variance.max(Self::MIN_INNOVATION_VARIANCE);
+        let innovation_gate = self.innovation_gate.max(Self::MIN_INNOVATION_GATE);
+        self.samples_count += 1;
+        self.innovation = innovation;
+        self.innovation_ema =
+            self.innovation_ema * Self::AVG_DECAY + innovation * (1.0 - Self::AVG_DECAY);
+        // sq(innovation) / (sq(gate) * variance), as in both stacks
+        self.test_ratio = (innovation / innovation_gate).powi(2) / innovation_variance;
+        self.test_ratio_ema =
+            self.test_ratio_ema * Self::AVG_DECAY + self.test_ratio * (1.0 - Self::AVG_DECAY);
+        self.innovation_rejected = self.test_ratio > 1.0;
+        if self.innovation_rejected {
+            self.rejected_count += 1;
         }
         self.status()
     }
@@ -192,7 +261,7 @@ impl SourceConsistency {
 
 impl Default for SourceConsistency {
     fn default() -> Self {
-        Self::new(Self::DEFAULT_GATE)
+        Self::new(Self::DEFAULT_INNOVATION_VARIANCE)
     }
 }
 
@@ -200,14 +269,14 @@ impl fmt::Display for SourceConsistency {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "innov={:8.5}, innov_avg={:8.5}, test_ratio={:7.4}, avg_test_ratio={:7.4}, \
-             rejected={}/{}",
-            self.latest,
-            self.avg,
+            "innovation={:8.5}, innovation_filtered={:8.5}, test_ratio={:7.4}, \
+             test_ratio_filtered={:7.4}, rejected={}/{}",
+            self.innovation,
+            self.innovation_ema,
             self.test_ratio,
-            self.avg_test_ratio,
-            self.rejected,
-            self.samples
+            self.test_ratio_ema,
+            self.rejected_count,
+            self.samples_count
         )
     }
 }
@@ -226,16 +295,17 @@ pub struct Consistency {
 }
 
 impl Consistency {
-    /// Starting gates for the 9-axis attitude pipeline: 0.2 rad accelerometer gravity
-    /// alignment, 0.15 rad per-sample gyroscope increment (sensor-clipping domain, not motion
-    /// noise), 0.5 rad magnetic heading (loose until calibration publishes). Expect per-device
-    /// tuning, mirrored from observed hardware noise.
+    /// Starting innovation variances for the 9-axis attitude pipeline: $\sigma = 0.2$ rad
+    /// accelerometer gravity alignment, $\sigma = 0.15$ rad per-sample gyroscope increment
+    /// (sensor-clipping domain, not motion noise), $\sigma = 0.5$ rad magnetic heading (loose
+    /// until calibration publishes). Expect per-device tuning, mirrored from observed hardware
+    /// noise.
     pub fn attitude_defaults() -> Self {
         Self {
             sources: NineAxis {
-                acc: SourceConsistency::new(0.2),
-                gyro: SourceConsistency::new(0.15),
-                mag: SourceConsistency::new(0.5),
+                acc: SourceConsistency::new(0.2 * 0.2),
+                gyro: SourceConsistency::new(0.15 * 0.15),
+                mag: SourceConsistency::new(0.5 * 0.5),
             },
         }
     }
@@ -259,13 +329,15 @@ impl Consistency {
     }
 
     /// Largest filtered test ratio $\bar{\rho}$ across sources; the MAVLink-style overall
-    /// consistency score.
+    /// consistency score. Both stacks export $\sqrt{\max \bar{\rho}}$ per source at the
+    /// MAVLink boundary (ArduPilot `EKF_STATUS_REPORT`, PX4 `estimator_status`), leaving the
+    /// stored fields squared; apply `sqrt` at export time to match them exactly.
     pub fn worst_test_ratio(&self) -> f32 {
         self.sources
             .acc
-            .avg_test_ratio
-            .max(self.sources.gyro.avg_test_ratio)
-            .max(self.sources.mag.avg_test_ratio)
+            .test_ratio_ema
+            .max(self.sources.gyro.test_ratio_ema)
+            .max(self.sources.mag.test_ratio_ema)
     }
 }
 
