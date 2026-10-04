@@ -24,8 +24,9 @@ reports a consistent source. Recording is estimator-agnostic: the
 complementary filter reconstructs $\nu$ from the post-blend correction and the blend ratio
 (`SourceConsistency::record_scaled`), while a Kalman filter passes the innovation with its live innovation
 variance (`SourceConsistency::record_with_variance`). The report is
-not yet wired into the `Fusion` trait; `NineAxis<Correction>` in `FusionState` remains the live counter until
-fusion implementations adopt `Consistency`.
+wired into the `Fusion` trait via `Fusion::consistency()` plus the non-overridable `FusionConsistency` verdict;
+`NaiveCF` fills it through `record_scaled` and gyroscope increment recording, and
+`FusionState::consistency` replaced the legacy `NineAxis<Correction>` counter.
 
 ## Magnetometer calibration
 

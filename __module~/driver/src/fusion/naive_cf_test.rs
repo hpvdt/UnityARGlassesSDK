@@ -14,7 +14,7 @@ fn update_mag_uses_shared_mag_calibrator() {
     let scale = Vector3::new(3.0, 2.0, 1.5);
     fusion.state.mag_calibrator = Box::new(seeded_calibrator(offset, scale));
     fusion.state.attitude = UnitQuaternion::identity();
-    fusion.state.corrections.mag = Default::default();
+    fusion.state.consistency.sources.mag = Default::default();
 
     let calibrated_north = Vector3::new(1.0, 0.0, 0.0);
     let raw_north = offset + scale.component_mul(&calibrated_north);
@@ -22,7 +22,7 @@ fn update_mag_uses_shared_mag_calibrator() {
 
     fusion.integrate_mag(&north_rub, true, true, 0);
 
-    assert!(fusion.state.corrections.mag.prev < 0.001);
+    assert!(fusion.state.consistency.sources.mag.innovation.last < 0.001);
     assert!(fusion.state.attitude.angle() < 0.001);
 }
 
@@ -33,14 +33,14 @@ fn update_mag_ignores_magnetic_dip_angle() {
     let scale = Vector3::new(3.0, 2.0, 1.5);
     fusion.state.mag_calibrator = Box::new(seeded_calibrator(offset, scale));
     fusion.state.attitude = UnitQuaternion::identity();
-    fusion.state.corrections.mag = Default::default();
+    fusion.state.consistency.sources.mag = Default::default();
 
     // field dips 60 deg below the horizon, but its horizontal component is still true north
     let dipped_north = Vector3::new(0.5, 0.0, 0.75_f32.sqrt());
     let raw_north = offset + scale.component_mul(&dipped_north);
     fusion.integrate_mag(&frd_to_rub(raw_north), true, true, 0);
 
-    assert!(fusion.state.corrections.mag.prev < 0.001);
+    assert!(fusion.state.consistency.sources.mag.innovation.last < 0.001);
     assert!(fusion.state.attitude.angle() < 0.001);
 }
 
@@ -49,15 +49,15 @@ fn update_mag_discards_ill_conditioned_calibration() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     fusion.state.mag_calibrator = Box::new(nearly_collinear_calibrator());
     fusion.state.attitude = UnitQuaternion::identity();
-    fusion.state.corrections.mag = Default::default();
+    fusion.state.consistency.sources.mag = Default::default();
 
     let raw_mag = Vector3::new(10.0005, -4.9990, 3.00025);
     let mag_rub = frd_to_rub(raw_mag);
 
     fusion.integrate_mag(&mag_rub, true, true, 0);
 
-    assert_eq!(fusion.state.corrections.mag.prev, 0.0);
-    assert_eq!(fusion.state.corrections.mag.avg, 0.0);
+    assert_eq!(fusion.state.consistency.sources.mag.innovation.last, 0.0);
+    assert_eq!(fusion.state.consistency.sources.mag.innovation.ema, 0.0);
     assert_eq!(fusion.state.attitude.angle(), 0.0);
 }
 

@@ -1,4 +1,6 @@
+use super::super::naive_cf::NaiveCF;
 use super::{Consistency, ConsistencyStatus, SourceConsistency};
+use crate::fusion::{Fusion, FusionConsistency};
 
 #[test]
 fn pending_until_minimum_samples() {
@@ -156,4 +158,29 @@ fn aggregate_stays_pending_while_any_source_pending() {
         consistency.sources.gyro.record(0.02);
     }
     assert_eq!(consistency.status(), ConsistencyStatus::Pending);
+}
+
+#[test]
+fn replace_fusion_inconsistency_with_consistency() {
+    let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
+    for _ in 0..200 {
+        fusion.update();
+    }
+
+    let consistency = fusion.consistency();
+    // the complementary filter records its innovations into the report
+    assert!(consistency.sources.acc.samples_count > 0);
+    assert!(consistency.sources.gyro.samples_count > 0);
+    assert!(consistency.sources.acc.innovation.ema > 0.0);
+
+    // the non-overridable verdict is derived from the trackers, not stored separately
+    assert_eq!(fusion.consistency_status(), consistency.status());
+    // gyro increments stay far inside the gate on this trace; SimMotion's accelerated motion
+    // legitimately drives acc residuals past the 0.2 rad / 3-sigma gate often, so its verdict
+    // is exercise of the rejection path rather than a fixed expected value
+    assert_eq!(
+        consistency.sources.gyro.status(),
+        ConsistencyStatus::Consistent
+    );
+    assert!(consistency.sources.acc.rejected_count > 0);
 }

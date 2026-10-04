@@ -25,16 +25,16 @@ use self::naive_cf::NaiveCF;
 use crate::{any_glasses_or_dummy, ARGlasses, Result};
 
 mod mag;
-use crate::fusion::inconsistency::{Correction, FusionInconsistency};
 pub use mag::{
     BadCalibration, BadMagCause, BadReading, CalibrationQuality, MagCalibrationResult,
     MagCalibrator,
 };
 
 mod consistency;
-pub use consistency::{Consistency, ConsistencyStatus, EmaTracking, SourceConsistency};
+pub use consistency::{
+    Consistency, ConsistencyStatus, EmaTracking, FusionConsistency, SourceConsistency,
+};
 
-mod inconsistency;
 mod naive_cf;
 #[cfg(test)]
 mod naive_cf_test;
@@ -45,7 +45,7 @@ pub fn rub_to_frd(v: &Vector3<f32>) -> Vector3<f32> {
 }
 
 /// Sensor fusion algorithm interface: consumes raw glasses events and produces an attitude estimate.
-pub trait Fusion: Send + FusionInconsistency {
+pub trait Fusion: Send + FusionConsistency {
     /// Underlying glasses device this fusion reads events from.
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses>;
     // TODO: only declared mutable as many API of ARGlasses are also mutable
@@ -54,8 +54,8 @@ pub trait Fusion: Send + FusionInconsistency {
     /// can be used to convert to Euler angles of different conventions
     fn attitude_quaternion(&self) -> UnitQuaternion<f32>;
 
-    /// Per-sensor correction magnitudes tracked by the fusion algorithm.
-    fn corrections(&self) -> NineAxis<Correction>;
+    /// Per-sensor innovation consistency tracked by the fusion algorithm.
+    fn consistency(&self) -> Consistency;
 
     /// Consume the next sensor event and advance the attitude estimate.
     fn update(&mut self) -> ();
@@ -100,8 +100,8 @@ pub struct FusionState {
     /// Latest attitude estimate as a unit quaternion.
     pub attitude: UnitQuaternion<f32>, /*$S$*/
 
-    /// Per-sensor correction magnitudes.
-    pub corrections: NineAxis<Correction>,
+    /// Per-sensor innovation consistency.
+    pub consistency: Consistency,
 
     // mag calibration state, will be used by all Fusion impls
     // The buffer must outlast a single motion pattern: with too few samples
@@ -123,7 +123,7 @@ impl FusionState {
         Self {
             glasses,
             attitude: UnitQuaternion::identity(),
-            corrections: NineAxis::default(),
+            consistency: Consistency::attitude_defaults(),
             mag_calibrator: Box::new(MagCalibrator::new()),
         }
     }
@@ -216,9 +216,9 @@ impl AhrsCorrection {
         self.attitude_euler_rad().map(|x| x.to_degrees())
     }
 
-    /// Returns the non-overridable fusion inconsistency computation.
-    pub fn inconsistency(&self) -> f32 {
-        <Self as FusionInconsistency>::inconsistency(self)
+    /// Returns the non-overridable fusion consistency verdict.
+    pub fn consistency_status(&self) -> ConsistencyStatus {
+        <Self as FusionConsistency>::consistency_status(self)
     }
 }
 
@@ -227,8 +227,8 @@ impl Fusion for AhrsCorrection {
         self.fusion.glasses()
     }
 
-    fn corrections(&self) -> NineAxis<Correction> {
-        self.fusion.corrections()
+    fn consistency(&self) -> Consistency {
+        self.fusion.consistency()
     }
 
     fn update(&mut self) -> () {

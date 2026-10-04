@@ -25,7 +25,7 @@
 
 use nalgebra::{UnitQuaternion, Vector3};
 
-use super::{rub_to_frd, Correction, Fusion, FusionState, NineAxis};
+use super::{rub_to_frd, Consistency, Fusion, FusionState};
 use crate::{ARGlasses, Error, GlassesEvent};
 
 type Result<T> = std::result::Result<T, Error>;
@@ -101,7 +101,12 @@ impl NaiveCF {
         match correction_opt {
             Some(correction_inv) => {
                 let correction = correction_inv.inverse();
-                self.state.corrections.acc.record(correction.angle());
+                let _ = self
+                    .state
+                    .consistency
+                    .sources
+                    .acc
+                    .record_scaled(correction.angle(), Self::BASE_GRAV_RATIO);
 
                 // self.attitude = (correction_inv * attitude.inverse()).inverse();
                 self.state.attitude = attitude * correction;
@@ -170,7 +175,12 @@ impl NaiveCF {
         match correction_opt {
             Some(correction_inv) => {
                 let correction = correction_inv.inverse();
-                self.state.corrections.mag.record(correction.angle());
+                let _ = self
+                    .state
+                    .consistency
+                    .sources
+                    .mag
+                    .record_scaled(correction.angle(), Self::BASE_MAG_RATIO);
                 self.state.attitude = attitude * correction;
             }
             None => {
@@ -321,8 +331,8 @@ impl Fusion for NaiveCF {
         self.state.attitude
     }
 
-    fn corrections(&self) -> NineAxis<Correction> {
-        self.state.corrections
+    fn consistency(&self) -> Consistency {
+        self.state.consistency
     }
 
     fn update(&mut self) -> () {
@@ -330,9 +340,22 @@ impl Fusion for NaiveCF {
         match event {
             GlassesEvent::AccGyro {
                 accelerometer,
-                gyroscope: _,
+                gyroscope,
                 timestamp,
             } => {
+                // dead-reckoning increment magnitude, kept as a sensor-health signal
+                let gyro = rub_to_frd(&gyroscope);
+                let dt_seconds = (timestamp - self.prev_gyro.1) as f32 * 1e-6;
+                if dt_seconds > 0.0 {
+                    let _ = self
+                        .state
+                        .consistency
+                        .sources
+                        .gyro
+                        .record((gyro * dt_seconds).norm());
+                }
+                self.prev_gyro = (gyro, timestamp);
+
                 self.integrate_acc(&accelerometer, timestamp);
                 self.renormalize();
             }

@@ -20,10 +20,10 @@
 //!
 //! - complementary filter (e.g. `NaiveCF`): $\nu$ is the pre-correction angular residual and
 //!   $\Sigma$ a configured innovation variance. [`SourceConsistency::record_scaled`]
-//!   reconstructs $\nu$ from the post-blend correction the filter already stores in
-//!   `NineAxis<Correction>`: `UnitQuaternion::scaled_rotation_between` scales the rotation
-//!   angle exactly, so the residual is the applied correction divided by the blend ratio (code
-//!   constants `BASE_GRAV_RATIO`, `BASE_MAG_RATIO`).
+//!   reconstructs $\nu$ from the post-blend correction the filter applies:
+//!   `UnitQuaternion::scaled_rotation_between` scales the rotation angle exactly, so the
+//!   residual is the applied correction divided by the blend ratio (code constants
+//!   `BASE_GRAV_RATIO`, `BASE_MAG_RATIO`).
 //! - EKF/ESKF: $\nu$ is the observation innovation and $\Sigma$ the live innovation variance;
 //!   [`SourceConsistency::record_with_variance`] consumes both per sample.
 //!
@@ -32,12 +32,14 @@
 //! deliberately omitted: the measurement and prediction live in the estimator, this tracker
 //! only sees innovations) and ArduPilot's `NavEKF3_core` `*TestRatio`/`*InnovGate` members.
 //! Angular magnitudes are frame-free scalars; the residuals derive from FRD vectors per the
-//! module convention. The report is not yet wired into `Fusion`: when `NaiveCF` and a future
-//! EKF both fill one, a `Fusion::consistency()` accessor supersedes `Fusion::corrections()`.
+//! module convention. `Fusion` exposes the report through `consistency()` and the
+//! non-overridable [`FusionConsistency`] verdict: `NaiveCF` fills it via
+//! [`SourceConsistency::record_scaled`]/[`SourceConsistency::record`], a future EKF via
+//! [`SourceConsistency::record_with_variance`].
 //!
 use std::fmt;
 
-use super::NineAxis;
+use super::{Fusion, NineAxis};
 
 #[cfg(test)]
 #[path = "consistency_tests.rs"]
@@ -363,5 +365,26 @@ impl Consistency {
 impl fmt::Display for Consistency {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.sources)
+    }
+}
+
+/// Non-overridable fusion-level consistency verdict derived from the per-source trackers,
+/// replacing the legacy `FusionInconsistency` scalar.
+pub trait FusionConsistency {
+    /// Worst verdict across the acc/gyro/mag sources.
+    fn consistency_status(&self) -> ConsistencyStatus;
+
+    /// MAVLink-style overall score: the largest filtered test ratio $\bar{\rho}$ across
+    /// sources; apply `sqrt` when exporting like ArduPilot `EKF_STATUS_REPORT`.
+    fn worst_test_ratio(&self) -> f32;
+}
+
+impl<T: Fusion + ?Sized> FusionConsistency for T {
+    fn consistency_status(&self) -> ConsistencyStatus {
+        self.consistency().status()
+    }
+
+    fn worst_test_ratio(&self) -> f32 {
+        self.consistency().worst_test_ratio()
     }
 }
