@@ -16,9 +16,11 @@ types.
 ## Estimator consistency reporting
 
 `consistency.rs` drafts the ArduPilot/PX4-style `Consistency` report: each observation source gets a
-`SourceConsistency` tracking the innovation magnitude $\nu$, its exponential moving average $\bar{\nu}$, the
-gate-normalized test ratio $\rho = \nu^2 / (\eta^2 \Sigma)$ and its average $\bar{\rho}$, plus sample and
-outlier counts; $\bar{\rho}$ below 1 reports a consistent source. Recording is estimator-agnostic: the
+`SourceConsistency` holding the innovation magnitude $\nu$ and the gate-normalized test ratio
+$\rho = \nu^2 / (\eta^2 \Sigma)$, each as an `EmaTracking` pair of latest sample and exponential moving average
+(code fields `last` and `ema`, i.e. $\bar{\nu}$ is `innovation.ema` and $\bar{\rho}$ is `test_ratio.ema`), plus
+the innovation variance $\Sigma$ (also EMA-tracked), the gate $\eta$, and sample/outlier counts; `ema` below 1
+reports a consistent source. Recording is estimator-agnostic: the
 complementary filter reconstructs $\nu$ from the post-blend correction and the blend ratio
 (`SourceConsistency::record_scaled`), while a Kalman filter passes the innovation with its live innovation
 variance (`SourceConsistency::record_with_variance`). The report is

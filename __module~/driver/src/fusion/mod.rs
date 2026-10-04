@@ -32,7 +32,7 @@ pub use mag::{
 };
 
 mod consistency;
-pub use consistency::{Consistency, ConsistencyStatus, SourceConsistency};
+pub use consistency::{Consistency, ConsistencyStatus, EmaTracking, SourceConsistency};
 
 mod inconsistency;
 mod naive_cf;

@@ -22,10 +22,10 @@ fn small_innovations_report_consistent() {
     }
     assert_eq!(source.status(), ConsistencyStatus::Consistent);
     // exponential average residual after 50 samples: value * 0.9^50 ~= 2.6e-4
-    assert!((source.innovation_filtered - 0.05).abs() < 5e-4);
+    assert!((source.innovation.ema - 0.05).abs() < 5e-4);
     // test ratio = (0.05 / 3)^2 / 0.04 ~= 0.00694 (gate-normalized like both stacks)
     let expected_ratio = (0.05_f32 / 3.0).powi(2) / 0.04;
-    assert!((source.test_ratio_ema - expected_ratio).abs() < 5e-4);
+    assert!((source.test_ratio.ema - expected_ratio).abs() < 5e-4);
     assert_eq!(source.rejected_count, 0);
 }
 
@@ -41,7 +41,7 @@ fn large_innovations_report_inconsistent() {
         source.record(1.0); // 5-sigma innovation: test ratio = (5/3)^2 > 1
     }
     assert_eq!(source.status(), ConsistencyStatus::Inconsistent);
-    assert!(source.test_ratio_ema >= 1.0);
+    assert!(source.test_ratio.ema >= 1.0);
     assert_eq!(source.rejected_count, 10);
     assert!(source.innovation_rejected);
 }
@@ -82,9 +82,9 @@ fn record_scaled_recovers_pre_correction_innovation() {
     let status = source.record_scaled(0.005, 0.05);
     assert!(status.is_some());
     assert!(
-        (source.innovation - 0.1).abs() < 1e-6,
+        (source.innovation.last - 0.1).abs() < 1e-6,
         "scaled=0.005 with blend ratio 0.05 reconstructs innovation 0.1, got {}",
-        source.innovation
+        source.innovation.last
     );
 }
 
@@ -104,14 +104,14 @@ fn record_with_variance_normalizes_by_live_variance() {
     let status = source.record_with_variance(1.0, 1.0);
     assert!(status.is_some());
     assert!(
-        (source.test_ratio - 1.0 / 9.0).abs() < 1e-6,
+        (source.test_ratio.last - 1.0 / 9.0).abs() < 1e-6,
         "innovation equals live sigma, so test ratio is 1/gate^2 = 1/9, got {}",
-        source.test_ratio
+        source.test_ratio.last
     );
     assert!(
-        (source.innovation_variance - 0.136).abs() < 1e-6,
+        (source.innovation_variance.ema - 0.136).abs() < 1e-6,
         "stored variance tracks the live value: 0.04 * 0.9 + 1.0 * 0.1, got {}",
-        source.innovation_variance
+        source.innovation_variance.ema
     );
 }
 

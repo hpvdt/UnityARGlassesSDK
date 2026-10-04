@@ -43,6 +43,44 @@ use super::NineAxis;
 #[path = "consistency_tests.rs"]
 mod consistency_tests;
 
+/// One scalar quantity with exponential moving average tracking: [`EmaTracking::last`] is the
+/// most recent sample, [`EmaTracking::ema`] its exponential moving average. Both are updated
+/// together by [`EmaTracking::record`]; updating only one by hand breaks the pairing.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EmaTracking {
+    /// Most recently recorded value.
+    pub last: f32,
+    /// Exponential moving average of all recorded values.
+    pub ema: f32,
+}
+
+impl EmaTracking {
+    /// Exponential averaging decay per sample, shared with the legacy `Correction` counters.
+    /// At factor 0.9 the filter's continuous-equivalent time constant is
+    /// $\tau \approx -dt / \ln 0.9 \approx 9.5$ samples ($\approx 0.48$ s at a 20 Hz
+    /// magnetometer rate, $\approx 0.1$ s at 100 Hz). PX4's `test_ratio_filtered` instead uses
+    /// a dt-dependent gain $\alpha = dt / (dt + \tau)$ with a fixed $\tau = 0.5$ s, so its
+    /// memory is rate-independent; switching this to a dt-dependent gain is a refinement for
+    /// when sample timestamps are wired in.
+    pub const AVG_DECAY: f32 = 0.90;
+
+    /// Create a tracker seeded with `initial` as both latest value and average: used for
+    /// configured quantities (e.g. a complementary filter's innovation variance) that are
+    /// already known before the first sample.
+    pub fn new(initial: f32) -> Self {
+        Self {
+            last: initial,
+            ema: initial,
+        }
+    }
+
+    /// Record one sample: `last` takes it and `ema` folds it in by [`Self::AVG_DECAY`].
+    pub fn record(&mut self, value: f32) {
+        self.last = value;
+        self.ema = self.ema * Self::AVG_DECAY + value * (1.0 - Self::AVG_DECAY);
+    }
+}
+
 /// Consistency verdict of one observation source or of the whole estimator. Mirrors the
 /// pass/fail semantics of ArduPilot's `magHealth`/`velCheckPassed` health booleans and PX4's
 /// `estimator_status.innovation_check_flags` bitmask; `Pending` is the startup state both
@@ -61,55 +99,50 @@ pub enum ConsistencyStatus {
 
 /// Innovation consistency statistics of one observation source ("aiding source" in PX4 terms):
 /// the per-source row reported by ArduPilot `EKF_STATUS_REPORT` and PX4
-/// `EstimatorAidSource1d/2d/3d.msg` + `estimator_status`.
-/// Field names match their ArduPilot/PX4 counterparts, converted to `snake_case`.
-/// Angular sources (all three in the 9-axis pipeline) use radians.
+/// `EstimatorAidSource1d/2d/3d.msg` + `estimator_status`. Field groups match their
+/// ArduPilot/PX4 counterparts (`innovation.last` is PX4 `innovation`, `innovation.ema` is PX4
+/// `innovation_filtered`, and so on). Angular sources (all three in the 9-axis pipeline) use
+/// radians.
 #[derive(Clone, Copy, Debug)]
 pub struct SourceConsistency {
-    /// Innovation variance $\Sigma$: the expected squared spread of the innovation, in squared
-    /// source units. Configured for a complementary filter (the configured source-unit noise
-    /// $\sigma$ enters as $\Sigma = \sigma^2$); for a Kalman filter this field tracks the live
-    /// innovation variance recorded through [`SourceConsistency::record_with_variance`].
+    /// Innovation magnitude $\nu$ (pre-correction residual), in source units: `last` is the
+    /// latest sample, `ema` its filtered value.
+    ///
+    /// Counterparts: ArduPilot `innovMag`/`innovYaw`/`innovVelPos`/`innovVtas`, PX4
+    /// `innovation`/`innovation_filtered` (theirs a first-order filter with dt-dependent gain,
+    /// here a fixed exponential average; ArduPilot has no filtered innovation).
+    pub innovation: EmaTracking,
+
+    /// Test ratio $\rho = \nu^2 / (\eta^2 \Sigma)$ (unitless, already gate-normalized): `last`
+    /// is the latest sample, `ema` the filtered value; the consistency verdict compares `ema`
+    /// against 1.0.
+    ///
+    /// Counterparts: `last` — ArduPilot `magTestRatio`/`yawTestRatio`/`velTestRatio`/
+    /// `posTestRatio`/`hgtTestRatio` = `sq(innov) / (sq(gate) * varInnov)`, PX4 `test_ratio` =
+    /// `sq(innovation) / (sq(innovation_gate) * innovation_variance)`; `ema` — PX4
+    /// `test_ratio_filtered` (signed there, unsigned here) and the `estimator_status`
+    /// `*_test_ratio` exports `sqrt(max(|test_ratio_filtered|))`; ArduPilot exports
+    /// `sqrt(*TestRatio)` as the `EKF_STATUS_REPORT` `*_variance` fields.
+    pub test_ratio: EmaTracking,
+
+    /// Innovation variance $\Sigma$ (the expected squared spread of the innovation), in
+    /// squared source units. For a complementary filter this is configured once via
+    /// [`Self::new`] ($\Sigma = \sigma^2$ of the configured source-unit noise $\sigma$) and
+    /// `last`/`ema` both hold it; for a Kalman filter [`Self::record_with_variance`] records
+    /// the live variance per sample, `last` keeping the latest and `ema` the tracked spread.
     ///
     /// Counterparts: ArduPilot `varInnovMag`/`varInnovVelPos`/`varInnov`, PX4
     /// `innovation_variance`.
-    pub innovation_variance: f32,
+    pub innovation_variance: EmaTracking,
 
     /// Innovation consistency gate $\eta$ in multiples of $\sqrt{\Sigma}$, floored at
-    /// [`Self::MIN_INNOVATION_GATE`]. Configured per source.
+    /// [`Self::MIN_INNOVATION_GATE`]. Configured per source; not sample-tracked.
     ///
     /// Counterparts: ArduPilot `EK3_*_I_GATE` parameters (`_magInnovGate`, `_yawInnovGate`,
     /// `_gpsVelInnovGate`, `_gpsPosInnovGate`, in centi-standard-deviations, floored at 1 via
     /// `MAX(0.01f * _magInnovGate, 1.0f)`), PX4 `innovation_gate` (parameter `EKF2_MAG_GATE`,
     /// floored at 1 via `math::max(_params.ekf2_mag_gate, 1.f)`).
     pub innovation_gate: f32,
-
-    /// Latest innovation magnitude $\nu$ (pre-correction residual), in source units.
-    ///
-    /// Counterparts: ArduPilot `innovMag`/`innovYaw`/`innovVelPos`/`innovVtas`, PX4 `innovation`.
-    pub innovation: f32,
-
-    /// Exponential moving average $\bar{\nu}$ of the innovation magnitude.
-    ///
-    /// Counterpart: PX4 `innovation_filtered` (first-order filter with dt-dependent gain,
-    /// here a fixed exponential average; ArduPilot has no filtered innovation).
-    pub innovation_ema: f32,
-
-    /// Latest test ratio $\rho = \nu^2 / (\eta^2 \Sigma)$ (unitless, already gate-normalized).
-    ///
-    /// Counterparts: ArduPilot `magTestRatio`/`yawTestRatio`/`velTestRatio`/`posTestRatio`/
-    /// `hgtTestRatio` = `sq(innov) / (sq(gate) * varInnov)`, PX4 aid-source `test_ratio` =
-    /// `sq(innovation) / (sq(innovation_gate) * innovation_variance)`.
-    pub test_ratio: f32,
-
-    /// Exponential moving average $\bar{\rho}$ of the test ratio; the consistency verdict
-    /// threshold is 1.0.
-    ///
-    /// Counterpart: PX4 aid-source `test_ratio_filtered` (signed first-order filter, here
-    /// unsigned fixed-decay) and the `estimator_status` `*_test_ratio` exports
-    /// `sqrt(max(|test_ratio_filtered|))`; ArduPilot exports `sqrt(*TestRatio)` as the
-    /// `EKF_STATUS_REPORT` `*_variance` fields.
-    pub test_ratio_ema: f32,
 
     /// Whether the latest sample failed the consistency check ($\rho \ge 1$); a Kalman filter
     /// would refuse to fuse it (ArduPilot `fuse*Data = false`, `posCheckPassed`).
@@ -126,15 +159,6 @@ pub struct SourceConsistency {
 }
 
 impl SourceConsistency {
-    /// Exponential averaging decay per sample, shared with the legacy `Correction` counters.
-    /// At factor 0.9 the filter's continuous-equivalent time constant is
-    /// $\tau \approx -dt / \ln 0.9 \approx 9.5$ samples ($\approx 0.48$ s at a 20 Hz
-    /// magnetometer rate, $\approx 0.1$ s at 100 Hz). PX4's `test_ratio_filtered` instead uses
-    /// a dt-dependent gain $\alpha = dt / (dt + \tau)$ with a fixed $\tau = 0.5$ s, so its
-    /// memory is rate-independent; switching this to a dt-dependent gain is a refinement for
-    /// when sample timestamps are wired in.
-    pub const AVG_DECAY: f32 = 0.90;
-
     /// Minimum recorded samples before [`Self::status`] leaves [`ConsistencyStatus::Pending`].
     /// Mirrors ArduPilot's `_mag_counter > 3` startup guard.
     pub const MIN_SAMPLES: u64 = 5;
@@ -162,12 +186,10 @@ impl SourceConsistency {
     /// source units.
     pub fn new(innovation_variance: f32) -> Self {
         Self {
-            innovation_variance,
+            innovation: EmaTracking::default(),
+            test_ratio: EmaTracking::default(),
+            innovation_variance: EmaTracking::new(innovation_variance),
             innovation_gate: Self::DEFAULT_INNOVATION_GATE,
-            innovation: 0.0,
-            innovation_ema: 0.0,
-            test_ratio: 0.0,
-            test_ratio_ema: 0.0,
             innovation_rejected: false,
             samples_count: 0,
             rejected_count: 0,
@@ -185,7 +207,7 @@ impl SourceConsistency {
     /// updated verdict. The returned status lets a complementary filter adapt its blend ratio
     /// online without a second read.
     pub fn record(&mut self, innovation: f32) -> ConsistencyStatus {
-        self.record_gated(innovation, self.innovation_variance)
+        self.record_gated(innovation, self.innovation_variance.ema)
     }
 
     /// Record an innovation reconstructed from a complementary filter's post-blend correction:
@@ -203,9 +225,9 @@ impl SourceConsistency {
     }
 
     /// Record an innovation with its live innovation variance $\Sigma$ (Kalman filter path):
-    /// the sample is gated by the live variance rather than by the configured one, and the
-    /// stored `innovation_variance` tracks the live spread through the same exponential
-    /// average so reporting stays meaningful while the filter covariance breathes.
+    /// the sample is gated by the live variance rather than by the tracked one, and the stored
+    /// `innovation_variance` tracks the live spread so reporting stays meaningful while the
+    /// filter covariance breathes.
     ///
     /// Returns `None` without recording for a non-finite or non-positive variance, which
     /// carries no meaningful normalization.
@@ -217,9 +239,8 @@ impl SourceConsistency {
         if !innovation_variance.is_finite() || innovation_variance <= 0.0 {
             return None;
         }
-        self.innovation_variance = self.innovation_variance * Self::AVG_DECAY
-            + innovation_variance * (1.0 - Self::AVG_DECAY);
-        Some(self.record_gated(innovation, innovation_variance))
+        self.innovation_variance.record(innovation_variance);
+        Some(self.record_gated(innovation, self.innovation_variance.last))
     }
 
     /// Filtered verdict: [`ConsistencyStatus::Pending`] before [`Self::MIN_SAMPLES`], then
@@ -233,7 +254,7 @@ impl SourceConsistency {
         if self.samples_count < Self::MIN_SAMPLES {
             return ConsistencyStatus::Pending;
         }
-        if self.test_ratio_ema >= 1.0 {
+        if self.test_ratio.ema >= 1.0 {
             ConsistencyStatus::Inconsistent
         } else {
             ConsistencyStatus::Consistent
@@ -244,14 +265,11 @@ impl SourceConsistency {
         let innovation_variance = innovation_variance.max(Self::MIN_INNOVATION_VARIANCE);
         let innovation_gate = self.innovation_gate.max(Self::MIN_INNOVATION_GATE);
         self.samples_count += 1;
-        self.innovation = innovation;
-        self.innovation_ema =
-            self.innovation_ema * Self::AVG_DECAY + innovation * (1.0 - Self::AVG_DECAY);
+        self.innovation.record(innovation);
         // sq(innovation) / (sq(gate) * variance), as in both stacks
-        self.test_ratio = (innovation / innovation_gate).powi(2) / innovation_variance;
-        self.test_ratio_ema =
-            self.test_ratio_ema * Self::AVG_DECAY + self.test_ratio * (1.0 - Self::AVG_DECAY);
-        self.innovation_rejected = self.test_ratio > 1.0;
+        self.test_ratio
+            .record((innovation / innovation_gate).powi(2) / innovation_variance);
+        self.innovation_rejected = self.test_ratio.last > 1.0;
         if self.innovation_rejected {
             self.rejected_count += 1;
         }
@@ -271,10 +289,10 @@ impl fmt::Display for SourceConsistency {
             f,
             "innovation={:8.5}, innovation_filtered={:8.5}, test_ratio={:7.4}, \
              test_ratio_filtered={:7.4}, rejected={}/{}",
-            self.innovation,
-            self.innovation_ema,
-            self.test_ratio,
-            self.test_ratio_ema,
+            self.innovation.last,
+            self.innovation.ema,
+            self.test_ratio.last,
+            self.test_ratio.ema,
             self.rejected_count,
             self.samples_count
         )
@@ -335,9 +353,10 @@ impl Consistency {
     pub fn worst_test_ratio(&self) -> f32 {
         self.sources
             .acc
-            .test_ratio_ema
-            .max(self.sources.gyro.test_ratio_ema)
-            .max(self.sources.mag.test_ratio_ema)
+            .test_ratio
+            .ema
+            .max(self.sources.gyro.test_ratio.ema)
+            .max(self.sources.mag.test_ratio.ema)
     }
 }
 
