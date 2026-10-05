@@ -7,7 +7,8 @@ high level interface of glasses & state estimation, with the following built-in 
   - assuming that acc vector always pointed up, spacecraft moving in that direction can create 1G artificial gravity
     - TODO: this obviously assumes no steadily accelerating frame, at which point up d_acc has to be used for correction
 - gyro-yaw <= gyro (integrate over time)
-- mag-yaw <= mag + roll/pitch (arctan)
+- mag-dip <= mag vertical component against the estimated level (state $\delta$, seeded from $\kappa$)
+- mag-yaw <= mag horizontal component + roll/pitch (never corrects the level)
 - yaw <= mag-yaw + gyro-gyro (complementary filter)
   - TODO: add EKF/ESKF (error-state/multiplicatory KF, https://arxiv.org/abs/1711.02508)
 
@@ -100,6 +101,22 @@ pub struct FusionState {
     /// Latest attitude estimate as a unit quaternion.
     pub attitude: UnitQuaternion<f32>, /*$S$*/
 
+    /// Estimated magnetic dip (inclination) angle in radians, positive
+    /// when the magnetic field points below the horizon, so its FRD
+    /// reference direction is $(\cos\delta, 0, \sin\delta)$. Magnetic north
+    /// only coincides with horizontal north at the magnetic equator, so the
+    /// dip is part of the state: fusion implementations refine it from the
+    /// field's estimated vertical component and seed it once from the
+    /// calibrator's learned dip projection ([`MagCalibrationResult::dip_sin`])
+    /// when available.
+    pub mag_dip_rad: f32, /*$\delta$*/
+
+    /// Whether `mag_dip_rad` has been seeded from the calibrator's learned
+    /// dip projection. Seeding happens once, at the first calibration
+    /// result carrying it; afterwards the per-sample refinement owns the
+    /// estimate and it is no longer overwritten.
+    pub mag_dip_seeded: bool,
+
     /// Per-sensor innovation consistency.
     pub consistency: Consistency,
 
@@ -118,11 +135,14 @@ pub struct FusionState {
 }
 
 impl FusionState {
-    /// Creates a shared fusion state with identity attitude and empty calibration state.
+    /// Creates a shared fusion state with identity attitude, zero
+    /// unseeded magnetic dip, and empty calibration state.
     pub fn new(glasses: Box<dyn ARGlasses>) -> Self {
         Self {
             glasses,
             attitude: UnitQuaternion::identity(),
+            mag_dip_rad: 0.0,
+            mag_dip_seeded: false,
             consistency: Consistency::attitude_defaults(),
             mag_calibrator: Box::new(MagCalibrator::new()),
         }

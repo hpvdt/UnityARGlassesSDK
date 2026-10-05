@@ -81,8 +81,28 @@ impl NaiveCF {
 
     const BASE_MAG_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.1;
 
+    /// Blend ratio $1 - \mathrm{ratio}$ of the per-sample dip update. The
+    /// vertical field component feeds the dip state instead of the
+    /// attitude, so its innovation is yaw-invariant and the remaining
+    /// disturbance is the roll/pitch error the acc filter keeps small;
+    /// the ratio can therefore be small, tracking the slow geographic drift
+    /// of the true dip rather than chasing single noisy readings.
+    const BASE_DIP_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.02;
+
+    /// Minimum norm of the calibrated field's horizontal component, as a
+    /// fraction of the unit field, below which the heading update is gated.
+    /// A field closer than $\arcsin(0.1) \approx 5.7^{\circ}$ to vertical
+    /// (near the magnetic poles) carries almost no azimuth information, so
+    /// its horizontal noise would rotate the attitude about the down axis
+    /// without actual heading evidence.
+    const MIN_HEADING_FIELD_NORM: f32 = 0.1;
+
     const G_ACC_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
-    //const NORTH_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -1.0);
+    /// Unit down axis of the FRD world frame.
+    const DOWN_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, 1.0);
+    /// Unit magnetic-north axis of the FRD world frame; the field's
+    /// horizontal component points here whatever the dip angle.
+    const NORTH_FRD: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
 
     //CAUTION: right-multiplication means rotation, unconventionally
 
@@ -117,11 +137,21 @@ impl NaiveCF {
         }
     }
 
+    /// Magnetometer update with the magnetic dip $\delta$ as part of the
+    /// estimated state: the FRD reference field is
+    /// $(\cos\delta, 0, \sin\delta)$, positive below the horizon, so the
+    /// reading is never corrected towards a purely horizontal north. The
+    /// single vector observation cannot fix attitude and dip jointly — a
+    /// level (roll/pitch) error and a dip error produce the same vertical
+    /// residual — so the update is partitioned instead of minimized
+    /// jointly: the estimated vertical component refines only $\delta$
+    /// (leaving level to the acc filter), and only the horizontal
+    /// component refines the heading (leaving the field's vertical split
+    /// to $\delta$).
     pub(super) fn integrate_mag(
         &mut self,
         mag_rub: &Vector3<f32>,
         calibration_use_gravity: bool,
-        horizontal_only: bool,
         t: u64,
     ) -> () {
         let mag_raw = rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
@@ -132,43 +162,65 @@ impl NaiveCF {
         } else {
             None
         };
-        let mag_corrected: Vector3<f32> = match self
+        let result = match self
             .state
             .mag_calibrator
             .evaluate_correct(mag_raw, gravity_hint, t)
-            .ok()
-            .and_then(|result| result.direction)
         {
-            Some(r) => r,
+            Ok(result) => result,
+            Err(_) => return,
+        };
+        // `direction` is already the normalized calibrated unit vector.
+        let mag_normalised: Vector3<f32> = match result.direction {
+            Some(direction) => direction,
             None => return,
         };
 
-        // near the magnetic poles the field is almost vertical and carries no usable heading
-        if mag_corrected.norm_squared() < 0.01 {
+        // Seed the dip once from the calibrator's learned dip projection:
+        // by first publication the gravity surrogate's
+        // $\kappa / (\gamma r)$ has already seen the co-rotated gravity
+        // hints, so its seed skips the cold-start transient of the
+        // per-sample refinement below. The hint passed above is the
+        // accelerometer direction, which points up in FRD, giving
+        // `dip_sin` $= g^T m = -\sin\delta$.
+        if !self.state.mag_dip_seeded {
+            if let Some(dip_sin) = result.dip_sin {
+                self.state.mag_dip_rad = -dip_sin.clamp(-1.0, 1.0).asin();
+                self.state.mag_dip_seeded = true;
+            }
+        }
+
+        let attitude = &self.state.attitude;
+        let down_body = attitude.inverse() * Self::DOWN_FRD;
+
+        // Dip step: the vertical component of the measured field estimates
+        // $\sin\delta$. The vertical component is invariant to heading
+        // error (a rotation about the down axis preserves it), so even the
+        // large yaw transient right after boot cannot flip the update's
+        // sign; only roll/pitch error propagates, which the acc filter
+        // holds small relative to `BASE_DIP_RATIO`'s pull.
+        let vertical = mag_normalised.dot(&down_body);
+        let dip = self.state.mag_dip_rad
+            + Self::BASE_DIP_RATIO * (vertical - self.state.mag_dip_rad.sin());
+        self.state.mag_dip_rad =
+            dip.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
+
+        // Heading step: only the field's horizontal component (a pure
+        // north reading) is compared against estimated north. Both vectors
+        // are perpendicular to estimated down — north as a world
+        // horizontal, the measured component by construction — so the
+        // correction is a pure heading rotation about the down axis and
+        // can never tip the level the acc filter maintains, whatever the
+        // current dip estimate.
+        let mag_horizontal = mag_normalised - vertical * down_body;
+        if mag_horizontal.norm() < Self::MIN_HEADING_FIELD_NORM {
             return;
         }
 
-        let mag_normalised = mag_corrected.normalize(); // TODO: is it necessary?
-
-        let attitude = &self.state.attitude;
-        let north_frd = Vector3::new(1.0, 0.0, 0.0);
-
-        let mag_effective: Vector3<f32> = if horizontal_only {
-            // magnetic north dips below the horizon by a location-dependent inclination
-            // angle; correcting against the full field vector would tip the level the acc
-            // filter already maintains, so only the field's horizontal component is compared.
-            // both vectors are then perpendicular to estimated up, making the correction a
-            // pure heading rotation about the up axis.
-            let up_body = attitude.inverse() * Self::G_ACC_FRD.normalize();
-            mag_normalised - mag_normalised.dot(&up_body) * up_body
-        } else {
-            mag_normalised
-        };
-
-        let estimated_north = attitude.inverse() * north_frd;
+        let estimated_north = attitude.inverse() * Self::NORTH_FRD;
         let correction_opt = UnitQuaternion::scaled_rotation_between(
             &estimated_north,
-            &mag_effective,
+            &mag_horizontal,
             Self::BASE_MAG_RATIO,
         );
 
@@ -364,12 +416,14 @@ impl Fusion for NaiveCF {
                 magnetometer,
                 timestamp,
             } => {
-                // The calibrator's preconditioned gravity surrogate converges
-                // to the exact magnetic dip, so the ACC-derived gravity hint
-                // always informs calibration; horizontal-only heading
-                // correction stays parked pending validation.
-                // TODO: evaluate self.integrate_mag(&magnetometer, true, true, timestamp)
-                self.integrate_mag(&magnetometer, true, false, timestamp);
+                // The ACC-derived gravity hint keeps the calibrator's
+                // preconditioned gravity surrogate anchored to the exact
+                // magnetic dip, whose learned projection seeds the fusion
+                // dip state once at publication; afterwards integrate_mag
+                // refines the dip from the field's vertical component
+                // itself. The dip/heading partition keeps the magnetometer
+                // away from the level estimate in both roles.
+                self.integrate_mag(&magnetometer, true, timestamp);
                 self.renormalize();
             }
             _ => {
