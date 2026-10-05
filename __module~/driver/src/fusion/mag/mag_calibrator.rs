@@ -108,6 +108,17 @@ pub struct MagCalibrationResult {
     /// published correction; `None` while no correction has passed the live
     /// quality gates yet.
     pub direction: Option<Vector3<f32>>,
+    /// Learned dip projection $\kappa / (\gamma r)$ of the current working
+    /// candidate: the projection $g^T m$ of the calibrated unit magnetic
+    /// field onto the gravity hint direction this calibrator is fed. The
+    /// sign therefore follows the caller's hint convention — an
+    /// accelerometer-style hint pointing up yields $g^T m = -\sin\delta$
+    /// for a dip $\delta$ measured positive below the horizon. `None` while
+    /// no gravity-informed usable candidate exists (gravity disabled or the
+    /// projection $\kappa$ unseeded); the last value is retained while
+    /// later candidates are unusable, mirroring the last-known-good
+    /// fallback of `direction`.
+    pub dip_sin: Option<f32>,
 }
 
 impl std::ops::Deref for MagCalibrationResult {
@@ -119,8 +130,16 @@ impl std::ops::Deref for MagCalibrationResult {
 }
 
 impl MagCalibrationResult {
-    fn from_quality(quality: CalibrationQuality, direction: Option<Vector3<f32>>) -> Self {
-        Self { quality, direction }
+    fn from_quality(
+        quality: CalibrationQuality,
+        direction: Option<Vector3<f32>>,
+        dip_sin: Option<f32>,
+    ) -> Self {
+        Self {
+            quality,
+            direction,
+            dip_sin,
+        }
     }
 }
 
@@ -183,6 +202,7 @@ impl<const N: usize> Default for MagCalibrator<N> {
                 stats: SampleStats::default(),
                 learned_gravity_projection: None,
                 gravity_frame: Matrix3::identity(),
+                dip_sin: None,
                 gravity_weight: DEFAULT_GRAVITY_WEIGHT,
                 quality: CalibrationQuality::ZERO,
             },
@@ -947,7 +967,11 @@ impl<const N: usize> MagCalibrator<N> {
     ) -> Result<MagCalibrationResult, BadMagCause> {
         self.evaluate_sample_vec(raw_mag, gravity_hint, timestamp_us);
         if !self.calibration_initialized {
-            return Ok(MagCalibrationResult::from_quality(self.model.quality, None));
+            return Ok(MagCalibrationResult::from_quality(
+                self.model.quality,
+                None,
+                self.model.dip_sin,
+            ));
         }
         let mut mag = self.soft_iron_correction * (raw_mag - self.hard_iron_offset);
 
@@ -961,6 +985,7 @@ impl<const N: usize> MagCalibrator<N> {
             Ok(MagCalibrationResult::from_quality(
                 self.model.quality,
                 Some(mag),
+                self.model.dip_sin,
             ))
         }
     }

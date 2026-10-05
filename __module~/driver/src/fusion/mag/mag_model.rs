@@ -57,6 +57,12 @@ const COVERAGE_LAMBDA_REF: f32 = 2.0 / 15.0;
 pub(super) struct CalibrationCandidate {
     pub(super) offset: Vector3<f32>,     /*$b$*/
     pub(super) correction: Matrix3<f32>, /*$A$*/
+    /// Learned dip projection $g^T m$ of this candidate,
+    /// $\kappa / (\gamma r)$: the projection of the calibrated unit
+    /// magnetic field onto the caller-provided gravity hint direction.
+    /// `None` while the learned projection $\kappa$ is unseeded or gravity
+    /// is disabled.
+    pub(super) dip_sin: Option<f32>,
 }
 
 /// Calibration model state behind `MagCalibrator`: the retained magnetometer
@@ -103,6 +109,12 @@ pub(super) struct MagModel<const N: usize> {
     /// correction $A_w$ matches the true $A$. Identity until the first valid
     /// working candidate refreshes it; refreshed by [`MagModel::update_quality`].
     pub(super) gravity_frame: Matrix3<f32>, /*$A_w^{-1}$*/
+    /// Dip projection $g^T m$ of the latest usable working candidate,
+    /// refreshed by [`MagModel::update_quality`]. Retained while later
+    /// candidates are unusable, mirroring the last-known-good fallback of
+    /// the published correction; `None` until a gravity-informed usable
+    /// candidate exists.
+    pub(super) dip_sin: Option<f32>,
     pub(super) gravity_weight: f32, /*$w_g$*/
     /// Live calibration quality factors of the current working candidate,
     /// reset together with the model minimum and recomputed by
@@ -351,7 +363,24 @@ impl<const N: usize> MagModel<N> {
             });
         }
 
-        Ok(CalibrationCandidate { offset, correction })
+        // The surrogate keeps the normal projection
+        // $\psi(u_i, \tilde{g}_i)^T \theta \approx \kappa$, which the
+        // ellipsoid identity reduces to $\gamma r\, g_i^T m_i$ once the
+        // preconditioner matches the true correction, so $\kappa/(\gamma r)$
+        // is the dip projection $g^T m$ in the caller's hint convention.
+        let dip_sin = if self.gravity_weight > 0.0 {
+            self.learned_gravity_projection
+                .map(|kappa| kappa / (ellipsoid_scale * r))
+                .filter(|value| value.is_finite())
+        } else {
+            None
+        };
+
+        Ok(CalibrationCandidate {
+            offset,
+            correction,
+            dip_sin,
+        })
     }
 
     /// Refreshes the gravity preconditioner frame from a valid working
@@ -428,6 +457,7 @@ impl<const N: usize> MagModel<N> {
             }
         };
         self.refresh_gravity_frame(&candidate);
+        self.dip_sin = candidate.dip_sin;
         let (mu /*$\mu$*/, rms_radius /*$r$*/) = self.stats.normalization();
         // The gravity loss stays absent (zero below) when gravity is
         // disabled, the projection $\kappa$ is not yet seeded, or no

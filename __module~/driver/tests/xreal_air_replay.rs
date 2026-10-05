@@ -225,7 +225,9 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
                     None
                 };
                 let eval_start = Instant::now();
-                let MagCalibrationResult { quality, direction } = calibrator
+                let MagCalibrationResult {
+                    quality, direction, ..
+                } = calibrator
                     .evaluate_correct(rub_to_frd(&magnetometer), gravity_hint, timestamp)
                     .unwrap_or_else(|error| {
                         panic!("Air 1 replay {mode} calibration failed at {timestamp}: {error:?}")

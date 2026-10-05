@@ -301,6 +301,7 @@ fn mag_calibrator_stays_pending_with_underconstrained_or_degenerate_data() {
         Ok(MagCalibrationResult {
             quality,
             direction: None,
+            ..
         }) if quality.confidence() == 0.0
     ));
     let result = (1..9)
@@ -313,6 +314,7 @@ fn mag_calibrator_stays_pending_with_underconstrained_or_degenerate_data() {
         Ok(MagCalibrationResult {
             quality,
             direction: None,
+            ..
         }) if quality.confidence() == 0.0
     ));
     assert_eq!(calibrator.get_confidence(), 0.0);
@@ -388,6 +390,7 @@ fn mag_calibrator_rejects_nearly_collinear_samples() {
         Ok(MagCalibrationResult {
             quality,
             direction: None,
+            ..
         }) if quality.confidence() == 0.0
     ));
 }
@@ -772,6 +775,7 @@ fn mag_calibrator_accepts_zero_components_and_rejects_bad_vectors() {
             Ok(MagCalibrationResult {
                 quality,
                 direction: None,
+                ..
             }) if quality.confidence() == 0.0
         ));
     }
@@ -795,6 +799,7 @@ fn mag_calibrator_defaults_sample_lifespan_to_one_hour() {
         MagCalibrationResult {
             quality,
             direction: Some(_),
+            ..
         } if quality.confidence() == 0.0
     ));
 }
@@ -813,6 +818,7 @@ fn mag_calibrator_uses_configured_sample_lifespan() {
         MagCalibrationResult {
             quality,
             direction: Some(_),
+            ..
         } if quality.confidence() == 0.0
     ));
 }
@@ -1032,6 +1038,19 @@ fn mag_calibrator_uses_gravity_by_default() {
         "default gravity surrogate left the fit untouched"
     );
 
+    // The learned dip projection converges to the exact dip: with the
+    // co-rotated hint stream the reported `dip_sin` is the constant
+    // `g^T m` of the world pair, while a gravity-disabled calibrator never
+    // reports one.
+    let expected_dip_sin = world_gravity.dot(&world_mag);
+    let dip_sin = hinted_result
+        .dip_sin
+        .expect("hinted calibrator must report a dip projection");
+    assert!(
+        (dip_sin - expected_dip_sin).abs() < 0.05,
+        "dip_sin={dip_sin}, expected={expected_dip_sin}"
+    );
+
     // No gravity term exists when gravity is disabled: a hinted-but-disabled
     // calibrator has no seed and no residual scan.
     assert_eq!(opted_out.model.learned_gravity_projection, None);
@@ -1039,6 +1058,7 @@ fn mag_calibrator_uses_gravity_by_default() {
         .evaluate_correct(offset + distortion * sample_direction(0, 63), None, 17 * 63)
         .unwrap();
     assert_eq!(opted_out_result.gravity_loss, 0.0);
+    assert_eq!(opted_out_result.dip_sin, None);
 }
 
 /// One independently rederived online update against production: both the
