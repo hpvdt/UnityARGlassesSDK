@@ -5,8 +5,8 @@
 /// recomputed and reported together as the quality half of
 /// [`MagCalibrationResult`](super::mag_calibrator::MagCalibrationResult).
 /// `confidence` is derived from `coverage` alone; `radial_loss`,
-/// `regularization_loss`, and `gravity_loss` are diagnostic records and
-/// do not enter the confidence.
+/// `regularization_loss`, `gravity_loss`, and `dip_sin` are diagnostic
+/// records and do not enter the confidence.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CalibrationQuality {
     /// Directional coverage factor of the confidence in `[0, 1]`: the
@@ -57,21 +57,8 @@ impl CalibrationQuality {
         radial_loss: 0.0,
         regularization_loss: 0.0,
         gravity_loss: 0.0,
+        dip_sin: None,
     };
-
-    pub(super) fn new(
-        coverage: f32,
-        radial_loss: f32,
-        regularization_loss: f32,
-        gravity_loss: f32,
-    ) -> Self {
-        Self {
-            coverage,
-            radial_loss,
-            regularization_loss,
-            gravity_loss,
-        }
-    }
 
     /// Current bounded calibration quality in `[0, 1]`: the clamped
     /// `coverage`. The loss diagnostics are deliberately excluded, so a

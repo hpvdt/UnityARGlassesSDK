@@ -270,16 +270,18 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 
 - **$\mathrm{ratio}$:** Blend ratio of the naive complementary filter,
   $S = \mathrm{ratio}\, (S^{-} + d\tilde{S}_1\, dt_1) + (1 - \mathrm{ratio})\, \tilde{S}_2$; the state-sensor
-  correction weight $1 - \mathrm{ratio}$ appears in code as `BASE_GRAV_RATIO`, `BASE_MAG_RATIO`,
-  `BASE_DIP_RATIO`, and the `scale` parameter of `NaiveCF::get_correction`.
+  correction weight $1 - \mathrm{ratio}$ appears in code as `BASE_GRAV_RATIO`, `BASE_MAG_RATIO`, and the
+  `scale` parameter of `NaiveCF::get_correction`.
 - **$S$:** Current estimated attitude state (unit quaternion) of the naive complementary filter (code field
   `FusionState::attitude`).
 - **$S^{-}$:** Previous estimated attitude state of the naive complementary filter.
 - **$dt_1$:** Time elapsed since the last rate-sensor sample.
 - **$\delta$:** Magnetic dip (inclination) angle of the FRD reference field $(\cos\delta, 0, \sin\delta)$,
-  positive below the horizon; the fusion state tracks its sine (code field `FusionState::mag_dip_sin`), seeded
-  once from the calibrator's learned dip projection $\kappa / (\gamma r)$ and refined per magnetometer sample
-  from the field's estimated vertical component, which estimates $\sin\delta$ directly.
+  positive below the horizon; estimated by the calibrator's gravity surrogate as the projection
+  $g^T m = -\sin\delta$ (in the accelerometer-hint convention) and reported as $\kappa / (\gamma r)$
+  (code field `dip_sin` of `CalibrationQuality`). It is not part of the fusion state: the magnetometer
+  heading correction uses only the field's horizontal component, so the field's vertical split never
+  tips the level estimate.
 
 #### Consistency Reporting
 
@@ -352,8 +354,9 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$\tilde{g}_i$:** Preconditioned gravity direction of observation $i$,
   $\tilde{g}_i = A_w^{-1} g_i$; $3 \times 1$.
 - **$\kappa$:** Learned gravity projection scalar (code field `learned_gravity_projection` of
-  `mag_model::MagModel`); the working candidate's $\kappa / (\gamma r)$ is exposed as `dip_sin` (code fields
-  of `mag_model::MagModel` and `MagCalibrationResult`).
+  `mag_model::MagModel`); the working candidate's $\kappa / (\gamma r)$ is exposed as `dip_sin` (code field
+  of `CalibrationQuality`, recorded in the live `quality` of `mag_model::MagModel` and reported through
+  `MagCalibrationResult`).
 - **$\lambda$:** Shape regularization weight (code constant `SHAPE_REGULARIZATION`).
 - **$\mu$:** Sample mean of the retained magnetometer samples (first return value of
   `SampleStats::normalization`, field `stats` of `mag_model::MagModel`); $3 \times 1$.

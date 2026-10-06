@@ -279,14 +279,14 @@ gravity observation, or carried by no retained row — reports `0.0`, the object
 term: an absent term and a perfect fit both report zero. Both losses are unbounded above; lower is better.
 
 The loss statistics and `regularization_loss` are reported for diagnostics only: they take no part in the
-confidence, which is the coverage factor alone, clamped to $[0, 1]$. `MagCalibrationResult` reports
-`confidence`, `coverage`, `radial_loss`, `regularization_loss`, and `gravity_loss`, and additionally carries
+confidence, which is the coverage factor alone, clamped to $[0, 1]$. `CalibrationQuality` reports
+`confidence`, `coverage`, `radial_loss`, `regularization_loss`, and `gravity_loss`, and additionally records
 `dip_sin`: the learned dip projection $\kappa / (\gamma r)$ of the latest usable working candidate (`None`
 while gravity is disabled or the projection $\kappa$ unseeded, retained across later unusable candidates),
-expressed in the caller's gravity-hint sign convention. `NaiveCF` seeds its magnetic-dip state
-$\sin\delta$ (`FusionState::mag_dip_sin`) once from it and refines it per magnetometer sample from the
-field's estimated vertical component; the dip/heading partition keeps the magnetometer from ever
-correcting the level.
+expressed in the caller's gravity-hint sign convention. The whole record reaches fusion callers through
+`MagCalibrationResult`'s `Deref`; the dip estimate lives only there rather than in the fusion state, and the
+heading update of `NaiveCF` uses only the field's horizontal component, so the magnetometer never corrects
+the level.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
 change only after 55 valid updates at confidence at least `0.0125`, including while the cache is partial. Confidence in

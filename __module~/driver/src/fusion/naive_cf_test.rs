@@ -40,7 +40,7 @@ fn assert_level(attitude: &UnitQuaternion<f32>, tolerance: f32) {
 }
 
 #[test]
-fn update_mag_estimates_magnetic_dip_angle() {
+fn update_mag_keeps_level_with_dipped_field() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let scale = Vector3::new(3.0, 2.0, 1.5);
@@ -48,37 +48,23 @@ fn update_mag_estimates_magnetic_dip_angle() {
     fusion.state.attitude = UnitQuaternion::identity();
     fusion.state.consistency.sources.mag = Default::default();
 
-    // field dips 60 deg below the horizon, its horizontal component is true
-    // north, and no gravity hint is passed, so the calibrator's dip
-    // projection stays unseeded and the refinement runs cold from zero
+    // field dips 60 deg below the horizon and its horizontal component is
+    // true north; the heading step may only ever yaw towards the azimuthal
+    // residual of the fitted calibration, so the level must stay exact
+    // throughout, where a full-vector correction would instead tip the
+    // attitude by the unmodeled 60 deg dip
     let dip = 60.0f32.to_radians();
     let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
 
-    // The dip state converges in $\sin\delta$ at (1 - BASE_DIP_RATIO) per
-    // sample, and the heading step may only ever yaw towards the azimuthal
-    // residual of the fitted calibration: the level must stay exact
-    // throughout, where the old full-vector correction instead tipped the
-    // attitude by the unmodeled 60 deg dip.
     for t in 0..800 {
         fusion.integrate_mag(&dipped_rub, false, t);
         assert_level(&fusion.state.attitude, 1.0e-3);
     }
-
-    // equilibrium offset is the calibration direction error projected onto
-    // the meridian, bounded by the 0.01 rad resolution observed in
-    // `update_mag_uses_shared_mag_calibrator`'s single-step innovation
-    let dip_sin = fusion.state.mag_dip_sin.expect("dip refined per sample");
-    assert!(
-        (dip_sin.asin() - dip).abs() < 1.0f32.to_radians(),
-        "mag_dip_sin={}, expected sin({})",
-        dip_sin,
-        dip
-    );
 }
 
 #[test]
-fn update_mag_seeds_dip_from_calibrated_gravity_projection() {
+fn update_mag_gravity_hint_reports_dip() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let scale = Vector3::new(3.0, 2.0, 1.5);
@@ -86,47 +72,41 @@ fn update_mag_seeds_dip_from_calibrated_gravity_projection() {
     fusion.state.attitude = UnitQuaternion::identity();
     fusion.state.consistency.sources.mag = Default::default();
 
-    // field dips 60 deg below the horizon; the gravity hint of the first
-    // integration seeds the calibrator's dip projection, so the dip state
-    // is seeded at the first published result instead of converging cold
+    // field dips 60 deg below the horizon with true-north horizontal
+    // component, and the acc-style gravity hint (pointing up) is passed on
+    // every integration: the calibrator's gravity surrogate learns the
+    // projection $g^T m = -\sin\delta$ while the attitude level must stay
+    // exact throughout
     let dip = 60.0f32.to_radians();
     let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
 
-    fusion.integrate_mag(&dipped_rub, true, 0);
-    let dip_sin = fusion
-        .state
-        .mag_dip_sin
-        .expect("dip seeded on first result");
-    // The one-shot seed is bias-limited by the working fit's preconditioner
-    // gap: $\kappa/(\gamma r) = g^T A_w^{-1} A m$ reaches the exact dip only
-    // as $A_w \to A$, and this fixture's strong (3, 2, 1.5) anisotropy
-    // leaves a measured 2.4 deg seed error at 60 deg dip; 3 deg bounds that
-    // with margin while still requiring the seed to skip the cold-start
-    // transient. The per-sample refinement below asserts the tight value.
-    assert!(
-        (dip_sin.asin() - dip).abs() < 3.0f32.to_radians(),
-        "seeded mag_dip_sin={}, expected sin({})",
-        dip_sin,
-        dip
-    );
-
-    // continued refinement must not wander off the seeded value either
-    for t in 1..800 {
+    for t in 0..800 {
         fusion.integrate_mag(&dipped_rub, true, t);
         assert_level(&fusion.state.attitude, 1.0e-3);
     }
-    let dip_sin = fusion.state.mag_dip_sin.expect("dip refined per sample");
+
+    // the reported projection is bias-limited by the working fit's
+    // preconditioner gap: $\kappa/(\gamma r) = g^T A_w^{-1} A m$ reaches
+    // the exact dip only as $A_w \to A$, and this fixture's strong
+    // (3, 2, 1.5) anisotropy leaves a measured 2.4 deg error at 60 deg
+    // dip; 3 deg bounds that with margin
+    let result = fusion
+        .state
+        .mag_calibrator
+        .evaluate_correct(offset + scale.component_mul(&dipped_north), None, 800)
+        .unwrap();
+    let dip_sin = result.dip_sin.expect("dip reported with gravity hints");
     assert!(
-        (dip_sin.asin() - dip).abs() < 1.0f32.to_radians(),
-        "refined mag_dip_sin={}, expected sin({})",
+        ((-dip_sin).asin() - dip).abs() < 3.0f32.to_radians(),
+        "dip_sin={}, expected -sin({})",
         dip_sin,
         dip
     );
 }
 
 #[test]
-fn update_mag_dip_update_is_robust_to_yaw_error() {
+fn update_mag_keeps_level_under_yaw_error() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let scale = Vector3::new(3.0, 2.0, 1.5);
@@ -136,12 +116,10 @@ fn update_mag_dip_update_is_robust_to_yaw_error() {
 
     // field dips 30 deg below the horizon; initial yaw is 180 deg off, so
     // the horizontal component of the body reading points at body -x: the
-    // measured and estimated north agree and the attitude estimate is a
-    // (wrong-heading) fixed point of the heading step. The vertical
-    // component of the field is yaw-invariant, so the dip refinement —
-    // run cold without gravity hints — must still converge with the
-    // correct sign, on the very samples where a meridional-tangent
-    // formulation would push the estimate the wrong way.
+    // measured and estimated north agree and the attitude estimate sits at
+    // a (wrong-heading) fixed point of the heading step — the very case
+    // where a vertical or meridional-tangent correction would tip the
+    // level
     fusion.state.attitude = UnitQuaternion::from_euler_angles(0.0, 0.0, std::f32::consts::PI);
     let dip = 30.0f32.to_radians();
     let world_dipped = Vector3::new(dip.cos(), 0.0, dip.sin());
@@ -152,14 +130,6 @@ fn update_mag_dip_update_is_robust_to_yaw_error() {
         fusion.integrate_mag(&dipped_rub, false, t);
         assert_level(&fusion.state.attitude, 1.0e-3);
     }
-
-    let dip_sin = fusion.state.mag_dip_sin.expect("dip refined per sample");
-    assert!(
-        (dip_sin.asin() - dip).abs() < 1.0f32.to_radians(),
-        "mag_dip_sin={}, expected sin({})",
-        dip_sin,
-        dip
-    );
 }
 
 #[test]
@@ -188,14 +158,6 @@ fn update_mag_skips_heading_near_the_magnetic_poles() {
         (fusion.state.attitude * initial.inverse()).angle() < 1.0e-6,
         "attitude moved from {initial:?} to {:?}",
         fusion.state.attitude
-    );
-    // the dip step still runs on the gated reading: the estimate must
-    // converge to the near-polar dip of the vertical field
-    let dip_sin = fusion.state.mag_dip_sin.expect("dip refined per sample");
-    assert!(
-        dip_sin > 85.0f32.to_radians().sin(),
-        "mag_dip_sin={}",
-        dip_sin
     );
 }
 

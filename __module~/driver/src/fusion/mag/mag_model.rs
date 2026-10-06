@@ -109,16 +109,12 @@ pub(super) struct MagModel<const N: usize> {
     /// correction $A_w$ matches the true $A$. Identity until the first valid
     /// working candidate refreshes it; refreshed by [`MagModel::update_quality`].
     pub(super) gravity_frame: Matrix3<f32>, /*$A_w^{-1}$*/
-    // /// Dip projection $g^T m$ of the latest usable working candidate,
-    // /// refreshed by [`MagModel::update_quality`]. Retained while later
-    // /// candidates are unusable, mirroring the last-known-good fallback of
-    // /// the published correction; `None` until a gravity-informed usable
-    // /// candidate exists.
-    // pub(super) dip_sin: Option<f32>, TODO: delete, use quality.dip_sin instead
     pub(super) gravity_weight: f32, /*$w_g$*/
     /// Live calibration quality factors of the current working candidate,
     /// reset together with the model minimum and recomputed by
-    /// `update_quality` on every publication evaluation.
+    /// `update_quality` on every publication evaluation; its `dip_sin`
+    /// record is retained across unusable candidates, mirroring the
+    /// last-known-good fallback of the published correction.
     pub(super) quality: CalibrationQuality,
 }
 
@@ -445,19 +441,29 @@ impl<const N: usize> MagModel<N> {
     /// dips: the Air 1 post-warmup radial loss stayed low for thousands of
     /// consecutive evaluations.
     pub(super) fn update_quality(&mut self) -> Option<CalibrationCandidate> {
+        // The dip projection record of the quality is refreshed only by a
+        // usable candidate below and retained across unusable ones,
+        // mirroring the last-known-good fallback of the published
+        // correction.
+        let retained_dip_sin = self.quality.dip_sin;
+        let reset_quality = |quality: &mut CalibrationQuality| {
+            *quality = CalibrationQuality {
+                dip_sin: retained_dip_sin,
+                ..CalibrationQuality::ZERO
+            };
+        };
         if self.stats.sample_row_count < CALIBRATION_PARAMETER_COUNT {
-            self.quality = CalibrationQuality::ZERO;
+            reset_quality(&mut self.quality);
             return None;
         }
         let candidate = match self.working_candidate() {
             Ok(candidate) => candidate,
             Err(_) => {
-                self.quality = CalibrationQuality::ZERO;
+                reset_quality(&mut self.quality);
                 return None;
             }
         };
         self.refresh_gravity_frame(&candidate);
-        self.dip_sin = candidate.dip_sin;
         let (mu /*$\mu$*/, rms_radius /*$r$*/) = self.stats.normalization();
         // The gravity loss stays absent (zero below) when gravity is
         // disabled, the projection $\kappa$ is not yet seeded, or no
@@ -534,7 +540,7 @@ impl<const N: usize> MagModel<N> {
         let radial_loss =
             0.5 * radial_square_sum / self.stats.sample_row_count as f32 + regularization_loss;
         if !radial_loss.is_finite() {
-            self.quality = CalibrationQuality::ZERO;
+            reset_quality(&mut self.quality);
             return None;
         }
         let gravity_mean_square = (gravity_count > 0).then(|| {
@@ -551,8 +557,13 @@ impl<const N: usize> MagModel<N> {
             .filter(|loss| loss.is_finite())
             .unwrap_or(0.0);
         let coverage = Self::coverage_from_gram(&gram_sum, self.stats.sample_row_count);
-        self.quality =
-            CalibrationQuality::new(coverage, radial_loss, regularization_loss, gravity_loss);
+        self.quality = CalibrationQuality {
+            coverage,
+            radial_loss,
+            regularization_loss,
+            gravity_loss,
+            dip_sin: candidate.dip_sin,
+        };
         Some(candidate)
     }
 }
