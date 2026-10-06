@@ -121,15 +121,8 @@ pub struct MagCalibrationResult {
     pub dip_sin: Option<f32>,
 }
 
-impl std::ops::Deref for MagCalibrationResult {
-    type Target = CalibrationQuality;
-
-    fn deref(&self) -> &Self::Target {
-        &self.quality
-    }
-}
-
 impl MagCalibrationResult {
+    // FIXME: delete, function is trivial
     fn from_quality(
         quality: CalibrationQuality,
         direction: Option<Vector3<f32>>,
@@ -140,6 +133,14 @@ impl MagCalibrationResult {
             direction,
             dip_sin,
         }
+    }
+}
+
+impl std::ops::Deref for MagCalibrationResult {
+    type Target = CalibrationQuality;
+
+    fn deref(&self) -> &Self::Target {
+        &self.quality
     }
 }
 

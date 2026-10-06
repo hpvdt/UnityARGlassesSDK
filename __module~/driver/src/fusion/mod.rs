@@ -101,6 +101,7 @@ pub struct FusionState {
     /// Latest attitude estimate as a unit quaternion.
     pub attitude: UnitQuaternion<f32>, /*$S$*/
 
+    // FIXME: this should also be the sin value, like in [CalibrationResult], rad is not used anywhere
     /// Estimated magnetic dip (inclination) angle in radians, positive
     /// when the magnetic field points below the horizon, so its FRD
     /// reference direction is $(\cos\delta, 0, \sin\delta)$. Magnetic north
@@ -111,6 +112,7 @@ pub struct FusionState {
     /// when available.
     pub mag_dip_rad: f32, /*$\delta$*/
 
+    // FIXME: this is not used anywhere, delete it, no need to track it
     /// Whether `mag_dip_rad` has been seeded from the calibrator's learned
     /// dip projection. Seeding happens once, at the first calibration
     /// result carrying it; afterwards the per-sample refinement owns the
