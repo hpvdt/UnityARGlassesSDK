@@ -101,19 +101,18 @@ pub struct FusionState {
     /// Latest attitude estimate as a unit quaternion.
     pub attitude: UnitQuaternion<f32>, /*$S$*/
 
-    /// Sine of the estimated magnetic dip (inclination) angle $\delta$,
-    /// positive when the magnetic field points below the horizon, so its
-    /// FRD reference direction is $(\cos\delta, 0, \sin\delta)$. Magnetic
-    /// north only coincides with horizontal north at the magnetic equator,
-    /// so the dip is part of the state: fusion implementations refine it
-    /// per magnetometer sample from the field's estimated vertical
-    /// component and seed it once from the calibrator's learned dip
-    /// projection ([`MagCalibrationResult::dip_sin`]) when available.
-    /// `None` until the first usable calibration result; a seed available
-    /// on that first result is applied before the cold-start refinement
-    /// takes over, so the seed is never re-applied afterwards.
-    pub mag_dip_sin: Option<f32>, /*$\sin\delta$*/
-
+    // /// Sine of the estimated magnetic dip (inclination) angle $\delta$,
+    // /// positive when the magnetic field points below the horizon, so its
+    // /// FRD reference direction is $(\cos\delta, 0, \sin\delta)$. Magnetic
+    // /// north only coincides with horizontal north at the magnetic equator,
+    // /// so the dip is part of the state: fusion implementations refine it
+    // /// per magnetometer sample from the field's estimated vertical
+    // /// component and seed it once from the calibrator's learned dip
+    // /// projection ([`MagCalibrationResult::dip_sin`]) when available.
+    // /// `None` until the first usable calibration result; a seed available
+    // /// on that first result is applied before the cold-start refinement
+    // /// takes over, so the seed is never re-applied afterwards.
+    // pub mag_dip_sin: Option<f32>, /*$\sin\delta$*/  TODO: delete, use mag_calibrator.model.quality.dip_sin instead
     /// Per-sensor innovation consistency.
     pub consistency: Consistency,
 

@@ -109,12 +109,12 @@ pub(super) struct MagModel<const N: usize> {
     /// correction $A_w$ matches the true $A$. Identity until the first valid
     /// working candidate refreshes it; refreshed by [`MagModel::update_quality`].
     pub(super) gravity_frame: Matrix3<f32>, /*$A_w^{-1}$*/
-    /// Dip projection $g^T m$ of the latest usable working candidate,
-    /// refreshed by [`MagModel::update_quality`]. Retained while later
-    /// candidates are unusable, mirroring the last-known-good fallback of
-    /// the published correction; `None` until a gravity-informed usable
-    /// candidate exists.
-    pub(super) dip_sin: Option<f32>,
+    // /// Dip projection $g^T m$ of the latest usable working candidate,
+    // /// refreshed by [`MagModel::update_quality`]. Retained while later
+    // /// candidates are unusable, mirroring the last-known-good fallback of
+    // /// the published correction; `None` until a gravity-informed usable
+    // /// candidate exists.
+    // pub(super) dip_sin: Option<f32>, TODO: delete, use quality.dip_sin instead
     pub(super) gravity_weight: f32, /*$w_g$*/
     /// Live calibration quality factors of the current working candidate,
     /// reset together with the model minimum and recomputed by

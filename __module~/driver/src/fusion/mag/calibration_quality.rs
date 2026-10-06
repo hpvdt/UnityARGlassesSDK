@@ -37,6 +37,18 @@ pub struct CalibrationQuality {
     /// term, so an absent term and a perfect fit both report zero.
     /// Unbounded above; lower is better.
     pub gravity_loss: f32,
+
+    /// Learned dip projection $\kappa / (\gamma r)$ of the current working
+    /// candidate: the projection $g^T m$ of the calibrated unit magnetic
+    /// field onto the gravity hint direction this calibrator is fed. The
+    /// sign therefore follows the caller's hint convention — an
+    /// accelerometer-style hint pointing up yields $g^T m = -\sin\delta$
+    /// for a dip $\delta$ measured positive below the horizon. `None` while
+    /// no gravity-informed usable candidate exists (gravity disabled or the
+    /// projection $\kappa$ unseeded); the last value is retained while
+    /// later candidates are unusable, mirroring the last-known-good
+    /// fallback of `direction`.
+    pub dip_sin: Option<f32>,
 }
 
 impl CalibrationQuality {
