@@ -84,7 +84,9 @@ pub(super) struct MagModel<const N: usize> {
     /// $(\mu, r)$ it derives. Grouped in [`SampleStats`] so append,
     /// replacement, and expiry update all of them together in $O(1)$
     /// without a row scan.
-    /// TODO: this can be moved into `samples: MagSamples<N>`
+    /// TODO: several fields (e.g. stats, MagCalibrator.sample_timestamps_us) can be moved into `samples: MagSamples<N>`
+    ///  MagSamples.set_row function should also keep these fields up-to-date
+    ///
     pub(super) stats: SampleStats,
     /// Learned scalar $\kappa$ of the gravity surrogate: the projection of
     /// the preconditioned gravity direction $\tilde{g}_i = A_w^{-1} g_i$
