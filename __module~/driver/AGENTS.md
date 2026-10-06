@@ -277,9 +277,9 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$S^{-}$:** Previous estimated attitude state of the naive complementary filter.
 - **$dt_1$:** Time elapsed since the last rate-sensor sample.
 - **$\delta$:** Magnetic dip (inclination) angle of the FRD reference field $(\cos\delta, 0, \sin\delta)$,
-  positive below the horizon; estimated part of the fusion state (code field `FusionState::mag_dip_rad`),
-  seeded once from the calibrator's learned dip projection $\kappa / (\gamma r)$ and refined per magnetometer
-  sample from the field's estimated vertical component.
+  positive below the horizon; the fusion state tracks its sine (code field `FusionState::mag_dip_sin`), seeded
+  once from the calibrator's learned dip projection $\kappa / (\gamma r)$ and refined per magnetometer sample
+  from the field's estimated vertical component, which estimates $\sin\delta$ directly.
 
 #### Consistency Reporting
 

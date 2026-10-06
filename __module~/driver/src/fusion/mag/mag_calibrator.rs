@@ -121,21 +121,6 @@ pub struct MagCalibrationResult {
     pub dip_sin: Option<f32>,
 }
 
-impl MagCalibrationResult {
-    // FIXME: delete, function is trivial
-    fn from_quality(
-        quality: CalibrationQuality,
-        direction: Option<Vector3<f32>>,
-        dip_sin: Option<f32>,
-    ) -> Self {
-        Self {
-            quality,
-            direction,
-            dip_sin,
-        }
-    }
-}
-
 impl std::ops::Deref for MagCalibrationResult {
     type Target = CalibrationQuality;
 
@@ -968,11 +953,11 @@ impl<const N: usize> MagCalibrator<N> {
     ) -> Result<MagCalibrationResult, BadMagCause> {
         self.evaluate_sample_vec(raw_mag, gravity_hint, timestamp_us);
         if !self.calibration_initialized {
-            return Ok(MagCalibrationResult::from_quality(
-                self.model.quality,
-                None,
-                self.model.dip_sin,
-            ));
+            return Ok(MagCalibrationResult {
+                quality: self.model.quality,
+                direction: None,
+                dip_sin: self.model.dip_sin,
+            });
         }
         let mut mag = self.soft_iron_correction * (raw_mag - self.hard_iron_offset);
 
@@ -983,11 +968,11 @@ impl<const N: usize> MagCalibrator<N> {
                 min_norm: MIN_MAG_NORM,
             }))
         } else {
-            Ok(MagCalibrationResult::from_quality(
-                self.model.quality,
-                Some(mag),
-                self.model.dip_sin,
-            ))
+            Ok(MagCalibrationResult {
+                quality: self.model.quality,
+                direction: Some(mag),
+                dip_sin: self.model.dip_sin,
+            })
         }
     }
 

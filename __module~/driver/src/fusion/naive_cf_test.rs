@@ -55,7 +55,7 @@ fn update_mag_estimates_magnetic_dip_angle() {
     let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
 
-    // The dip state converges at (1 - BASE_DIP_RATIO * cos(dip)) per
+    // The dip state converges in $\sin\delta$ at (1 - BASE_DIP_RATIO) per
     // sample, and the heading step may only ever yaw towards the azimuthal
     // residual of the fitted calibration: the level must stay exact
     // throughout, where the old full-vector correction instead tipped the
@@ -65,14 +65,14 @@ fn update_mag_estimates_magnetic_dip_angle() {
         assert_level(&fusion.state.attitude, 1.0e-3);
     }
 
-    assert!(!fusion.state.mag_dip_seeded);
     // equilibrium offset is the calibration direction error projected onto
     // the meridian, bounded by the 0.01 rad resolution observed in
     // `update_mag_uses_shared_mag_calibrator`'s single-step innovation
+    let dip_sin = fusion.state.mag_dip_sin.expect("dip refined per sample");
     assert!(
-        (fusion.state.mag_dip_rad - dip).abs() < 1.0f32.to_radians(),
-        "mag_dip_rad={}, expected {}",
-        fusion.state.mag_dip_rad,
+        (dip_sin.asin() - dip).abs() < 1.0f32.to_radians(),
+        "mag_dip_sin={}, expected sin({})",
+        dip_sin,
         dip
     );
 }
@@ -94,7 +94,10 @@ fn update_mag_seeds_dip_from_calibrated_gravity_projection() {
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
 
     fusion.integrate_mag(&dipped_rub, true, 0);
-    assert!(fusion.state.mag_dip_seeded);
+    let dip_sin = fusion
+        .state
+        .mag_dip_sin
+        .expect("dip seeded on first result");
     // The one-shot seed is bias-limited by the working fit's preconditioner
     // gap: $\kappa/(\gamma r) = g^T A_w^{-1} A m$ reaches the exact dip only
     // as $A_w \to A$, and this fixture's strong (3, 2, 1.5) anisotropy
@@ -102,9 +105,9 @@ fn update_mag_seeds_dip_from_calibrated_gravity_projection() {
     // with margin while still requiring the seed to skip the cold-start
     // transient. The per-sample refinement below asserts the tight value.
     assert!(
-        (fusion.state.mag_dip_rad - dip).abs() < 3.0f32.to_radians(),
-        "seeded mag_dip_rad={}, expected {}",
-        fusion.state.mag_dip_rad,
+        (dip_sin.asin() - dip).abs() < 3.0f32.to_radians(),
+        "seeded mag_dip_sin={}, expected sin({})",
+        dip_sin,
         dip
     );
 
@@ -113,10 +116,11 @@ fn update_mag_seeds_dip_from_calibrated_gravity_projection() {
         fusion.integrate_mag(&dipped_rub, true, t);
         assert_level(&fusion.state.attitude, 1.0e-3);
     }
+    let dip_sin = fusion.state.mag_dip_sin.expect("dip refined per sample");
     assert!(
-        (fusion.state.mag_dip_rad - dip).abs() < 1.0f32.to_radians(),
-        "refined mag_dip_rad={}, expected {}",
-        fusion.state.mag_dip_rad,
+        (dip_sin.asin() - dip).abs() < 1.0f32.to_radians(),
+        "refined mag_dip_sin={}, expected sin({})",
+        dip_sin,
         dip
     );
 }
@@ -149,11 +153,11 @@ fn update_mag_dip_update_is_robust_to_yaw_error() {
         assert_level(&fusion.state.attitude, 1.0e-3);
     }
 
-    assert!(!fusion.state.mag_dip_seeded);
+    let dip_sin = fusion.state.mag_dip_sin.expect("dip refined per sample");
     assert!(
-        (fusion.state.mag_dip_rad - dip).abs() < 1.0f32.to_radians(),
-        "mag_dip_rad={}, expected {}",
-        fusion.state.mag_dip_rad,
+        (dip_sin.asin() - dip).abs() < 1.0f32.to_radians(),
+        "mag_dip_sin={}, expected sin({})",
+        dip_sin,
         dip
     );
 }
@@ -187,10 +191,11 @@ fn update_mag_skips_heading_near_the_magnetic_poles() {
     );
     // the dip step still runs on the gated reading: the estimate must
     // converge to the near-polar dip of the vertical field
+    let dip_sin = fusion.state.mag_dip_sin.expect("dip refined per sample");
     assert!(
-        fusion.state.mag_dip_rad > 85.0f32.to_radians(),
-        "mag_dip_rad={}",
-        fusion.state.mag_dip_rad
+        dip_sin > 85.0f32.to_radians().sin(),
+        "mag_dip_sin={}",
+        dip_sin
     );
 }
 

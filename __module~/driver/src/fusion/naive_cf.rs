@@ -183,10 +183,9 @@ impl NaiveCF {
         // per-sample refinement below. The hint passed above is the
         // accelerometer direction, which points up in FRD, giving
         // `dip_sin` $= g^T m = -\sin\delta$.
-        if !self.state.mag_dip_seeded {
+        if self.state.mag_dip_sin.is_none() {
             if let Some(dip_sin) = result.dip_sin {
-                self.state.mag_dip_rad = -dip_sin.clamp(-1.0, 1.0).asin();
-                self.state.mag_dip_seeded = true;
+                self.state.mag_dip_sin = Some(-dip_sin.clamp(-1.0, 1.0));
             }
         }
 
@@ -194,16 +193,17 @@ impl NaiveCF {
         let down_body = attitude.inverse() * Self::DOWN_FRD;
 
         // Dip step: the vertical component of the measured field estimates
-        // $\sin\delta$. The vertical component is invariant to heading
-        // error (a rotation about the down axis preserves it), so even the
-        // large yaw transient right after boot cannot flip the update's
-        // sign; only roll/pitch error propagates, which the acc filter
-        // holds small relative to `BASE_DIP_RATIO`'s pull.
+        // $\sin\delta$, so the state is tracked directly as $\sin\delta$
+        // and the update is linear in it. The vertical component is
+        // invariant to heading error (a rotation about the down axis
+        // preserves it), so even the large yaw transient right after boot
+        // cannot flip the update's sign; only roll/pitch error propagates,
+        // which the acc filter holds small relative to `BASE_DIP_RATIO`'s
+        // pull.
         let vertical = mag_normalised.dot(&down_body);
-        let dip = self.state.mag_dip_rad
-            + Self::BASE_DIP_RATIO * (vertical - self.state.mag_dip_rad.sin());
-        self.state.mag_dip_rad =
-            dip.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
+        let dip_sin = self.state.mag_dip_sin.unwrap_or(0.0)
+            + Self::BASE_DIP_RATIO * (vertical - self.state.mag_dip_sin.unwrap_or(0.0));
+        self.state.mag_dip_sin = Some(dip_sin.clamp(-1.0, 1.0));
 
         // Heading step: only the field's horizontal component (a pure
         // north reading) is compared against estimated north. Both vectors
