@@ -285,8 +285,7 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$\eta$:** Innovation consistency gate in multiples of $\sqrt{\Sigma}$, floored at 1 (code field
   `innovation_gate` of `SourceConsistency`; counterparts ArduPilot `EK3_*_I_GATE` parameters, PX4 `EKF2_*_GATE`).
 - **$\nu$:** Innovation magnitude of one attitude observation: the pre-correction residual between the measurement
-  and the prediction, in radians for the 9-axis sources (code field `innovation.last` of `SourceConsistency`).
-- **$\bar{\nu}$:** Exponential moving average of $\nu$ (code field `innovation.ema` of `SourceConsistency`).
+  and the prediction, in radians for the 9-axis sources (code field `innovation` of `SourceConsistency`).
 - **$\rho$:** Test ratio $\rho = \nu^2 / (\eta^2 \Sigma)$ (code field `test_ratio.last` of `SourceConsistency`;
   counterparts ArduPilot `*TestRatio`, PX4 `test_ratio`); a sample fails the consistency check at or above 1.
 - **$\bar{\rho}$:** Exponential moving average of $\rho$ (code field `test_ratio.ema` of `SourceConsistency`); values at or above 1 report an inconsistent source, and the MAVLink-style export is

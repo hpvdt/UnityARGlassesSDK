@@ -16,14 +16,13 @@ types.
 ## Estimator consistency reporting
 
 `consistency.rs` drafts the ArduPilot/PX4-style `Consistency` report: each observation source gets a
-`SourceConsistency` holding the innovation magnitude $\nu$ and the gate-normalized test ratio
-$\rho = \nu^2 / (\eta^2 \Sigma)$, each as an `EmaTracking` pair of latest sample and exponential moving average
-(code fields `last` and `ema`, i.e. $\bar{\nu}$ is `innovation.ema` and $\bar{\rho}$ is `test_ratio.ema`), plus
-the innovation variance $\Sigma$ (also EMA-tracked), the gate $\eta$, and sample/outlier counts; `ema` below 1
-reports a consistent source. Recording is estimator-agnostic: the
-complementary filter reconstructs $\nu$ from the post-blend correction and the blend ratio
-(`SourceConsistency::record_scaled`), while a Kalman filter passes the innovation with its live innovation
-variance (`SourceConsistency::record_with_variance`). The report is
+`SourceConsistency` holding the latest innovation magnitude $\nu$, the innovation variance $\Sigma$ and gate
+$\eta$, and the gate-normalized test ratio $\rho = \nu^2 / (\eta^2 \Sigma)$ as an `EmaTracking` pair of latest
+sample and exponential moving average (code fields `last` and `ema`; $\bar{\rho}$ is `test_ratio.ema`), plus a
+per-sample rejection flag and sample/outlier counts; `test_ratio.ema` below 1 reports a consistent source.
+Recording is estimator-agnostic: the complementary filter reconstructs $\nu$ from the post-blend correction and
+the blend ratio (`SourceConsistency::record_scaled`), while a Kalman filter passes the innovation with its live
+innovation variance (`SourceConsistency::record_with_variance`). The report is
 wired into the `Fusion` trait via `Fusion::consistency()` plus the non-overridable `FusionConsistency` verdict;
 `NaiveCF` fills it through `record_scaled` and gyroscope increment recording, and
 `FusionState::consistency` replaced the legacy `NineAxis<Correction>` counter.

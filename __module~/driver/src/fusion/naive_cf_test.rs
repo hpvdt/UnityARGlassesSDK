@@ -22,7 +22,7 @@ fn update_mag_uses_shared_mag_calibrator() {
 
     fusion.integrate_mag(&north_rub, true, true, 0);
 
-    assert!(fusion.state.consistency.sources.mag.innovation.last < 0.001);
+    assert!(fusion.state.consistency.sources.mag.innovation < 0.001);
     assert!(fusion.state.attitude.angle() < 0.001);
 }
 
@@ -40,7 +40,7 @@ fn update_mag_ignores_magnetic_dip_angle() {
     let raw_north = offset + scale.component_mul(&dipped_north);
     fusion.integrate_mag(&frd_to_rub(raw_north), true, true, 0);
 
-    assert!(fusion.state.consistency.sources.mag.innovation.last < 0.001);
+    assert!(fusion.state.consistency.sources.mag.innovation < 0.001);
     assert!(fusion.state.attitude.angle() < 0.001);
 }
 
@@ -56,8 +56,7 @@ fn update_mag_discards_ill_conditioned_calibration() {
 
     fusion.integrate_mag(&mag_rub, true, true, 0);
 
-    assert_eq!(fusion.state.consistency.sources.mag.innovation.last, 0.0);
-    assert_eq!(fusion.state.consistency.sources.mag.innovation.ema, 0.0);
+    assert_eq!(fusion.state.consistency.sources.mag.innovation, 0.0);
     assert_eq!(fusion.state.attitude.angle(), 0.0);
 }
 
