@@ -1,7 +1,7 @@
 use nalgebra::{Matrix3, Vector3};
 
 /// Incrementally maintained sample statistics of the retained magnetometer
-/// cache of a `MagModel`, grouped behind `MagModel::stats` for accelerated,
+/// cache rows, grouped behind `MagSamples::stats` for accelerated,
 /// continuous update: the raw first and second moments are maintained on
 /// append, replacement, and expiry, and the sample normalization
 /// $(\mu, r)$ is derived from them in $O(1)$ at point of use, without a row

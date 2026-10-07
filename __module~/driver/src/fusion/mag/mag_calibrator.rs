@@ -3,8 +3,7 @@ use nalgebra::{DMatrix, DVector, Matrix3, SVector, Vector3};
 use super::bad_mag_cause::{BadMagCause, BadReading};
 use super::calibration_quality::CalibrationQuality;
 use super::mag_model::{MagModel, CALIBRATION_PARAMETER_COUNT, SHAPE_REGULARIZATION};
-use super::mag_samples::{ConcreteRow, MagSamples, Row};
-use super::sample_stats::SampleStats;
+use super::mag_samples::{ConcreteRow, Row};
 /// Confidence required for a working candidate to advance the publication
 /// streak. This is the highest tested threshold at which every fixed SimMotion
 /// regression seed completes the 2000-evaluation budget; the rank-deficient
@@ -122,7 +121,6 @@ impl std::ops::Deref for MagCalibrationResult {
 /// factors are recomputed from the retained rows on each quality update, so
 /// only the online-optimizer parameters carry history beyond the cache.
 pub struct MagCalibrator<const N: usize> {
-    sample_timestamps_us: [u64; N],
     hard_iron_offset: Vector3<f32>,     /*$b$*/
     soft_iron_correction: Matrix3<f32>, /*$A$*/
     calibration_initialized: bool,
@@ -155,7 +153,6 @@ pub struct MagCalibrator<const N: usize> {
 impl<const N: usize> Default for MagCalibrator<N> {
     fn default() -> Self {
         Self {
-            sample_timestamps_us: [0; N],
             hard_iron_offset: Vector3::zeros(),
             soft_iron_correction: Matrix3::identity(),
             calibration_initialized: false,
@@ -171,9 +168,8 @@ impl<const N: usize> Default for MagCalibrator<N> {
             optimizer_steps: 0,
             publication_quality_streak: 0,
             model: MagModel {
-                samples: MagSamples::default(),
+                samples: Box::default(),
                 parameters: MagModel::<N>::parameter_prior(),
-                stats: SampleStats::default(),
                 learned_gravity_projection: None,
                 gravity_frame: Matrix3::identity(),
                 gravity_weight: DEFAULT_GRAVITY_WEIGHT,
@@ -318,7 +314,7 @@ impl<const N: usize> MagCalibrator<N> {
         // observation's normalized sample bit-equal to a per-observation
         // `normalized_sample` call while dropping the fixed-size moment
         // recomputation that call performs.
-        let (mean, rms_radius) = self.model.stats.normalization();
+        let (mean, rms_radius) = self.model.samples.stats.normalization();
         let observations = minibatch
             .current_sample
             .map(|sample| (sample, minibatch.current_gravity))
@@ -326,7 +322,7 @@ impl<const N: usize> MagCalibrator<N> {
             .chain((0..minibatch.random_draws).map_while(|_| {
                 Self::random_cache_row(
                     &mut random_state,
-                    self.model.stats.sample_row_count,
+                    self.model.samples.stats.sample_row_count,
                     minibatch.accepted_row,
                 )
                 .map(|row| {
@@ -394,14 +390,14 @@ impl<const N: usize> MagCalibrator<N> {
         current_gravity: Option<Vector3<f32>>,
         accepted_row: Option<usize>,
     ) {
-        if !self.model.stats.sample_normalization_usable() {
+        if !self.model.samples.stats.sample_normalization_usable() {
             return;
         }
         self.model
             .initialize_gravity_projection(current_sample, current_gravity);
 
         let random_draws =
-            if self.model.stats.sample_row_count > usize::from(accepted_row.is_some()) {
+            if self.model.samples.stats.sample_row_count > usize::from(accepted_row.is_some()) {
                 self.minibatch_size.saturating_sub(1)
             } else {
                 0
@@ -425,12 +421,12 @@ impl<const N: usize> MagCalibrator<N> {
         // enough to converge against. Replay steps reuse the current
         // learning rate without advancing its schedule, so annealing stays
         // tied to the rate of arriving data rather than to compute.
-        if self.calibration_initialized || self.model.stats.sample_row_count == 0 {
+        if self.calibration_initialized || self.model.samples.stats.sample_row_count == 0 {
             return;
         }
         let replay_count /*$p$*/ = self
             .replay_updates
-            .saturating_mul(self.model.stats.sample_row_count)
+            .saturating_mul(self.model.samples.stats.sample_row_count)
             / N.max(1);
         for _ in 0..replay_count {
             self.apply_minibatch_update(MinibatchSpec {
@@ -771,39 +767,15 @@ impl<const N: usize> MagCalibrator<N> {
         gravity_direction: Option<Vector3<f32>>,
         timestamp_us: u64,
     ) -> bool {
+        // Old samples expire before the incoming magnetometer is validated,
+        // so an invalid reading can still change retained support,
+        // normalization, and live quality through expiry.
+        let previous_count = self.model.samples.stats.sample_row_count;
         let mut index_map = [u32::MAX; N];
-        let mut retained_count = 0;
-        for (index, map_slot) in index_map
-            .iter_mut()
-            .enumerate()
-            .take(self.model.stats.sample_row_count)
-        {
-            if timestamp_us.saturating_sub(self.sample_timestamps_us[index])
-                <= self.max_sample_lifespan_us
-            {
-                *map_slot = retained_count as u32;
-                // Rows are only materialized when compaction actually moves
-                // them; the common no-expiry scan keeps every row in place.
-                if retained_count != index {
-                    let row = self.model.samples.view(index).copied();
-                    self.model.samples.set_row(retained_count, row);
-                    self.sample_timestamps_us[retained_count] = self.sample_timestamps_us[index];
-                }
-                retained_count += 1;
-            } else {
-                self.model
-                    .stats
-                    .remove_raw_moment(self.model.samples.view(index).sample());
-            }
-        }
-        if retained_count != self.model.stats.sample_row_count {
-            self.model.stats.sample_row_count = retained_count;
-            if retained_count == 0 {
-                // Incremental subtraction can leave round-off residue after
-                // the last retained row expires. An empty cache has exact
-                // zero moments by definition.
-                self.model.stats.clear_raw_moments();
-            }
+        self.model
+            .samples
+            .expire(timestamp_us, self.max_sample_lifespan_us, &mut index_map);
+        if self.model.samples.stats.sample_row_count != previous_count {
             self.mean_distance = 0.0;
             self.remap_neighbor_cache(&index_map);
         }
@@ -816,8 +788,8 @@ impl<const N: usize> MagCalibrator<N> {
         }
         let mut accepted_row = None;
         // Check if buffer is not yet "initialized" with real measurements
-        if self.model.stats.sample_row_count < N {
-            let count = self.model.stats.sample_row_count;
+        if self.model.samples.stats.sample_row_count < N {
+            let count = self.model.samples.stats.sample_row_count;
             let squared_distances = self.squared_distances_to(mag_sample, count);
             for ((cache, len), &squared_distance) in self
                 .neighbor_cache
@@ -839,10 +811,11 @@ impl<const N: usize> MagCalibrator<N> {
                     complete,
                 );
             }
-            self.model.stats.add_raw_moment(mag_sample);
-            self.add_sample_at(count, mag_sample, gravity_direction, timestamp_us);
+            self.model.samples.append(
+                ConcreteRow::new(mag_sample, gravity_direction),
+                timestamp_us,
+            );
             self.reset_row_cache(count, &squared_distances, count);
-            self.model.stats.sample_row_count += 1;
             accepted_row = Some(count);
         }
         // Otherwise check which sample may be best to replace
@@ -883,33 +856,17 @@ impl<const N: usize> MagCalibrator<N> {
                         complete,
                     );
                 }
-                self.model
-                    .stats
-                    .remove_raw_moment(self.model.samples.view(replacement_row).sample());
-                self.model.stats.add_raw_moment(mag_sample);
-                self.add_sample_at(replacement_row, mag_sample, gravity_direction, timestamp_us);
+                self.model.samples.replace(
+                    replacement_row,
+                    ConcreteRow::new(mag_sample, gravity_direction),
+                    timestamp_us,
+                );
                 self.reset_row_cache(replacement_row, &squared_distances, N);
                 accepted_row = Some(replacement_row);
             }
         }
         self.update_online_optimizer(mag_sample, gravity_direction, accepted_row);
         true
-    }
-
-    /// Insert a sample vector into the `index` row of the sample matrix.
-    fn add_sample_at(
-        &mut self,
-        index: usize,
-        sample: Vector3<f32>,
-        gravity_direction: Option<Vector3<f32>>,
-        timestamp_us: u64,
-    ) {
-        if index < N {
-            self.model
-                .samples
-                .set_row(index, ConcreteRow::new(sample, gravity_direction));
-            self.sample_timestamps_us[index] = timestamp_us;
-        }
     }
 
     /// Get the mean of the per-row nearest-neighbor distances over the

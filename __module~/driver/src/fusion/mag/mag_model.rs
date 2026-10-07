@@ -3,7 +3,6 @@ use nalgebra::{Matrix3, SMatrix, SVector, SymmetricEigen, Vector3};
 use super::bad_mag_cause::BadCalibration;
 use super::mag_calibrator::ONLINE_SCALE_EPSILON;
 use super::mag_samples::{MagSamples, Row};
-use super::sample_stats::SampleStats;
 use super::CalibrationQuality;
 
 /// Number of ellipsoid coefficients fitted by the magnetometer calibration
@@ -67,27 +66,23 @@ pub(super) struct CalibrationCandidate {
 
 /// Calibration model state behind `MagCalibrator`: the retained magnetometer
 /// sample cache the quality statistics are estimated from, the online
-/// ellipsoid coefficients with the incrementally maintained cache statistics
-/// ([`SampleStats`]) giving the sample normalization they are expressed in,
-/// the learned gravity-projection state of the optional surrogate, and the
-/// live quality factors derived from all of the above. Grouping the fields
-/// keeps the quality-estimation inputs (`update_quality`) together and
-/// separate from the optimizer bookkeeping, diversity neighbor cache, and
-/// publication state that the calibrator owns itself.
+/// ellipsoid coefficients expressed in the sample normalization maintained
+/// with that cache, the learned gravity-projection state of the optional
+/// surrogate, and the live quality factors derived from all of the above.
+/// Grouping the fields keeps the quality-estimation inputs (`update_quality`)
+/// together and separate from the optimizer bookkeeping, diversity neighbor
+/// cache, and publication state that the calibrator owns itself.
 pub(super) struct MagModel<const N: usize> {
-    /// Retained magnetometer sample cache: the raw samples and the optional
-    /// gravity direction carried by each row.
-    pub(super) samples: MagSamples<N>,
+    /// Retained magnetometer sample cache: the raw samples, the optional
+    /// gravity direction and device timestamp carried by each row, and the
+    /// incrementally maintained row statistics backing the sample
+    /// normalization the coefficients are expressed in. Boxed so
+    /// constructing the model by value — the calibrator's `Default` chain —
+    /// never moves the multi-ten-KB cache through stack temporaries: the
+    /// fusion bounded-stack test runs construction and the update path on a
+    /// 384 KiB stack.
+    pub(super) samples: Box<MagSamples<N>>,
     pub(super) parameters: SVector<f32, CALIBRATION_PARAMETER_COUNT>, /*$\theta$*/
-    /// Incrementally maintained statistics of the retained cache rows:
-    /// the row count and raw moments backing the sample normalization
-    /// $(\mu, r)$ it derives. Grouped in [`SampleStats`] so append,
-    /// replacement, and expiry update all of them together in $O(1)$
-    /// without a row scan.
-    /// TODO: several fields (e.g. stats, MagCalibrator.sample_timestamps_us) can be moved into `samples: MagSamples<N>`
-    ///  MagSamples.set_row function should also keep these fields up-to-date
-    ///
-    pub(super) stats: SampleStats,
     /// Learned scalar $\kappa$ of the gravity surrogate: the projection of
     /// the preconditioned gravity direction $\tilde{g}_i = A_w^{-1} g_i$
     /// onto the ellipsoid normal $n_i = Q u_i + q / 2$ at a retained row,
@@ -111,7 +106,7 @@ pub(super) struct MagModel<const N: usize> {
     /// correction $A_w$ matches the true $A$. Identity until the first valid
     /// working candidate refreshes it; refreshed by [`MagModel::update_quality`].
     pub(super) gravity_frame: Matrix3<f32>, /*$A_w^{-1}$*/
-    pub(super) gravity_weight: f32, /*$w_g$*/
+    pub(super) gravity_weight: f32,                                   /*$w_g$*/
     /// Live calibration quality factors of the current working candidate,
     /// reset together with the model minimum and recomputed by
     /// `update_quality` on every publication evaluation; its `dip_sin`
@@ -186,14 +181,14 @@ impl<const N: usize> MagModel<N> {
         let observation = current_gravity
             .map(|gravity| (current_sample, gravity))
             .or_else(|| {
-                (0..self.stats.sample_row_count).find_map(|row| {
+                (0..self.samples.stats.sample_row_count).find_map(|row| {
                     let row = self.samples.view(row);
                     row.gravity().map(|gravity| (row.sample(), gravity))
                 })
             });
         if let Some((sample, gravity)) = observation {
             let features = Self::gravity_features(
-                self.stats.normalized_sample(sample),
+                self.samples.stats.normalized_sample(sample),
                 self.preconditioned_gravity(gravity),
             );
             let projection = features.dot(&self.parameters);
@@ -308,12 +303,12 @@ impl<const N: usize> MagModel<N> {
     /// Derives one finite SPD correction candidate from the current online
     /// ellipsoid state without scanning retained rows.
     pub(super) fn working_candidate(&self) -> Result<CalibrationCandidate, BadCalibration> {
-        if !self.stats.sample_normalization_usable() {
+        if !self.samples.stats.sample_normalization_usable() {
             return Err(BadCalibration::Unsolveable {
                 message: "sample normalization is non-finite or zero",
             });
         }
-        let (mu /*$\mu$*/, r /*$r$*/) = self.stats.normalization();
+        let (mu /*$\mu$*/, r /*$r$*/) = self.samples.stats.normalization();
         let parameters = self.parameters;
         if !parameters.iter().all(|value| value.is_finite()) {
             return Err(BadCalibration::Unsolveable {
@@ -454,7 +449,7 @@ impl<const N: usize> MagModel<N> {
                 ..CalibrationQuality::ZERO
             };
         };
-        if self.stats.sample_row_count < CALIBRATION_PARAMETER_COUNT {
+        if self.samples.stats.sample_row_count < CALIBRATION_PARAMETER_COUNT {
             reset_quality(&mut self.quality);
             return None;
         }
@@ -466,7 +461,7 @@ impl<const N: usize> MagModel<N> {
             }
         };
         self.refresh_gravity_frame(&candidate);
-        let (mu /*$\mu$*/, rms_radius /*$r$*/) = self.stats.normalization();
+        let (mu /*$\mu$*/, rms_radius /*$r$*/) = self.samples.stats.normalization();
         // The gravity loss stays absent (zero below) when gravity is
         // disabled, the projection $\kappa$ is not yet seeded, or no
         // retained row carries gravity.
@@ -502,7 +497,7 @@ impl<const N: usize> MagModel<N> {
         let mut gravity_scale_square_sum = 0.0f32;
         let mut gravity_count = 0usize;
         let mut gram_sum = [[0.0f32; CALIBRATION_PARAMETER_COUNT]; CALIBRATION_PARAMETER_COUNT];
-        for row in 0..self.stats.sample_row_count {
+        for row in 0..self.samples.stats.sample_row_count {
             let row_view = self.samples.view(row);
             let centered = row_view.sample() - mu;
             let normalized = centered / rms_radius;
@@ -539,8 +534,8 @@ impl<const N: usize> MagModel<N> {
         }
         let gram_sum = CoverageGramMatrix::from_fn(|i, j| gram_sum[i][j]);
         let regularization_loss = Self::regularization_loss(&self.parameters);
-        let radial_loss =
-            0.5 * radial_square_sum / self.stats.sample_row_count as f32 + regularization_loss;
+        let radial_loss = 0.5 * radial_square_sum / self.samples.stats.sample_row_count as f32
+            + regularization_loss;
         if !radial_loss.is_finite() {
             reset_quality(&mut self.quality);
             return None;
@@ -558,7 +553,7 @@ impl<const N: usize> MagModel<N> {
             .map(|mean_square| 0.5 * self.gravity_weight * mean_square)
             .filter(|loss| loss.is_finite())
             .unwrap_or(0.0);
-        let coverage = Self::coverage_from_gram(&gram_sum, self.stats.sample_row_count);
+        let coverage = Self::coverage_from_gram(&gram_sum, self.samples.stats.sample_row_count);
         self.quality = CalibrationQuality {
             coverage,
             radial_loss,
