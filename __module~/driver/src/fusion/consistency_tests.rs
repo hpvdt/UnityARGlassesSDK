@@ -23,9 +23,8 @@ fn small_innovations_report_consistent() {
         source.record(0.05);
     }
     assert_eq!(source.status(), ConsistencyStatus::Consistent);
-    // exponential average residual after 50 samples: value * 0.9^50 ~= 2.6e-4
-    assert!((source.innovation.ema - 0.05).abs() < 5e-4);
-    // test ratio = (0.05 / 3)^2 / 0.04 ~= 0.00694 (gate-normalized like both stacks)
+    assert_eq!(source.innovation, 0.05, "latest sample kept verbatim");
+    // exponential average of the test ratio after 50 samples: value * 0.9^50 ~= 2.6e-4 residual
     let expected_ratio = (0.05_f32 / 3.0).powi(2) / 0.04;
     assert!((source.test_ratio.ema - expected_ratio).abs() < 5e-4);
     assert_eq!(source.rejected_count, 0);
@@ -84,9 +83,9 @@ fn record_scaled_recovers_pre_correction_innovation() {
     let status = source.record_scaled(0.005, 0.05);
     assert!(status.is_some());
     assert!(
-        (source.innovation.last - 0.1).abs() < 1e-6,
+        (source.innovation - 0.1).abs() < 1e-6,
         "scaled=0.005 with blend ratio 0.05 reconstructs innovation 0.1, got {}",
-        source.innovation.last
+        source.innovation
     );
 }
 
@@ -110,10 +109,9 @@ fn record_with_variance_normalizes_by_live_variance() {
         "innovation equals live sigma, so test ratio is 1/gate^2 = 1/9, got {}",
         source.test_ratio.last
     );
-    assert!(
-        (source.innovation_variance.ema - 0.136).abs() < 1e-6,
-        "stored variance tracks the live value: 0.04 * 0.9 + 1.0 * 0.1, got {}",
-        source.innovation_variance.ema
+    assert_eq!(
+        source.innovation_variance, 1.0,
+        "the live variance replaces the stored one"
     );
 }
 
@@ -171,7 +169,7 @@ fn replace_fusion_inconsistency_with_consistency() {
     // the complementary filter records its innovations into the report
     assert!(consistency.sources.acc.samples_count > 0);
     assert!(consistency.sources.gyro.samples_count > 0);
-    assert!(consistency.sources.acc.innovation.ema > 0.0);
+    assert!(consistency.sources.acc.test_ratio.ema > 0.0);
 
     // the non-overridable verdict is derived from the trackers, not stored separately
     assert_eq!(fusion.consistency_status(), consistency.status());

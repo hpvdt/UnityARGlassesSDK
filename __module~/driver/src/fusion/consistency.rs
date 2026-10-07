@@ -57,24 +57,13 @@ pub struct EmaTracking {
 }
 
 impl EmaTracking {
-    /// Exponential averaging decay per sample, shared with the legacy `Correction` counters.
-    /// At factor 0.9 the filter's continuous-equivalent time constant is
-    /// $\tau \approx -dt / \ln 0.9 \approx 9.5$ samples ($\approx 0.48$ s at a 20 Hz
-    /// magnetometer rate, $\approx 0.1$ s at 100 Hz). PX4's `test_ratio_filtered` instead uses
-    /// a dt-dependent gain $\alpha = dt / (dt + \tau)$ with a fixed $\tau = 0.5$ s, so its
-    /// memory is rate-independent; switching this to a dt-dependent gain is a refinement for
-    /// when sample timestamps are wired in.
+    /// Exponential averaging decay per sample. At factor 0.9 the filter's
+    /// continuous-equivalent time constant is $\tau \approx -dt / \ln 0.9 \approx 9.5$ samples
+    /// ($\approx 0.48$ s at a 20 Hz magnetometer rate, $\approx 0.1$ s at 100 Hz). PX4's
+    /// `test_ratio_filtered` instead uses a dt-dependent gain $\alpha = dt / (dt + \tau)$ with
+    /// a fixed $\tau = 0.5$ s, so its memory is rate-independent; switching this to a
+    /// dt-dependent gain is a refinement for when sample timestamps are wired in.
     pub const AVG_DECAY: f32 = 0.90;
-
-    /// Create a tracker seeded with `initial` as both latest value and average: used for
-    /// configured quantities (e.g. a complementary filter's innovation variance) that are
-    /// already known before the first sample.
-    pub fn new(initial: f32) -> Self {
-        Self {
-            last: initial,
-            ema: initial,
-        }
-    }
 
     /// Record one sample: `last` takes it and `ema` folds it in by [`Self::AVG_DECAY`].
     pub fn record(&mut self, value: f32) {
@@ -101,19 +90,21 @@ pub enum ConsistencyStatus {
 
 /// Innovation consistency statistics of one observation source ("aiding source" in PX4 terms):
 /// the per-source row reported by ArduPilot `EKF_STATUS_REPORT` and PX4
-/// `EstimatorAidSource1d/2d/3d.msg` + `estimator_status`. Field groups match their
-/// ArduPilot/PX4 counterparts (`innovation.last` is PX4 `innovation`, `innovation.ema` is PX4
-/// `innovation_filtered`, and so on). Angular sources (all three in the 9-axis pipeline) use
-/// radians.
+/// `EstimatorAidSource1d/2d/3d.msg` + `estimator_status`. Field names match their
+/// ArduPilot/PX4 counterparts. Angular sources (all three in the 9-axis pipeline) use radians.
+///
+/// Only `test_ratio` is [`EmaTracking`]-tracked: the verdict and the published health signal
+/// derive from the filtered ratio (`ema`, PX4 `test_ratio_filtered`) while the per-sample
+/// rejection uses the unfiltered one (`last`, PX4 `innovation_rejected`). PX4's likewise
+/// published `innovation_filtered` is deliberately omitted: no consumer would read it before a
+/// MAVLink-style exporter exists; add it when one does.
 #[derive(Clone, Copy, Debug)]
 pub struct SourceConsistency {
-    /// Innovation magnitude $\nu$ (pre-correction residual), in source units: `last` is the
-    /// latest sample, `ema` its filtered value.
+    /// Latest innovation magnitude $\nu$ (pre-correction residual), in source units.
     ///
     /// Counterparts: ArduPilot `innovMag`/`innovYaw`/`innovVelPos`/`innovVtas`, PX4
-    /// `innovation`/`innovation_filtered` (theirs a first-order filter with dt-dependent gain,
-    /// here a fixed exponential average; ArduPilot has no filtered innovation).
-    pub innovation: EmaTracking,
+    /// `innovation`.
+    pub innovation: f32,
 
     /// Test ratio $\rho = \nu^2 / (\eta^2 \Sigma)$ (unitless, already gate-normalized): `last`
     /// is the latest sample, `ema` the filtered value; the consistency verdict compares `ema`
@@ -130,12 +121,13 @@ pub struct SourceConsistency {
     /// Innovation variance $\Sigma$ (the expected squared spread of the innovation), in
     /// squared source units. For a complementary filter this is configured once via
     /// [`Self::new`] ($\Sigma = \sigma^2$ of the configured source-unit noise $\sigma$) and
-    /// `last`/`ema` both hold it; for a Kalman filter [`Self::record_with_variance`] records
-    /// the live variance per sample, `last` keeping the latest and `ema` the tracked spread.
+    /// stays fixed; for a Kalman filter [`Self::record_with_variance`] stores the latest live
+    /// variance per sample, unaveraged (gating must follow the filter's covariance, not a
+    /// damped history of it).
     ///
     /// Counterparts: ArduPilot `varInnovMag`/`varInnovVelPos`/`varInnov`, PX4
     /// `innovation_variance`.
-    pub innovation_variance: EmaTracking,
+    pub innovation_variance: f32,
 
     /// Innovation consistency gate $\eta$ in multiples of $\sqrt{\Sigma}$, floored at
     /// [`Self::MIN_INNOVATION_GATE`]. Configured per source; not sample-tracked.
@@ -188,9 +180,9 @@ impl SourceConsistency {
     /// source units.
     pub fn new(innovation_variance: f32) -> Self {
         Self {
-            innovation: EmaTracking::default(),
+            innovation: 0.0,
             test_ratio: EmaTracking::default(),
-            innovation_variance: EmaTracking::new(innovation_variance),
+            innovation_variance,
             innovation_gate: Self::DEFAULT_INNOVATION_GATE,
             innovation_rejected: false,
             samples_count: 0,
@@ -209,7 +201,7 @@ impl SourceConsistency {
     /// updated verdict. The returned status lets a complementary filter adapt its blend ratio
     /// online without a second read.
     pub fn record(&mut self, innovation: f32) -> ConsistencyStatus {
-        self.record_gated(innovation, self.innovation_variance.ema)
+        self.record_gated(innovation, self.innovation_variance)
     }
 
     /// Record an innovation reconstructed from a complementary filter's post-blend correction:
@@ -227,9 +219,8 @@ impl SourceConsistency {
     }
 
     /// Record an innovation with its live innovation variance $\Sigma$ (Kalman filter path):
-    /// the sample is gated by the live variance rather than by the tracked one, and the stored
-    /// `innovation_variance` tracks the live spread so reporting stays meaningful while the
-    /// filter covariance breathes.
+    /// the sample is gated by the live variance, which also replaces the stored
+    /// `innovation_variance` so subsequent reporting follows the filter's covariance.
     ///
     /// Returns `None` without recording for a non-finite or non-positive variance, which
     /// carries no meaningful normalization.
@@ -241,8 +232,9 @@ impl SourceConsistency {
         if !innovation_variance.is_finite() || innovation_variance <= 0.0 {
             return None;
         }
-        self.innovation_variance.record(innovation_variance);
-        Some(self.record_gated(innovation, self.innovation_variance.last))
+        // stores the latest live variance; gating follows the filter's covariance directly
+        self.innovation_variance = innovation_variance;
+        Some(self.record_gated(innovation, innovation_variance))
     }
 
     /// Filtered verdict: [`ConsistencyStatus::Pending`] before [`Self::MIN_SAMPLES`], then
@@ -267,7 +259,7 @@ impl SourceConsistency {
         let innovation_variance = innovation_variance.max(Self::MIN_INNOVATION_VARIANCE);
         let innovation_gate = self.innovation_gate.max(Self::MIN_INNOVATION_GATE);
         self.samples_count += 1;
-        self.innovation.record(innovation);
+        self.innovation = innovation;
         // sq(innovation) / (sq(gate) * variance), as in both stacks
         self.test_ratio
             .record((innovation / innovation_gate).powi(2) / innovation_variance);
@@ -289,10 +281,8 @@ impl fmt::Display for SourceConsistency {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "innovation={:8.5}, innovation_filtered={:8.5}, test_ratio={:7.4}, \
-             test_ratio_filtered={:7.4}, rejected={}/{}",
-            self.innovation.last,
-            self.innovation.ema,
+            "innovation={:8.5}, test_ratio={:7.4}, test_ratio_filtered={:7.4}, rejected={}/{}",
+            self.innovation,
             self.test_ratio.last,
             self.test_ratio.ema,
             self.rejected_count,

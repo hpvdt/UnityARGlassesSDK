@@ -22,7 +22,7 @@ fn update_mag_uses_shared_mag_calibrator() {
 
     fusion.integrate_mag(&north_rub, true, 0);
 
-    assert!(fusion.state.consistency.sources.mag.innovation.last < 0.001);
+    assert!(fusion.state.consistency.sources.mag.innovation < 0.001);
     assert!(fusion.state.attitude.angle() < 0.001);
 }
 
@@ -153,7 +153,7 @@ fn update_mag_skips_heading_near_the_magnetic_poles() {
     }
 
     // no heading innovation was ever recorded and the yaw offset survives
-    assert_eq!(fusion.state.consistency.sources.mag.innovation.last, 0.0);
+    assert_eq!(fusion.state.consistency.sources.mag.innovation, 0.0);
     assert!(
         (fusion.state.attitude * initial.inverse()).angle() < 1.0e-6,
         "attitude moved from {initial:?} to {:?}",
@@ -173,8 +173,7 @@ fn update_mag_discards_ill_conditioned_calibration() {
 
     fusion.integrate_mag(&mag_rub, true, 0);
 
-    assert_eq!(fusion.state.consistency.sources.mag.innovation.last, 0.0);
-    assert_eq!(fusion.state.consistency.sources.mag.innovation.ema, 0.0);
+    assert_eq!(fusion.state.consistency.sources.mag.innovation, 0.0);
     assert_eq!(fusion.state.attitude.angle(), 0.0);
 }
 
