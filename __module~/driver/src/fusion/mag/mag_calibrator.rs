@@ -509,8 +509,10 @@ impl<const N: usize> MagCalibrator<N> {
         } else {
             0.0
         };
-        // TODO: use built-in norm operations instead of manually combining vector and scalar squared norms
-        let descent_norm = (descent_direction.norm_squared() + kappa_step * kappa_step).sqrt();
+        // The joint step covers $\theta$ and the scalar $\kappa$: `push`
+        // widens the descent direction by the kappa step so the built-in
+        // norm measures the whole bounded update.
+        let descent_norm = descent_direction.push(kappa_step).norm();
         if !descent_norm.is_finite() || descent_norm <= f32::EPSILON {
             return false;
         }
