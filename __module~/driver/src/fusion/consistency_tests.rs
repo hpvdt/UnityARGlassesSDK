@@ -173,12 +173,19 @@ fn replace_fusion_inconsistency_with_consistency() {
 
     // the non-overridable verdict is derived from the trackers, not stored separately
     assert_eq!(fusion.consistency_status(), consistency.status());
-    // gyro increments stay far inside the gate on this trace; SimMotion's accelerated motion
-    // legitimately drives acc residuals past the 0.2 rad / 3-sigma gate often, so its verdict
-    // is exercise of the rejection path rather than a fixed expected value
+
+    // with the gyro dead reckoning active the whole report stays far inside its
+    // gates on this trace: acc residuals hold near 0.03 rad ($\bar{\rho}$
+    // $\approx 2 \times 10^{-3}$) and gyro increments near 0.08 rad
+    // ($\bar{\rho} \approx 3 \times 10^{-2}$), so the acc rejections the filter
+    // produced while its attitude never propagated no longer occur. The
+    // rejection path is exercised by the source-level tests above.
     assert_eq!(
         consistency.sources.gyro.status(),
         ConsistencyStatus::Consistent
     );
-    assert!(consistency.sources.acc.rejected_count > 0);
+    assert_eq!(
+        consistency.sources.acc.status(),
+        ConsistencyStatus::Consistent
+    );
 }

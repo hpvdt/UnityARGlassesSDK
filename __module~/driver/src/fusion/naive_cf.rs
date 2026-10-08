@@ -89,6 +89,8 @@ impl NaiveCF {
     /// without actual heading evidence.
     const MIN_HEADING_FIELD_NORM: f32 = 0.1;
 
+    const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; //microseconds
+
     const G_ACC_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
     /// Unit down axis of the FRD world frame.
     const DOWN_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, 1.0);
@@ -97,6 +99,36 @@ impl NaiveCF {
     const NORTH_FRD: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
 
     //CAUTION: right-multiplication means rotation, unconventionally
+
+    /// Dead-reckoning prediction step of the complementary filter: applies the
+    /// gyroscope increment $d\tilde{S}_1\, dt_1$ to the attitude before any
+    /// state-sensor correction. `gyro_rub` is a RUB angular rate in rad/s, `t`
+    /// a device timestamp in microseconds, and the applied increment magnitude
+    /// is recorded into the gyro consistency source as the sensor-health
+    /// signal. Zero elapsed time (duplicate timestamps) skips propagation
+    /// and recording while still refreshing `prev_gyro`.
+    pub(super) fn integrate_gyro(&mut self, gyro_rub: &Vector3<f32>, t: u64) -> () {
+        let gyro = rub_to_frd(gyro_rub);
+
+        let d_t1 /*$dt_1$*/ = t - self.prev_gyro.1;
+        let d_t1_f = d_t1 as f32 / Self::GYRO_SPEED_IN_TIMESTAMP_FACTOR;
+        let d_s1_t1 /*$d\tilde{S}_1\, dt_1$*/ = d_t1_f * gyro;
+
+        if d_t1_f > 0.0 {
+            let increment = UnitQuaternion::from_euler_angles(d_s1_t1.x, d_s1_t1.y, d_s1_t1.z);
+
+            // self.attitude = (increment.inverse() * self.attitude.inverse()).inverse();
+            self.state.attitude = self.state.attitude * increment;
+            let _ = self
+                .state
+                .consistency
+                .sources
+                .gyro
+                .record(increment.angle());
+        }
+
+        self.prev_gyro = (gyro, t);
+    }
 
     fn integrate_acc(&mut self, acc_rub: &Vector3<f32>, _t: u64) -> () {
         let acc = rub_to_frd(acc_rub);
@@ -127,6 +159,20 @@ impl NaiveCF {
                 // opposite direction, don't know how to correct
             }
         }
+    }
+
+    const REGRESS_ROLL_FACTOR: f32 = 0.0;
+    #[allow(dead_code)]
+    pub(super) fn integrate_regress_roll(&mut self) -> () {
+        // Unused, this is only used for testing
+        if !Self::REGRESS_ROLL_FACTOR.is_finite() || (Self::REGRESS_ROLL_FACTOR <= 0.0) {
+            return;
+        }
+
+        let no_roll_factor = Self::REGRESS_ROLL_FACTOR.clamp(0.0, 1.0);
+        let (roll, pitch, yaw) = self.state.attitude.euler_angles();
+        let corrected_roll = roll * (1.0 - no_roll_factor);
+        self.state.attitude = UnitQuaternion::from_euler_angles(corrected_roll, pitch, yaw);
     }
 
     /// Magnetometer update with the magnetic dip $\delta$ partitioned out
@@ -337,6 +383,7 @@ impl NaiveCF {
 
     fn renormalize(&mut self) {
         // self.attitude.renormalize_fast(); // TODO: switch to it after rigorous testing
+        // self.integrate_regress_roll();
         self.state.attitude.renormalize();
     }
 }
@@ -364,19 +411,8 @@ impl Fusion for NaiveCF {
                 gyroscope,
                 timestamp,
             } => {
-                // dead-reckoning increment magnitude, kept as a sensor-health signal
-                let gyro = rub_to_frd(&gyroscope);
-                let dt_seconds = (timestamp - self.prev_gyro.1) as f32 * 1e-6;
-                if dt_seconds > 0.0 {
-                    let _ = self
-                        .state
-                        .consistency
-                        .sources
-                        .gyro
-                        .record((gyro * dt_seconds).norm());
-                }
-                self.prev_gyro = (gyro, timestamp);
-
+                // dead-reckoning prediction, then the state-sensor correction
+                self.integrate_gyro(&gyroscope, timestamp);
                 self.integrate_acc(&accelerometer, timestamp);
                 self.renormalize();
             }

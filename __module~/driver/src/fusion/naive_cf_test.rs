@@ -8,6 +8,50 @@ fn frd_to_rub(v: Vector3<f32>) -> Vector3<f32> {
 }
 
 #[test]
+fn integrate_no_roll_skips_when_factor_is_none() {
+    let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
+    let attitude = UnitQuaternion::from_euler_angles(0.8, -0.4, 1.1);
+    fusion.state.attitude = attitude;
+
+    fusion.integrate_regress_roll();
+
+    assert!(fusion.state.attitude.angle_to(&attitude) < 1.0e-5);
+}
+
+#[test]
+fn integrate_gyro_propagates_attitude() {
+    let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
+    fusion.state.attitude = UnitQuaternion::identity();
+    fusion.prev_gyro = (Vector3::zeros(), 0);
+
+    // 100 ms of elapsed sensor time scales the rad/s reading into the
+    // (0.06, -0.04, 0.02) rad dead-reckoning increment
+    let gyro_frd = Vector3::new(0.6, -0.4, 0.2);
+    fusion.integrate_gyro(&frd_to_rub(gyro_frd), 100_000);
+
+    let increment = UnitQuaternion::from_euler_angles(0.06, -0.04, 0.02);
+    assert!(fusion.state.attitude.angle_to(&increment) < 1.0e-6);
+    assert_eq!(fusion.prev_gyro.1, 100_000);
+    assert!((fusion.state.consistency.sources.gyro.innovation - increment.angle()).abs() < 1.0e-6);
+}
+
+#[test]
+fn integrate_gyro_skips_nonpositive_dt() {
+    let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
+    let attitude = UnitQuaternion::from_euler_angles(0.8, -0.4, 1.1);
+    fusion.state.attitude = attitude;
+    fusion.prev_gyro = (Vector3::zeros(), 500_000);
+    fusion.state.consistency.sources.gyro = Default::default();
+
+    // duplicate timestamp: zero elapsed time must neither propagate nor record
+    fusion.integrate_gyro(&frd_to_rub(Vector3::new(1.0, 1.0, 1.0)), 500_000);
+
+    assert!(fusion.state.attitude.angle_to(&attitude) < 1.0e-7);
+    assert_eq!(fusion.state.consistency.sources.gyro.innovation, 0.0);
+    assert_eq!(fusion.prev_gyro.1, 500_000);
+}
+
+#[test]
 fn update_mag_uses_shared_mag_calibrator() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     let offset = Vector3::new(11.0, -7.0, 5.0);
