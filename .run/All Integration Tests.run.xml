@@ -1,6 +1,7 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="All Integration Tests" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
-    <option name="command" value="test-integration --package ar-drivers" />
+    <option name="buildProfileId" value="test" />
+    <option name="command" value="test --test *" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$/__module~/driver" />
     <envs />
     <option name="emulateTerminal" value="true" />
