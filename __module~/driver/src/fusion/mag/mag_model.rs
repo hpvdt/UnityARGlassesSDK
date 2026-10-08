@@ -151,7 +151,6 @@ impl<const N: usize> MagModel<N> {
     /// quadratic and linear terms whose dot product with `parameters` is the
     /// algebraic residual `phi^T theta - 1`.
     pub(super) fn features(sample: Vector3<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
-        // TODO: use nalgebra outer-product and vector-view operations instead of elementwise feature construction
         SVector::from_row_slice(&[
             sample.x * sample.x,
             sample.y * sample.y,
@@ -221,7 +220,6 @@ impl<const N: usize> MagModel<N> {
         sample: Vector3<f32>,
         gravity: Vector3<f32>,
     ) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
-        // TODO: use nalgebra outer-product and vector-view operations instead of elementwise feature construction
         SVector::from_row_slice(&[
             gravity.x * sample.x,
             gravity.y * sample.y,
@@ -259,7 +257,6 @@ impl<const N: usize> MagModel<N> {
     pub(super) fn coverage_feature(
         direction: Vector3<f32>,
     ) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
-        // TODO: use nalgebra outer-product and vector-view operations instead of elementwise feature construction
         SVector::<f32, CALIBRATION_PARAMETER_COUNT>::from_column_slice(&[
             direction.x * direction.x,
             direction.y * direction.y,
