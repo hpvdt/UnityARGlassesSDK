@@ -823,7 +823,6 @@ impl<const N: usize> MagCalibrator<N> {
             let neighbor_count = self.neighbor_count.min(N.saturating_sub(1));
             let (replacement_row, replacement_mean_distance) = self.lowest_mean_distance_by_index();
             let squared_distances = self.squared_distances_to(mag_sample, N);
-            // TODO: candidate_score_includes_replaced_victim
             // Compare both scores against the rows retained after replacement.
             // Keep the original distances intact for neighbor-cache updates.
             let mut candidate_squared_distances = squared_distances;
