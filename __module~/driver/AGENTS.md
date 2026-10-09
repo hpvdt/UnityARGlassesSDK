@@ -297,8 +297,9 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
   and the prediction, in radians for the 9-axis sources (code field `innovation` of `SourceConsistency`).
 - **$\rho$:** Test ratio $\rho = \nu^2 / (\eta^2 \Sigma)$ (code field `test_ratio.last` of `SourceConsistency`;
   counterparts ArduPilot `*TestRatio`, PX4 `test_ratio`); a sample fails the consistency check at or above 1.
-- **$\bar{\rho}$:** Exponential moving average of $\rho$ (code field `test_ratio.ema` of `SourceConsistency`); values at or above 1 report an inconsistent source, and the MAVLink-style export is
-  $\sqrt{\max \bar{\rho}}$ (ArduPilot `EKF_STATUS_REPORT` `*_variance`, PX4 `estimator_status` `*_test_ratio`).
+- **$\bar{\rho}$:** Exponential moving average of $\rho$ (code field `test_ratio.ema` of `SourceConsistency`); values
+  at or above 1 report an inconsistent source, and the MAVLink-style export is $\sqrt{\max \bar{\rho}}$ (ArduPilot
+  `EKF_STATUS_REPORT` `*_variance`, PX4 `estimator_status` `*_test_ratio`).
 
 #### Magnetometer Calibration
 

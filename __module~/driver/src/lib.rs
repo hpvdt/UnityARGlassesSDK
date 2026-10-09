@@ -3,7 +3,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
 #![warn(missing_docs)]
-//! This crate contains a simplified driver for Rokid Air and Mad Gaze Glow AR glasses.
+//! This crate contains a simplified driver for XREAL, Rokid, Grawoow and Mad Gaze AR glasses.
 //! It supports getting basic sensor data and setting up the display.
 //!
 //! Example usage (in a thread, probably):
@@ -25,11 +25,12 @@
 //!
 //! ## Feature flags
 //!
-//! Support for individual AR glasses types ca be enabled with the following features:
+//! Support for individual AR glasses types can be enabled with the following features:
 //!
 //! * `mad_gaze`: Mad Gaze Glow
-//! * `xreal`: XREAL Light
+//! * `xreal`: XREAL Air, Air 2, Air 2 Pro, Air 2 Ultra and XREAL Light
 //! * `rokid`: Rokid Air
+//! * `grawoow`: Grawoow G530 (a.k.a. Metavision M53)
 //!
 //! All of them are enabled by default, which may bring in some unwanted dependencies if you
 //! only want to support a specific type.
