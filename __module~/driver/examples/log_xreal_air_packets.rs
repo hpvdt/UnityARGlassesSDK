@@ -14,7 +14,10 @@ use clap::Parser;
 #[command(about = "Capture a timed XREAL Air 1 raw IMU packet trace")]
 struct Args {
     /// Destination for the versioned packet log.
-    #[arg(long, default_value = "tests/fixtures/xreal_air_air1_60s.log")]
+    #[arg(
+        long,
+        default_value = "tests/xreal_air/fixtures/xreal_air_air1_60s.log"
+    )]
     output: PathBuf,
 
     /// Capture duration in seconds.

@@ -155,7 +155,10 @@ integration tests run against it.
   the suite itself can hold the test-only `impl` block or free functions.
 - Tests covering success, malformed input, boundary values, and error variants of the same behavior belong in the
   same suite.
-- Use integration tests under `tests/` for behavior exercised through the public API.
+- Use integration tests under `tests/` for behavior exercised through the public API, mirroring the module
+  structure of the tested subject: one test binary per top-level subject module (`tests/<module>/main.rs`), wiring
+  deeper module paths with `mod` files (e.g. `tests/fusion/mag/`). Binary fixtures live under the subject directory
+  whose device produced them (e.g. `tests/xreal_air/fixtures/`).
 - Prefer deterministic tests and local fixtures. Keep tests that require external resources, timing, or environment
   state clearly separate and document their prerequisites.
 - Compare floating-point results with a tolerance derived from the algorithm; use exact equality only for values

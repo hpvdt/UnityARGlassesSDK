@@ -2,6 +2,8 @@
 // This file is part of ar-drivers-rs
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
+#![cfg(feature = "xreal")]
+
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -168,6 +170,7 @@ fn assert_air1_trace_calibrates(use_gravity: bool) {
     eprintln!("# Starting replay - Air 1 trace, {mode}");
     let trace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
+        .join("xreal_air")
         .join("fixtures")
         .join("xreal_air_air1_60s.log");
     let mut replay = XrealAirReplay::open(&trace).unwrap();

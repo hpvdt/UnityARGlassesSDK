@@ -2,8 +2,9 @@
 
 ## Project Information
 
-Refer to the [driver guide](../../AGENTS.md) for the crate architecture, guardrails, and documentation format, and to
-[README.md](../../README.md) for the project overview, supported devices, and protocol blog posts.
+Refer to the [driver guide](../../../AGENTS.md) for the crate architecture, guardrails, and documentation
+format, and to [README.md](../../../README.md) for the project overview, supported devices, and protocol blog
+posts.
 
 ## Fixture Format
 

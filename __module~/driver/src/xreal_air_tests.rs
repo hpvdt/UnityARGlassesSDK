@@ -290,9 +290,7 @@ fn padded_sensor_reports_decode_the_complete_sensor_prefix() {
 #[test]
 fn captured_packet_matches_upstream_deserialization() {
     let trace = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("xreal_air_air1_60s.log");
+        .join("tests/xreal_air/fixtures/xreal_air_air1_60s.log");
     let packet_log = std::fs::read_to_string(trace).unwrap();
     let packet = decode_packet_log_line(packet_log.lines().nth(6).unwrap(), 0x40).unwrap();
 

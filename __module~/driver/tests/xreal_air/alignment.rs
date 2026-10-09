@@ -22,7 +22,8 @@ const MAX_GRAVITY_LOSS: f32 = 0.000153125;
 /// degrees of window-mean drift.
 #[test]
 fn air1_factory_alignment_preserves_corrected_magnetic_dip() {
-    let trace = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/xreal_air_air1_60s.log");
+    let trace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/xreal_air/fixtures/xreal_air_air1_60s.log");
     let mut replay = XrealAirReplay::open(&trace).unwrap();
     let mut calibrator = MagCalibrator::<1023>::new();
     let mut gravity = None;

@@ -341,7 +341,7 @@ from `__module~/driver`:
 ```bash
 cargo test --package ar-drivers --no-default-features --lib fusion::mag::mag_calibrator::mag_calibrator_test
 cargo test --package ar-drivers --no-default-features --lib fusion::naive_cf_test
-cargo test --package ar-drivers --no-default-features --test mag_calibrator_sim_motion regression -- --nocapture
+cargo test --package ar-drivers --no-default-features --test fusion regression -- --nocapture
 ```
 
 Then run the applicable broad Rust checks from the parent guide.
