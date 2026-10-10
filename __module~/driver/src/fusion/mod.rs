@@ -73,8 +73,8 @@ pub struct FusionState {
     /// Latest attitude estimate as a unit quaternion.
     pub attitude: UnitQuaternion<f32>, /*$S$*/
 
-    /// Position estimate; reserved for the upcoming 6DoF fusion, not yet
-    /// updated by any estimator.
+    /// Linear velocity estimate in the world FRD frame, in m/s; reserved for
+    /// the upcoming 6DoF fusion, not yet updated by any estimator.
     pub linear_velocity: Vector3<f32>,
 
     /// Per-sensor innovation consistency.
