@@ -27,6 +27,8 @@ use crate::ARGlasses;
 mod _3dof;
 pub use _3dof::{AhrsCorrection, Fusion};
 
+mod naive_cf_core;
+
 mod mag;
 pub use mag::{
     BadCalibration, BadMagCause, BadReading, CalibrationQuality, MagCalibrationResult,
