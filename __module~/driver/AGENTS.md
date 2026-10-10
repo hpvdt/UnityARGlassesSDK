@@ -222,6 +222,7 @@ appear in this list. Add a new acronym here in the same change that introduces i
 - **ABI:** Application Binary Interface.
 - **AHRS:** Attitude and Heading Reference System.
 - **API:** Application Programming Interface.
+- **DoF:** Degrees of Freedom.
 - **EKF:** Extended Kalman Filter.
 - **ESKF:** Error-State Kalman Filter.
 - **FFI:** Foreign Function Interface.
