@@ -75,7 +75,7 @@ pub struct FusionState {
 
     /// Position estimate; reserved for the upcoming 6DoF fusion, not yet
     /// updated by any estimator.
-    pub position: Vector3<f32>,
+    pub linear_velocity: Vector3<f32>,
 
     /// Per-sensor innovation consistency.
     pub consistency: Consistency,
@@ -101,7 +101,7 @@ impl FusionState {
         Self {
             glasses,
             attitude: UnitQuaternion::identity(),
-            position: Vector3::identity(),
+            linear_velocity: Vector3::identity(),
             consistency: Consistency::attitude_defaults(),
             mag_calibrator: Box::new(MagCalibrator::new()),
         }
