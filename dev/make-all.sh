@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+git ls-files -z --cached --others --exclude-standard -- '*.md' | xargs -0 markdownlint-cli2 --fix
+
 CRATE_DIR="$(cd "$(dirname "$0")/../__module~/driver"; pwd)"
 PLUGINS_DIR="../../Plugins"
 

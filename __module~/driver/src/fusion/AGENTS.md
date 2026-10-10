@@ -4,7 +4,6 @@
 
 ### Reference Frames
 
-
 - **RUB (Right-Up-Back):** Android sensor coordinates used by raw device events.
 - **FRD (Forward-Right-Down):** Aerospace coordinates used by fusion state and outputs.
 - **Custom frames:** Configurable AHRS output frames.

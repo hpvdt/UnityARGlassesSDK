@@ -1,5 +1,3 @@
 ## High severity
 
-
-
 ## Medium severity

@@ -1,4 +1,5 @@
 # AR driver library for Rust
+
 [![Crates.io](https://img.shields.io/crates/v/ar-drivers.svg)](https://crates.io/crates/ar-drivers)
 [![Docs.rs](https://docs.rs/ar-drivers/badge.svg)](https://docs.rs/ar-drivers)
 
@@ -52,7 +53,6 @@ target/release/examples/set_to_3d
 ```
 
 The executable is statically linked so you can copy it around, even to other PCs.
-
 
 ## Contribution
 

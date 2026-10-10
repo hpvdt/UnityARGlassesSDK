@@ -189,9 +189,9 @@ submitting a change.
 ```
 
 - If a task contains multiple subtasks:
-  - each subtask should have its own commit.
-  - after each commit:
-    - launch a subagent to review it for guardrail compliance
+    - each subtask should have its own commit.
+    - after each commit:
+        - launch a subagent to review it for guardrail compliance
 - If HEAD is DETACHED, create a temporary branch and commit into it
 - If the commit can't compile cleanly, it should have [WIP] in its commit message
 
@@ -206,8 +206,7 @@ submitting a change.
 Before starting to work on code, actively enforce the following guardrails on every document you read; apply
 corrections in one or more preceding git commits if necessary:
 
-- Indentation is 4 spaces, continuation indentation is 6 spaces.
-- Hard wrap is 120 characters. The only exceptions are table and markup sections
+- format is defined and enforced by @.markdownlint.jsonc and @dev/make-all.sh
   which can be longer.
 - Duplicated or contradicting information should be merged or deleted.
 - Inconsistent or dangling references should be fixed.
@@ -382,13 +381,13 @@ alphabets (e.g. `\mu` in LaTeX math and `mu` in code should always refer to the 
 #### Issue Format
 
 - Each issue is a `- [ ]` or `- [x]` checkbox followed by a short name and indented fields:
-  - **Summary:** Short description.
-  - **Position:** Path of the block comment in code that explains the issue, e.g. `src/path/to/file.rs (issue_summary)`.
+    - **Summary:** Short description.
+    - **Position:** Path of the block comment in code that explains the issue, e.g. `src/path/to/file.rs (issue_summary)`.
     The block comment must be consistent with both code and documentation; every symbol should be annotated with a
     variable name in the code. The block comment should have the following sections:
-    - always start with `TODO: issue_summary`.
-    - detailed explanation.
-    - recommended fix (if applicable).
-  - **Unit test:** Path of the failing unit test(s) that reveals the issue, e.g. `src/path/to/file.rs (issue_summary)`.
-    - issue should always come with one or more unit tests
+        - always start with `TODO: issue_summary`.
+        - detailed explanation.
+        - recommended fix (if applicable).
+    - **Unit test:** Path of the failing unit test(s) that reveals the issue, e.g. `src/path/to/file.rs (issue_summary)`.
+        - issue should always come with one or more unit tests
 - Check (`[x]`) the item only when commiting the fixed code; don't remove any of them.
