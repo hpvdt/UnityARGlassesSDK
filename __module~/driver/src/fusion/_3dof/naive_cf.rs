@@ -25,7 +25,8 @@
 
 use nalgebra::{UnitQuaternion, Vector3};
 
-use super::{rub_to_frd, Consistency, Fusion, FusionState};
+use super::Fusion;
+use crate::fusion::{rub_to_frd, Consistency, FusionState};
 use crate::{ARGlasses, Error, GlassesEvent};
 
 type Result<T> = std::result::Result<T, Error>;

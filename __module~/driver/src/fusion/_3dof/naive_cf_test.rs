@@ -1,7 +1,8 @@
 use nalgebra::{UnitQuaternion, Vector3};
 
 use super::naive_cf::NaiveCF;
-use super::{Fusion, MagCalibrator};
+use super::Fusion;
+use crate::fusion::MagCalibrator;
 
 fn frd_to_rub(v: Vector3<f32>) -> Vector3<f32> {
     Vector3::new(v.y, -v.z, -v.x)

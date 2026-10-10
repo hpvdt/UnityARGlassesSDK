@@ -339,7 +339,7 @@ from `__module~/driver`:
 
 ```bash
 cargo test --package ar-drivers --no-default-features --lib fusion::mag::mag_calibrator::mag_calibrator_test
-cargo test --package ar-drivers --no-default-features --lib fusion::naive_cf_test
+cargo test --package ar-drivers --no-default-features --lib fusion::_3dof::naive_cf_test
 cargo test --package ar-drivers --no-default-features --test fusion regression -- --nocapture
 ```
 

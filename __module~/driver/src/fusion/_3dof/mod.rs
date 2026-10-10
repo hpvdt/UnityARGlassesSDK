@@ -1,12 +1,15 @@
-mod state;
+mod naive_cf;
+pub(crate) use naive_cf::NaiveCF;
+
+#[cfg(test)]
+mod naive_cf_test;
 
 use std::f32::consts::PI;
-use std::fmt;
 
-use crate::fusion::naive_cf::NaiveCF;
-use crate::fusion::{Consistency, ConsistencyStatus, FusionConsistency, MagCalibrator};
-use crate::{any_glasses_or_dummy, ARGlasses};
 use nalgebra::{Quaternion, UnitQuaternion, Vector3, Vector4};
+
+use crate::fusion::{Consistency, ConsistencyStatus, FusionConsistency};
+use crate::{any_glasses_or_dummy, ARGlasses};
 
 /// Sensor fusion algorithm interface: consumes raw glasses events and produces an attitude estimate.
 pub trait Fusion: Send + FusionConsistency {

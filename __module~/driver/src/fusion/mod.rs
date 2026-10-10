@@ -18,15 +18,14 @@ CAUTION: unlike [[GlassesEvent]], all states & outputs should use FRD reference 
 
 FRD is the standard frame for aerospace, and is also the default frame for NALgebra
 */
-use std::f32::consts::PI;
 use std::fmt;
 
-use nalgebra::{Quaternion, UnitQuaternion, Vector3, Vector4};
+use nalgebra::{UnitQuaternion, Vector3};
 
-use self::naive_cf::NaiveCF;
-use crate::{any_glasses_or_dummy, ARGlasses, Result};
+use crate::ARGlasses;
 
 mod _3dof;
+pub use _3dof::{AhrsCorrection, Fusion};
 
 mod mag;
 pub use mag::{
@@ -38,10 +37,6 @@ mod consistency;
 pub use consistency::{
     Consistency, ConsistencyStatus, EmaTracking, FusionConsistency, SourceConsistency,
 };
-
-mod naive_cf;
-#[cfg(test)]
-mod naive_cf_test;
 
 /// Converts a raw sensor vector from RUB (right, up, back) into FRD (forward, right, down).
 pub fn rub_to_frd(v: &Vector3<f32>) -> Vector3<f32> {
@@ -78,6 +73,8 @@ pub struct FusionState {
     /// Latest attitude estimate as a unit quaternion.
     pub attitude: UnitQuaternion<f32>, /*$S$*/
 
+    /// Position estimate; reserved for the upcoming 6DoF fusion, not yet
+    /// updated by any estimator.
     pub position: Vector3<f32>,
 
     /// Per-sensor innovation consistency.
