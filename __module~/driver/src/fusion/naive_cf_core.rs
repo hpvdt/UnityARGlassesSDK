@@ -105,6 +105,39 @@ pub(super) fn get_correction(
     UnitQuaternion::scaled_rotation_between(&uncorrected, &acc.normalize(), scale)
 }
 
+/// Gravity-direction state-sensor correction: treats the accelerometer
+/// reading as pure felt gravity, the assumption both naive estimators'
+/// attitude channels share. Readings weaker than 1 m/s^2 (free fall, or the
+/// sensor disabled) carry no usable direction and are skipped. The applied
+/// correction is recorded into the acc consistency source, reconstructed
+/// from the post-blend angle through the blend ratio.
+pub(super) fn integrate_acc(state: &mut FusionState, acc_rub: &Vector3<f32>, _t: u64) -> () {
+    let acc = rub_to_frd(acc_rub);
+
+    if acc.norm() < 1.0 {
+        return; //almost in free fall, or acc disabled, do not correct
+    }
+
+    let attitude = &state.attitude;
+    let correction_opt = get_correction(&acc, &attitude.inverse(), BASE_GRAV_RATIO);
+
+    match correction_opt {
+        Some(correction_inv) => {
+            let correction = correction_inv.inverse();
+            let _ = state
+                .consistency
+                .sources
+                .acc
+                .record_scaled(correction.angle(), BASE_GRAV_RATIO);
+
+            state.attitude = attitude * correction;
+        }
+        None => {
+            // opposite direction, don't know how to correct
+        }
+    }
+}
+
 /// Magnetometer update with the magnetic dip $\delta$ partitioned out
 /// of the heading correction: the FRD reference field is
 /// $(\cos\delta, 0, \sin\delta)$, positive below the horizon, so the

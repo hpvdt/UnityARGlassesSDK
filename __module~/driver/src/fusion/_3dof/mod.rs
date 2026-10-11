@@ -21,6 +21,15 @@ pub trait Fusion: Send + FusionConsistency {
     /// can be used to convert to Euler angles of different conventions
     fn attitude_quaternion(&self) -> UnitQuaternion<f32>;
 
+    /// Estimated linear velocity in the world FRD frame, in m/s.
+    ///
+    /// Returns zero for estimators that do not model translation (the
+    /// default); the `_6dof` estimator overrides this with its tracked
+    /// [`crate::fusion::FusionState::linear_velocity`].
+    fn linear_velocity(&self) -> Vector3<f32> {
+        Vector3::zeros()
+    }
+
     /// Per-sensor innovation consistency tracked by the fusion algorithm.
     fn consistency(&self) -> Consistency;
 
@@ -133,6 +142,11 @@ impl AhrsCorrection {
 impl Fusion for AhrsCorrection {
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses> {
         self.fusion.glasses()
+    }
+
+    fn linear_velocity(&self) -> Vector3<f32> {
+        // world-FRD state; the wrapper's attitude conventions do not apply
+        self.fusion.linear_velocity()
     }
 
     fn consistency(&self) -> Consistency {

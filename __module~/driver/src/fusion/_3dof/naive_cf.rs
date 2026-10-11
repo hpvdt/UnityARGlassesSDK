@@ -33,7 +33,7 @@
 use nalgebra::{UnitQuaternion, Vector3};
 
 use super::Fusion;
-use crate::fusion::naive_cf_core::{self, BASE_GRAV_RATIO};
+use crate::fusion::naive_cf_core;
 use crate::fusion::{rub_to_frd, Consistency, FusionState};
 use crate::{ARGlasses, Error, GlassesEvent};
 
@@ -75,36 +75,10 @@ impl NaiveCF {
         naive_cf_core::integrate_gyro(&mut self.state, &mut self.prev_gyro, gyro_rub, t);
     }
 
-    fn integrate_acc(&mut self, acc_rub: &Vector3<f32>, _t: u64) -> () {
-        let acc = rub_to_frd(acc_rub);
-
-        if acc.norm() < 1.0 {
-            return; //almost in free fall, or acc disabled, do not correct
-        }
-
-        let attitude = &self.state.attitude;
-        // let acc_inv = Vector3::new(-acc.x, -acc.y, acc.z);
-
-        let correction_opt =
-            naive_cf_core::get_correction(&acc, &attitude.inverse(), BASE_GRAV_RATIO);
-
-        match correction_opt {
-            Some(correction_inv) => {
-                let correction = correction_inv.inverse();
-                let _ = self
-                    .state
-                    .consistency
-                    .sources
-                    .acc
-                    .record_scaled(correction.angle(), BASE_GRAV_RATIO);
-
-                // self.attitude = (correction_inv * attitude.inverse()).inverse();
-                self.state.attitude = attitude * correction;
-            }
-            None => {
-                // opposite direction, don't know how to correct
-            }
-        }
+    /// Gravity-direction state-sensor correction; see
+    /// [`naive_cf_core::integrate_acc`].
+    fn integrate_acc(&mut self, acc_rub: &Vector3<f32>, t: u64) -> () {
+        naive_cf_core::integrate_acc(&mut self.state, acc_rub, t);
     }
 
     const REGRESS_ROLL_FACTOR: f32 = 0.0;
@@ -145,6 +119,12 @@ impl Fusion for NaiveCF {
 
     fn attitude_quaternion(&self) -> UnitQuaternion<f32> {
         self.state.attitude
+    }
+
+    fn linear_velocity(&self) -> Vector3<f32> {
+        // the 3-DoF estimator never updates it; the override keeps the
+        // trait output in sync with the pub state field
+        self.state.linear_velocity
     }
 
     fn consistency(&self) -> Consistency {

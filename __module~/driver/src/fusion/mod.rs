@@ -6,12 +6,15 @@ high level interface of glasses & state estimation, with the following built-in 
 - roll/pitch <= acc + gyro (complementary filter)
   - assuming that acc vector always pointed up, spacecraft moving in that direction can create 1G artificial gravity
     - TODO: this obviously assumes no steadily accelerating frame, at which point up d_acc has to be used for correction
+      (both `_3dof` and `_6dof` inherit the assumption; the `_6dof` velocity channel models the translational
+      component separately, but a single acc reading cannot correct attitude and acceleration jointly)
 - gyro-yaw <= gyro (integrate over time)
 - mag-dip <= the calibrator's learned dip projection $\kappa / (\gamma r)$, reported as `dip_sin` (state of
   the calibrator's gravity surrogate, not of the attitude estimate)
 - mag-yaw <= mag horizontal component + roll/pitch (never corrects the level)
 - yaw <= mag-yaw + gyro-gyro (complementary filter)
   - TODO: add EKF/ESKF (error-state/multiplicatory KF, https://arxiv.org/abs/1711.02508)
+- linear velocity <= acc (specific force minus gravity, world frame) + zero-velocity regression (`_6dof`)
 
 CAUTION: unlike [[GlassesEvent]], all states & outputs should use FRD reference frame
  (forward, right, down, corresponding to roll, pitch, yaw in Euler angles-represented rotation)
@@ -26,6 +29,8 @@ use crate::ARGlasses;
 
 mod _3dof;
 pub use _3dof::{AhrsCorrection, Fusion};
+
+mod _6dof;
 
 mod naive_cf_core;
 
@@ -75,8 +80,9 @@ pub struct FusionState {
     /// Latest attitude estimate as a unit quaternion.
     pub attitude: UnitQuaternion<f32>, /*$S$*/
 
-    /// Linear velocity estimate in the world FRD frame, in m/s; reserved for
-    /// the upcoming 6DoF fusion, not yet updated by any estimator.
+    /// Linear velocity estimate in the world FRD frame, in m/s; updated by
+    /// the `_6dof` estimator's auto-regressed dead reckoning, left at zero
+    /// by the `_3dof` estimator.
     pub linear_velocity: Vector3<f32>,
 
     /// Per-sensor innovation consistency.
