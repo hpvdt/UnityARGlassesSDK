@@ -28,17 +28,27 @@ wired into the `Fusion` trait via `Fusion::consistency()` plus the non-overridab
 
 ## 6-DoF velocity estimation
 
-`_6dof::NaiveCF` reuses the shared attitude pipeline of `naive_cf_core` and adds the 3-DoF world-frame
-linear velocity kept in `FusionState::linear_velocity` and exposed through `Fusion::linear_velocity()`
-(world FRD, m/s; `AhrsCorrection` forwards it unchanged — its output conventions apply to attitude
-only). The accelerometer is modeled as a specific-force sensor $f = a + G_{\mathrm{ACC}}$: each AccGyro
-sample is rotated into the world frame, felt gravity is removed, the translational acceleration is
-integrated over the channel's own elapsed time, and the estimate auto-regresses towards zero with the
-rate-independent factor $e^{-dt/\tau_v}$ — the zero-velocity pseudo-observation is the channel's state
-sensor. The attitude channel keeps the gravity-only correction: one acc vector cannot constrain
-attitude and acceleration jointly, so under a steadily accelerating frame the level locks onto the
-tilted specific force (the "1G artificial gravity" limitation) and sustained velocity becomes
-unobservable; the ESKF remains the sanctioned fix. Under continuous rotation the gravity correction's
+`_6dof::NaiveCF` follows the foot-mounted pedestrian dead-reckoning architecture of Fourati, Manamanni,
+Afilal and Handrich, "Position Estimation Approach by Complementary Filter-aided IMU for Indoor Environment"
+(ECC 2013; journal version "Heterogeneous Data Fusion Algorithm for Pedestrian Navigation via Foot-Mounted
+Inertial Measurement Unit and Complementary Filter", IEEE Trans. Instrum. Meas. 64(1), 2015): a P-only
+explicit complementary attitude filter in the lineage of Mahony, Hamel and Pflimlin, "Nonlinear Complementary
+Filters on the Special Orthogonal Group" (IEEE Trans. Autom. Control 53(5), 2008), feeding gravity-compensated
+integration of the world-frame specific force, with zero-velocity information as the only low-frequency
+velocity aid. Where a foot-mounted IMU detects stance phases and hard-resets the velocity to zero (ZVU),
+head-mounted glasses have no reliable rest phase to detect, so the zero-velocity pseudo-observation is
+applied continuously instead: the velocity kept in `FusionState::linear_velocity` is integrated from the
+gravity-compensated reading and auto-regresses towards zero with the rate-independent factor $e^{-dt/\tau_v}$
+(exposed through `Fusion::linear_velocity()`, world FRD, m/s; `AhrsCorrection` forwards it unchanged — its
+output conventions apply to attitude only). The continuous form cannot misfire on a false stance detection,
+at the price of never fully trusting the pseudo-observation: sustained acceleration is pulled towards
+$a\,\tau_v$ rather than tracked indefinitely, and the regression bounds bias and attitude-induced gravity
+leakage at $\tau_v$ gain.
+
+The attitude channel keeps the gravity-only correction: one acc vector cannot constrain attitude and
+acceleration jointly, so under a steadily accelerating frame the level locks onto the tilted specific force
+(the "1G artificial gravity" limitation) and sustained velocity becomes unobservable — no complementary
+blend of the same single reading can separate the two. Under continuous rotation the gravity correction's
 level lag leaks $g \sin(\mathrm{lag})$ into the velocity channel and bounds its accuracy on moving
 traces, while bursts shorter than the gravity lock time ($1 / \mathrm{BASE\_GRAV\_RATIO}$ samples)
 track cleanly.

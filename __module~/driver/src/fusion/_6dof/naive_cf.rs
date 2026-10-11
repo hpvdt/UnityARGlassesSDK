@@ -27,8 +27,9 @@
 //! jointly constrain attitude and translational acceleration, so under a
 //! steadily accelerating frame both estimators' level converges towards the
 //! tilted specific force (the "1G artificial gravity" limitation recorded
-//! in the fusion module docs; resolution is the planned ESKF, not a
-//! complementary filter).
+//! in the fusion module docs; no complementary blend of the same single
+//! reading can undo it, so the gravity channel keeps the
+//! zero-acceleration assumption there).
 //!
 //! The velocity channel is the 6-DoF addition, one complementary filter
 //! following the shared update law
@@ -54,6 +55,41 @@
 //! has), whose leaked gravity bounds the velocity accuracy on moving
 //! traces — the measured floor is $\sim g \sin(\mathrm{lag}) \cdot \tau_v$.
 //!
+//! # Relation to published filters
+//!
+//! The attitude pipeline shared with `_3dof` is a P-only instance of the
+//! explicit complementary filter of Mahony, Hamel and Pflimlin, "Nonlinear
+//! Complementary Filters on the Special Orthogonal Group" (IEEE Trans.
+//! Autom. Control 53(5), 2008, DOI 10.1109/TAC.2008.923738): the gyroscope
+//! propagates the attitude, and each state-sensor reading applies a
+//! proportional correction along the rotation carrying the predicted
+//! inertial direction onto the measured one. This repo keeps the
+//! correction as a scaled rotation
+//! ([`crate::fusion::naive_cf_core::get_correction`]) with a fixed
+//! per-sample blend fraction as the proportional gain, and leaves out the
+//! integral (gyro-bias) term.
+//!
+//! The 6-DoF pipeline — a complementary attitude filter feeding
+//! gravity-compensated integration of the specific force in the world
+//! frame, with zero-velocity information as the only low-frequency
+//! velocity aid — is the foot-mounted pedestrian dead-reckoning
+//! architecture of Fourati, Manamanni, Afilal and Handrich, "Position
+//! Estimation Approach by Complementary Filter-aided IMU for Indoor
+//! Environment" (ECC 2013; journal version "Heterogeneous Data Fusion
+//! Algorithm for Pedestrian Navigation via Foot-Mounted Inertial
+//! Measurement Unit and Complementary Filter", IEEE Trans. Instrum.
+//! Meas. 64(1), 2015, DOI 10.1109/TIM.2014.2335912). The deviation: a
+//! foot-mounted IMU has detectable stance phases, so Fourati resets the
+//! velocity to zero at each detected stance (a hard zero-velocity
+//! update), while head-mounted glasses have no reliable rest phase to
+//! detect. This filter therefore applies the same zero-velocity
+//! information continuously as the complementary blend above: an
+//! exponentially forgetting (soft) zero-velocity update. The continuous
+//! form cannot misfire on a false detection, at the price of never
+//! fully trusting the pseudo-observation — a device under sustained
+//! acceleration is pulled towards $v \approx a\,\tau_v$ instead of being
+//! tracked indefinitely, and the estimate decays to zero over
+//! $\tau_v$ whenever the device rests.
 
 use nalgebra::{UnitQuaternion, Vector3};
 
