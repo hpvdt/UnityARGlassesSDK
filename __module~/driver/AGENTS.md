@@ -223,11 +223,14 @@ appear in this list. Add a new acronym here in the same change that introduces i
 - **AHRS:** Attitude and Heading Reference System.
 - **API:** Application Programming Interface.
 - **DoF:** Degrees of Freedom.
+- **DOI:** Digital Object Identifier.
+- **ECC:** European Control Conference.
 - **EKF:** Extended Kalman Filter.
 - **ESKF:** Error-State Kalman Filter.
 - **FFI:** Foreign Function Interface.
 - **FRD:** Forward-Right-Down aerospace coordinate frame.
 - **HID:** Human Interface Device.
+- **IEEE:** Institute of Electrical and Electronics Engineers.
 - **IMU:** Inertial Measurement Unit.
 - **JPL:** Jet Propulsion Laboratory quaternion convention.
 - **JSON:** JavaScript Object Notation.
@@ -240,6 +243,7 @@ appear in this list. Add a new acronym here in the same change that introduces i
 - **SDK:** Software Development Kit.
 - **SPD:** Symmetric Positive-Definite.
 - **SVD:** Singular Value Decomposition.
+- **ZVU:** Zero-Velocity Update.
 
 ### Formulas
 
