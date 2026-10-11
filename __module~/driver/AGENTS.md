@@ -286,6 +286,27 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
   heading correction uses only the field's horizontal component, so the field's vertical split never
   tips the level estimate.
 
+#### 6-DoF Linear Velocity
+
+- **$f$:** Specific force (felt acceleration) measured by the accelerometer, the sum of the body's
+  translational acceleration and the reaction to gravity, $f_{world} = a_{world} + G_{\mathrm{ACC}}$ with
+  $G_{\mathrm{ACC}}$ the felt-gravity constant (code constant `naive_cf_core::G_ACC_FRD`, $(0, 0, -9.81)$
+  m/s$^2$ in the FRD world frame); $3 \times 1$.
+- **$a$:** Translational acceleration of the body in the world FRD frame, in m/s$^2$, rotated out of the
+  specific force through the current attitude, $a = S\, f_{body} - G_{\mathrm{ACC}}$ (code variable
+  `a_world` of `_6dof::NaiveCF::integrate_velocity`, kept in the `prev_acc.0` field); $3 \times 1$.
+- **$dt_v$:** Time elapsed since the last AccGyro sample for the velocity channel (code variable `d_t` of
+  `_6dof::NaiveCF::integrate_velocity`); deliberately tracked separately from $dt_1$ so the bundled
+  gyro and acc channels stay independently consumable.
+- **$v$:** Estimated linear velocity in the world FRD frame, in m/s, updated by the `_6dof` estimator
+  through the zero-velocity-regularized dead reckoning $v = e^{-dt_v/\tau_v}\,(v^{-} + a\, dt_v)$ and left
+  at zero by the `_3dof` one (code field `FusionState::linear_velocity`, exposed through
+  `Fusion::linear_velocity` and forwarded unchanged by `AhrsCorrection`); $3 \times 1$.
+- **$\tau_v$:** Time constant of the velocity auto-regression to zero, in seconds (code constant
+  `NaiveCF::VELOCITY_REGRESS_TAU_S` of `_6dof`); the regression carries the zero-velocity
+  pseudo-observation $\tilde{S}_2 = 0$ with the rate-independent blend $1 - \mathrm{ratio} = 1 -
+  e^{-dt_v/\tau_v}$.
+
 #### Consistency Reporting
 
 - **$\Sigma$:** Innovation variance of one attitude observation: the expected squared spread of the innovation, in

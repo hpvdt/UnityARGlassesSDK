@@ -26,6 +26,23 @@ wired into the `Fusion` trait via `Fusion::consistency()` plus the non-overridab
 `NaiveCF` fills it through `record_scaled` and gyroscope increment recording, and
 `FusionState::consistency` replaced the legacy `NineAxis<Correction>` counter.
 
+## 6-DoF velocity estimation
+
+`_6dof::NaiveCF` reuses the shared attitude pipeline of `naive_cf_core` and adds the 3-DoF world-frame
+linear velocity kept in `FusionState::linear_velocity` and exposed through `Fusion::linear_velocity()`
+(world FRD, m/s; `AhrsCorrection` forwards it unchanged — its output conventions apply to attitude
+only). The accelerometer is modeled as a specific-force sensor $f = a + G_{\mathrm{ACC}}$: each AccGyro
+sample is rotated into the world frame, felt gravity is removed, the translational acceleration is
+integrated over the channel's own elapsed time, and the estimate auto-regresses towards zero with the
+rate-independent factor $e^{-dt/\tau_v}$ — the zero-velocity pseudo-observation is the channel's state
+sensor. The attitude channel keeps the gravity-only correction: one acc vector cannot constrain
+attitude and acceleration jointly, so under a steadily accelerating frame the level locks onto the
+tilted specific force (the "1G artificial gravity" limitation) and sustained velocity becomes
+unobservable; the ESKF remains the sanctioned fix. Under continuous rotation the gravity correction's
+level lag leaks $g \sin(\mathrm{lag})$ into the velocity channel and bounds its accuracy on moving
+traces, while bursts shorter than the gravity lock time ($1 / \mathrm{BASE\_GRAV\_RATIO}$ samples)
+track cleanly.
+
 ## Magnetometer calibration
 
 `MagCalibrator<N>` retains finite, nonzero FRD magnetometer samples. Each row may also carry an optional normalized,
