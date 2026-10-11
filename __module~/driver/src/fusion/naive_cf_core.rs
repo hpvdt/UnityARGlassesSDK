@@ -21,6 +21,10 @@ use nalgebra::{UnitQuaternion, Vector3};
 use crate::fusion::{rub_to_frd, FusionState};
 use crate::GlassesEvent;
 
+//CAUTION: right-multiplication means rotation, unconventionally
+//(scaled_rotation_between(pred, meas) paired with attitude = attitude * correction
+// moves the prediction towards the measurement)
+
 pub(super) const BASE_GRAV_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.005;
 //const BASE_GRAV_RATIO: f32 = 0.0; //no grav
 // const BASE_GRAV_RATIO: f32 = 1.0; //absolute correction, no gyro
