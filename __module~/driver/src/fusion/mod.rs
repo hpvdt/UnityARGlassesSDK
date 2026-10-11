@@ -103,7 +103,7 @@ impl FusionState {
         Self {
             glasses,
             attitude: UnitQuaternion::identity(),
-            linear_velocity: Vector3::identity(),
+            linear_velocity: Vector3::zeros(),
             consistency: Consistency::attitude_defaults(),
             mag_calibrator: Box::new(MagCalibrator::new()),
         }
