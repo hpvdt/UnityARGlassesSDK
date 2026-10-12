@@ -5,6 +5,10 @@
 Refer to [README.md](README.md) for the project overview, supported devices, Linux dependencies and udev setup,
 build/run quickstart, protocol blog posts, contribution information, licensing, and legal notes.
 
+### Local references
+
+- [Fusion](src/fusion/README.md): estimator interfaces and calibration model.
+
 ## Architecture
 
 The crate is a single library built as both `rlib` and `cdylib`. Every supported glasses model implements one common
@@ -263,6 +267,7 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 #### General
 
 - **$n$:** Number of terms in an objective or Gram average.
+- **$O(\cdot)$:** Asymptotic upper bound on computational time or storage as the argument grows.
 
 #### Raw Sensor
 

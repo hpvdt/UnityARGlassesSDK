@@ -542,7 +542,7 @@ fn mag_calibrator_loss_depends_only_on_retained_rows() {
     // The losses themselves are NOT asserted bitwise equal to B's: A and B
     // share the cache but not the online-optimizer parameter history, which
     // legitimately still carries the expired rows' gradients (non-strict by
-    // design; see "Known adaptation limitation" in the fusion AGENTS.md).
+    // design; see "Known adaptation limitation" in the fusion README.md).
     let result_a = result_a.unwrap().unwrap();
     let (radial_mean_square, regularization_loss) = lifespan_a
         .radial_objective_for_test()

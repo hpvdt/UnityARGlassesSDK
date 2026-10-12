@@ -202,7 +202,7 @@ impl<const N: usize> MagCalibrator<N> {
     /// rows on every quality update. Only the online-optimizer parameter
     /// history outlives the rows that produced it, diluting through the
     /// floored learning rate (see "Known adaptation limitation" in the fusion
-    /// `AGENTS.md`).
+    /// `README.md`).
     pub fn max_sample_lifespan_us(self, max_sample_lifespan_us: u64) -> Self {
         Self {
             max_sample_lifespan_us,
