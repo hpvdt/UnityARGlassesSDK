@@ -30,18 +30,17 @@ All features are enabled by default.
 
 ## Rust Guardrails
 
+These rules apply to Rust files in this crate.
+
 ### Formatting and Imports
 
-- Let `rustfmt` define layout. Follow the repository's `rustfmt.toml` when one is
-  present; do not align fields, arguments, or comments by hand.
-- Use the line-ending style configured by the repository.
+- Use `rustfmt` with [rustfmt.toml](rustfmt.toml) for layout and line endings; do not align fields, arguments,
+  or comments by hand.
 - Group imports consistently: standard library, external crates, then
   `crate`/`super`/`self`. Let rustfmt sort names within each group.
-- Import the concrete types and traits used by the module. Avoid glob imports.
-- Prefer one module-level import over repeated fully qualified paths when that
-  makes the code easier to read.
-- Only definitions re-exported with `pub use` may be imported directly; reference
-  everything else through its preceding qualifier (module, enum, or error type).
+- Use module-level imports without globs. Definitions declared in or re-exported from `lib.rs` or `mod.rs`
+  may be imported unqualified; reference supporting definitions through their module, enum, or error-type qualifier.
+- Re-exporting a definition under a different name is strictly forbidden.
 
 ### Naming and API Shape
 
@@ -55,10 +54,6 @@ All features are enabled by default.
   delegate to it where appropriate.
 - Builder-style configuration methods take and return `self`; state-changing
   operations take `&mut self`; read-only operations take `&self`.
-- Re-exporting a definition under a different name is strictly forbidden.
-- Definitions that are neither defined in nor re-exported from a crate root
-  (`lib.rs`) or module root (`mod.rs`) are supporting data structures and must be
-  referenced through their preceding module names.
 
 ### Documentation and Comments
 
