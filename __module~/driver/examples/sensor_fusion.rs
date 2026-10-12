@@ -5,7 +5,7 @@
 use ar_drivers::fusion::{AhrsCorrection, Fusion};
 
 fn main() {
-    let mut fusion = <dyn Fusion>::any_cf().unwrap(); // Declare conn as mutable
+    let mut fusion = <dyn Fusion>::any_cf_3dof().unwrap(); // Declare conn as mutable
     let serial = fusion.glasses().serial().unwrap();
 
     println!("Got glasses, serial={}", serial);

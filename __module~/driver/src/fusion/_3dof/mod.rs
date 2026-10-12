@@ -39,7 +39,7 @@ pub trait Fusion: Send + FusionConsistency {
 
 impl dyn Fusion {
     /// Create a fusion instance over whichever glasses are connected, or the SimMotion device.
-    pub fn any_cf() -> crate::Result<Box<dyn Fusion>> {
+    pub fn any_cf_3dof() -> crate::Result<Box<dyn Fusion>> {
         // let glasses = any_glasses()?;
         let glasses = any_glasses_or_dummy()?;
         Ok(Box::new(NaiveCF::new(glasses)?))

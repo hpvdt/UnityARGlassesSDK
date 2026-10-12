@@ -26,7 +26,7 @@ impl Connection {
         let mut existing = Self::get_locked()?;
 
         if existing.is_none() {
-            let fusion = <dyn Fusion>::any_cf()?;
+            let fusion = <dyn Fusion>::any_cf_3dof()?;
             // let ahrs = AHRS::frd(fusion);
             let ahrs = AhrsCorrection::left_fru_down(fusion);
 
