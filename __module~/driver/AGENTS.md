@@ -8,10 +8,9 @@ build/run quickstart, protocol blog posts, contribution information, licensing, 
 ## Architecture
 
 The crate is a single library built as both `rlib` and `cdylib`. Every supported glasses model implements one common
-device trait defined in the crate root. The root also owns the shared event, error, and display-mode types, runs device
-discovery across all enabled drivers, and can fall back to a simulated SimMotion device when no hardware is found. A
-singleton connection layer runs sensor fusion on a background thread, and a C ABI layer exposes the library to the
-Unity integration.
+device trait defined in the crate root. The root also owns the shared event, error, and display-mode types and runs
+device discovery across all enabled drivers. `any_glasses_or_dummy()` falls back to `sim::Dummy` when discovery fails.
+A singleton connection layer runs sensor fusion on a background thread, and a C ABI layer exposes the library to Unity.
 
 Display configuration covers mirrored 1080p, full side-by-side stereo, half-resolution side-by-side upscaled by the
 device, and high-refresh-rate (120 Hz) variants of both mirrored and side-by-side modes. Not every device supports
@@ -130,9 +129,9 @@ These rules apply to Rust files in this crate.
 
 ## Testing
 
-Hardware paths require physical devices; discovery reports a not-found error when no supported glasses are connected.
-The deterministic SimMotion fixture in `src/sim/` is the fallback for development and testing without hardware, and most
-integration tests run against it.
+Hardware paths require physical devices; `any_glasses()` reports a not-found error when no supported glasses are connected.
+Construct `SimMotion` explicitly for deterministic development and testing without hardware; most integration tests
+run against it.
 
 ### Test Layout
 
@@ -221,6 +220,7 @@ appear in this list. Add a new acronym here in the same change that introduces i
 - **ABI:** Application Binary Interface.
 - **AHRS:** Attitude and Heading Reference System.
 - **API:** Application Programming Interface.
+- **AR:** Augmented Reality.
 - **DoF:** Degrees of Freedom.
 - **DOI:** Digital Object Identifier.
 - **ECC:** European Control Conference.

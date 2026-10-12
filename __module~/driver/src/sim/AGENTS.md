@@ -1,7 +1,8 @@
 # SimMotion AR Glasses Integration Fixture
 
-The SimMotion AR glasses fixture is a deterministic, public, configurable simulator that remains the fallback used by
-`any_glasses_or_sim_motion()`. It is implemented in [sim_motion.rs](sim_motion.rs).
+The SimMotion AR glasses fixture is a deterministic, public, configurable simulator. Construct it explicitly for
+simulation; `any_glasses_or_dummy()` uses `Dummy` for its discovery fallback. The fixture is implemented in
+[sim_motion.rs](sim_motion.rs).
 
 ## Public API
 
