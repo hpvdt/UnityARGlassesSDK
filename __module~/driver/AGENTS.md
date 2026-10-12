@@ -205,8 +205,8 @@ Update documentation relevant to the current change, using the following guardra
 - Duplicated or contradicting information should be merged or deleted.
 - Inconsistent or dangling references should be fixed.
 - Spelling and syntax errors should be fixed.
-- All references must point to existing code or artefacts; references to historical
-  objects must be deleted.
+- References to current behavior must point to existing code or artefacts. Retain research citations, attribution,
+  and versioned evidence relevant to the current design.
 
 ### Acronyms
 

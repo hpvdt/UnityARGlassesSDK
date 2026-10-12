@@ -23,8 +23,7 @@ Recording is estimator-agnostic: the complementary filter reconstructs $\nu$ fro
 the blend ratio (`SourceConsistency::record_scaled`), while a Kalman filter passes the innovation with its live
 innovation variance (`SourceConsistency::record_with_variance`). The report is
 wired into the `Fusion` trait via `Fusion::consistency()` plus the non-overridable `FusionConsistency` verdict;
-`NaiveCF` fills it through `record_scaled` and gyroscope increment recording, and
-`FusionState::consistency` replaced the legacy `NineAxis<Correction>` counter.
+`NaiveCF` fills `FusionState::consistency` through `record_scaled` and gyroscope increment recording.
 
 ## 6-DoF velocity estimation
 
@@ -289,12 +288,7 @@ parameters on each quality update, sharing the same $O(N)$ cache rescan as cover
 exactly the loss the online optimizer descends, so a loss rise directly signals optimizer regress rather than
 a mismatch between two differently scaled residuals. The data term is strictly bounded by the retained cache
 and never outlives the rows that produced it; the regularizer depends only on the working coefficients and is
-also reported separately as `regularization_loss`. The former bounded fitness score ramped this loss into
-$[0, 1]$ against ceiling constants; the ramp was removed in favor of reporting the loss directly. The earlier
-physical residual $\|A (x_i - b)\| - 1$ scaled against the
-algebraic residual by the state-dependent factor $2 \gamma$ and weighted outliers differently, so the reported
-statistic could degrade while the optimizer kept descending its own objective (the Air 1 replay showed
-block-long post-warmup dips, which vanished once the statistic moved to the algebraic residual).
+also reported separately as `regularization_loss`.
 
 Gravity loss likewise reports the gravity objective $J_g = \frac{w_g}{2 n_g} \sum_i e_{g,i}^2$ over the
 retained rows that carry a valid gravity direction — exactly the optimizer's gravity data term, with
