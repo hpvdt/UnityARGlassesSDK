@@ -29,7 +29,8 @@ simulation; `any_glasses_or_dummy()` uses `Dummy` for its discovery fallback. Th
 ## Noise And Distortion
 
 - Gyro emits RUB angular body rates in rad/s with small Gaussian noise.
-- Acc emits physical gravity plus linear acceleration in RUB with medium Gaussian noise.
+- Acc emits felt acceleration (gravity reaction plus linear acceleration) in RUB, in m/s², with medium Gaussian noise.
+  A stationary, level fixture reads `(0, 9.81, 0)` before noise.
 - Mag emits magnetic north in RUB with magnetic dip clamped to +/-30 degrees.
 - Clamp each distorted and noisy magnetometer component to a configurable symmetric physical range in microtesla.
 - Inject hard-iron and soft-iron distortion into magnetometer readings. Keep the default hard-iron offset stationary for

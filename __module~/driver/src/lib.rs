@@ -148,7 +148,7 @@ impl std::fmt::Display for Error {
 pub enum GlassesEvent {
     /// Synchronized accelerometer and gyroscope data.
     AccGyro {
-        /// Accelerometer data in m^2/s.
+        /// Accelerometer data in m/s^2.
         ///
         /// Remember that while gravitational acceleration is "down", the acceleration
         /// the device "feels" is the one opposite from that, so the normal reading
