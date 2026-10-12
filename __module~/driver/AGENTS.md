@@ -198,8 +198,7 @@ submitting a change.
 
 ## Documentation (including Markdown & Comments)
 
-Before starting to work on code, actively enforce the following guardrails on every document you read; apply
-corrections in one or more preceding git commits if necessary:
+Update documentation relevant to the current change, using the following guardrails:
 
 - format is defined and enforced by @.markdownlint.jsonc and @dev/make-all.sh
   which can be longer.
