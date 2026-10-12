@@ -28,12 +28,9 @@ use nalgebra::{UnitQuaternion, Vector3};
 use crate::ARGlasses;
 
 mod _3dof;
-pub use _3dof::{AhrsCorrection, Fusion};
+pub use _3dof::AhrsCorrection;
 
 mod _6dof;
-
-mod naive_cf_core;
-
 mod mag;
 pub use mag::{
     BadCalibration, BadMagCause, BadReading, CalibrationQuality, MagCalibrationResult,
@@ -44,6 +41,31 @@ mod consistency;
 pub use consistency::{
     Consistency, ConsistencyStatus, EmaTracking, FusionConsistency, SourceConsistency,
 };
+
+/// Sensor fusion algorithm interface: consumes raw glasses events and produces an attitude estimate.
+pub trait Fusion: Send + FusionConsistency {
+    /// Underlying glasses device this fusion reads events from.
+    fn glasses(&mut self) -> &mut Box<dyn ARGlasses>;
+    // TODO: only declared mutable as many API of ARGlasses are also mutable
+
+    /// Primary estimation output; can be converted to Euler angles in different conventions.
+    fn attitude_quaternion(&self) -> UnitQuaternion<f32>;
+
+    /// Estimated linear velocity in the world FRD frame, in m/s.
+    ///
+    /// Returns zero for estimators that do not model translation (the
+    /// default); the `_6dof` estimator overrides this with its tracked
+    /// [`FusionState::linear_velocity`].
+    fn linear_velocity(&self) -> Vector3<f32> {
+        Vector3::zeros()
+    }
+
+    /// Per-sensor innovation consistency tracked by the fusion algorithm.
+    fn consistency(&self) -> Consistency;
+
+    /// Consume the next sensor event and advance the attitude estimate.
+    fn update(&mut self) -> ();
+}
 
 /// Converts a raw sensor vector from RUB (right, up, back) into FRD (forward, right, down).
 pub fn rub_to_frd(v: &Vector3<f32>) -> Vector3<f32> {

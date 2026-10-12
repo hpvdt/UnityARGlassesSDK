@@ -39,10 +39,10 @@ pub(super) const BASE_MAG_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.1;
 /// without actual heading evidence.
 pub(super) const MIN_HEADING_FIELD_NORM: f32 = 0.1;
 
-pub(super) const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; //microseconds
+pub(in crate::fusion) const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; //microseconds
 
 /// Felt gravity (specific force at rest) in the FRD world frame, m/s^2.
-pub(super) const G_ACC_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
+pub(in crate::fusion) const G_ACC_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
 /// Unit down axis of the FRD world frame.
 pub(super) const DOWN_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, 1.0);
 /// Unit magnetic-north axis of the FRD world frame; the field's
@@ -50,7 +50,7 @@ pub(super) const DOWN_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, 1.0);
 pub(super) const NORTH_FRD: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
 
 ///read until next valid event. Blocks.
-pub(super) fn next_event(state: &mut FusionState) -> GlassesEvent {
+pub(in crate::fusion) fn next_event(state: &mut FusionState) -> GlassesEvent {
     loop {
         match state.glasses.read_event() {
             Ok(event) => return event,
@@ -68,7 +68,7 @@ pub(super) fn next_event(state: &mut FusionState) -> GlassesEvent {
 /// is recorded into the gyro consistency source as the sensor-health
 /// signal. Zero elapsed time (duplicate timestamps) skips propagation
 /// and recording while still refreshing `prev_gyro`.
-pub(super) fn integrate_gyro(
+pub(in crate::fusion) fn integrate_gyro(
     state: &mut FusionState,
     prev_gyro: &mut (Vector3<f32>, u64),
     gyro_rub: &Vector3<f32>,
@@ -95,7 +95,7 @@ pub(super) fn integrate_gyro(
 /// `scale` fraction ($1 - \mathrm{ratio}$) of the full residual angle.
 /// Returns `None` when the two directions are opposite, in which case the
 /// caller has no correction to apply.
-pub(super) fn get_correction(
+pub(in crate::fusion) fn get_correction(
     acc: &Vector3<f32>,
     rotation: &UnitQuaternion<f32>,
     scale /*$1 - \mathrm{ratio}$*/: f32,
@@ -111,7 +111,11 @@ pub(super) fn get_correction(
 /// sensor disabled) carry no usable direction and are skipped. The applied
 /// correction is recorded into the acc consistency source, reconstructed
 /// from the post-blend angle through the blend ratio.
-pub(super) fn integrate_acc(state: &mut FusionState, acc_rub: &Vector3<f32>, _t: u64) -> () {
+pub(in crate::fusion) fn integrate_acc(
+    state: &mut FusionState,
+    acc_rub: &Vector3<f32>,
+    _t: u64,
+) -> () {
     let acc = rub_to_frd(acc_rub);
 
     if acc.norm() < 1.0 {
@@ -150,7 +154,7 @@ pub(super) fn integrate_acc(state: &mut FusionState, acc_rub: &Vector3<f32>, _t:
 /// gravity surrogate and reported as the result's `dip_sin` record
 /// ($\kappa / (\gamma r) = g^T m = -\sin\delta$ with the acc-style
 /// hint passed here).
-pub(super) fn integrate_mag(
+pub(in crate::fusion) fn integrate_mag(
     state: &mut FusionState,
     mag_rub: &Vector3<f32>,
     calibration_use_gravity: bool,
@@ -215,7 +219,7 @@ pub(super) fn integrate_mag(
 }
 
 /// Renormalizes the attitude quaternion to counter numerical drift.
-pub(super) fn renormalize(state: &mut FusionState) {
+pub(in crate::fusion) fn renormalize(state: &mut FusionState) {
     // state.attitude.renormalize_fast(); // TODO: switch to it after rigorous testing
     state.attitude.renormalize();
 }

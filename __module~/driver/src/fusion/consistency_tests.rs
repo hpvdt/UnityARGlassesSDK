@@ -1,4 +1,4 @@
-use super::super::_3dof::NaiveCF;
+use super::super::_3dof::naive_cf::NaiveCF;
 use super::{Consistency, ConsistencyStatus, SourceConsistency};
 use crate::fusion::{Fusion, FusionConsistency};
 

@@ -23,7 +23,7 @@
 //! The attitude pipeline shared with the other naive complementary-filter
 //! estimators (gyroscope dead-reckoning, magnetometer heading correction,
 //! the gravity-direction correction helper, and the device event loop)
-//! lives in [`crate::fusion::naive_cf_core`]. This estimator keeps its
+//! lives in [`crate::fusion::_3dof::naive_cf_core`]. This estimator keeps its
 //! 3-DoF-specific gravity correction, which reads the accelerometer as a
 //! pure gravity-direction sensor.
 //!
@@ -32,10 +32,9 @@
 
 use nalgebra::{UnitQuaternion, Vector3};
 
-use super::Fusion;
-use crate::fusion::naive_cf_core;
-use crate::fusion::{rub_to_frd, Consistency, FusionState};
-use crate::{ARGlasses, Error, GlassesEvent};
+use super::naive_cf_core;
+use crate::fusion::{rub_to_frd, Consistency, Fusion, FusionState};
+use crate::{any_glasses_or_dummy, ARGlasses, Error, GlassesEvent};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -163,5 +162,13 @@ impl Fusion for NaiveCF {
                 // TODO: handle KeyPress signal
             }
         }
+    }
+}
+
+impl dyn Fusion {
+    /// Create a 3-DoF fusion instance over whichever glasses are connected, or the SimMotion device.
+    pub fn any_cf_3dof() -> crate::Result<Box<dyn Fusion>> {
+        let glasses = any_glasses_or_dummy()?;
+        Ok(Box::new(NaiveCF::new(glasses)?))
     }
 }

@@ -21,7 +21,7 @@
 //! # Update channels
 //!
 //! The attitude pipeline is shared with `_3dof` through
-//! [`crate::fusion::naive_cf_core`]: gyroscope dead-reckoning prediction,
+//! [`crate::fusion::_3dof::naive_cf_core`]: gyroscope dead-reckoning prediction,
 //! then the gravity-direction state-sensor correction. That correction keeps
 //! the `_3dof` gravity-only assumption — one 3-axis reading cannot
 //! jointly constrain attitude and translational acceleration, so under a
@@ -65,7 +65,7 @@
 //! proportional correction along the rotation carrying the predicted
 //! inertial direction onto the measured one. This repo keeps the
 //! correction as a scaled rotation
-//! ([`crate::fusion::naive_cf_core::get_correction`]) with a fixed
+//! ([`crate::fusion::_3dof::naive_cf_core::get_correction`]) with a fixed
 //! per-sample blend fraction as the proportional gain, and leaves out the
 //! integral (gyro-bias) term.
 //!
@@ -93,9 +93,9 @@
 
 use nalgebra::{UnitQuaternion, Vector3};
 
-use crate::fusion::naive_cf_core;
+use crate::fusion::_3dof::naive_cf_core;
 use crate::fusion::{rub_to_frd, Consistency, Fusion, FusionState};
-use crate::{ARGlasses, Error, GlassesEvent};
+use crate::{any_glasses_or_dummy, ARGlasses, Error, GlassesEvent};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -256,5 +256,15 @@ impl Fusion for NaiveCF {
                 // TODO: handle KeyPress signal
             }
         }
+    }
+}
+
+impl dyn Fusion {
+    /// Create a 6-DoF fusion instance (attitude plus world-frame linear
+    /// velocity) over whichever glasses are connected, or the SimMotion
+    /// device: the 6-DoF counterpart of `<dyn Fusion>::any_cf_3dof`.
+    pub fn any_cf_6dof() -> crate::Result<Box<dyn Fusion>> {
+        let glasses = any_glasses_or_dummy()?;
+        Ok(Box::new(NaiveCF::new(glasses)?))
     }
 }
