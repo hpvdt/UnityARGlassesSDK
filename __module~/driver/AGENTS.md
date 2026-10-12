@@ -5,12 +5,6 @@
 Refer to [README.md](README.md) for the project overview, supported devices, Linux dependencies and udev setup,
 build/run quickstart, protocol blog posts, contribution information, licensing, and legal notes.
 
-## Agent Role
-
-You are an autonomous agent. Never stop until the task is completely finished. If you reach your output limit or finish
-one logical step, immediately continue in the next response without saying "continued" or asking permission. Do not
-output any TODO lists or "next steps" unless the user explicitly asks for a plan — just do the work.
-
 ## Architecture
 
 The crate is a single library built as both `rlib` and `cdylib`. Every supported glasses model implements one common
@@ -91,6 +85,7 @@ All features are enabled by default.
   every enum case matters or when it expresses branching more clearly.
 - Do not silently discard errors. If best-effort processing intentionally
   continues, keep enough context to diagnose the failure.
+- Inline trivial functions or wrappers that are used only once.
 
 ### Modules and Conditional Compilation
 
