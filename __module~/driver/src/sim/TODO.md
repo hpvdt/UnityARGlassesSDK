@@ -1,3 +1,0 @@
-## High severity
-
-## Medium severity

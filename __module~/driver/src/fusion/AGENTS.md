@@ -346,10 +346,9 @@ selection operates on squared values and takes square roots only for selected ne
 ### Known adaptation limitation
 
 The losses and coverage are recomputed from the retained rows on every quality update, so `max_sample_lifespan_us`
-strictly bounds their history. Only the online-optimizer parameters, including the learned gravity projection
+strictly bounds their retained data. The online-optimizer parameters, including the learned gravity projection
 $\kappa$, retain historical gradient influence after a row is replaced or expires, diluting through the floored
-learning rate; that residual history is non-strict by design. The backlog tracks explicit replay or forgetting work
-needed before sample lifespan can be interpreted as a strict optimizer-history bound.
+learning rate. Sample lifespan therefore bounds retained support and live data statistics, not optimizer history.
 
 ### Calibration validation
 
