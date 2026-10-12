@@ -96,7 +96,7 @@ struct MinibatchSpec {
 
 /// Result of evaluating one FRD magnetometer observation.
 /// All quality factors, including the learned dip projection `dip_sin`,
-/// are exposed directly through [`Deref`] to [`CalibrationQuality`], so
+/// are exposed directly through [`std::ops::Deref`] to [`CalibrationQuality`], so
 /// `result.confidence()` reads the same as `result.quality.confidence()`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MagCalibrationResult {

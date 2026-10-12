@@ -156,7 +156,16 @@ integration tests run against it.
 
 ### Validation
 
-For Rust changes, run the narrowest relevant checks first, then broaden them:
+Run Cargo commands from the driver crate root (`__module~/driver` relative to the SDK root).
+For documentation-only changes, run these checks from the SDK root:
+
+```bash
+git ls-files -z --cached --others --exclude-standard -- '*.md' | xargs -0 markdownlint-cli2
+git diff --check
+```
+
+When Rustdoc comments change, also run `cargo doc --all-features --no-deps` from the crate root.
+For Rust behavior or API changes, run the narrowest relevant checks first, then broaden them:
 
 ```bash
 cargo fmt --all -- --check
@@ -195,8 +204,9 @@ submitting a change.
 
 Update documentation relevant to the current change, using the following guardrails:
 
-- format is defined and enforced by @.markdownlint.jsonc and @dev/make-all.sh
-  which can be longer.
+- Markdown format is defined by the [package configuration](../../.markdownlint.jsonc).
+  [dev/make-all.sh](../../dev/make-all.sh) rewrites Markdown and Rust formatting, builds a release library,
+  and copies it into the SDK's `Plugins/` directory; use the validation commands above for checks without rewriting files.
 - Duplicated or contradicting information should be merged or deleted.
 - Inconsistent or dangling references should be fixed.
 - Spelling and syntax errors should be fixed.

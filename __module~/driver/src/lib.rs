@@ -222,7 +222,7 @@ pub enum DisplayMode {
     HighRefreshRateSBS,
 }
 
-/// Display side used by [`ARGlasses::view_matrix`]
+/// Display side used by [`ARGlasses::imu_to_display_matrix`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
     /// Left display
@@ -307,7 +307,7 @@ pub struct DisplayMatrices {
 }
 
 /// Detect and connect to any supported glasses, falling back to the simulated
-/// [`Dummy`] device when no hardware is found.
+/// [`sim::Dummy`] device when no hardware is found.
 pub fn any_glasses_or_dummy() -> Result<Box<dyn ARGlasses>> {
     any_glasses().or_else(|e| {
         println!("{} fall back to dummy glasses", e);

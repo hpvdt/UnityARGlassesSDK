@@ -407,7 +407,7 @@ impl ARGlasses for SimMotion {
     /// loads the next event from the buffer that the background generator
     /// thread keeps filled ahead of the reader. Simulation cost is therefore
     /// not paid on this call path. Virtual periods longer than
-    /// [`MAX_EVENT_PACING_DELAY`] cannot be represented this way, so events
+    /// 20 ms cannot be represented this way, so events
     /// are emitted immediately instead.
     ///
     /// Returns [`Error::Other`] if the generator thread has stopped.
