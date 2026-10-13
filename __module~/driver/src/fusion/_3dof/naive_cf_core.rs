@@ -29,30 +29,42 @@ pub(super) const BASE_GRAV_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.005;
 //const BASE_GRAV_RATIO: f32 = 0.0; //no grav
 // const BASE_GRAV_RATIO: f32 = 1.0; //absolute correction, no gyro
 
-// TODO: retune_ratios_after_dip_wiring
-// `BASE_MAG_RATIO` and `BASE_DIP_RATIO` were tuned for the partitioned
-// update whose attitude correction was a pure heading rotation. Wiring
-// the learned dip into the attitude correction (see `integrate_mag`)
-// made the level absorb the calibrator's directional error while the
-// mag calibration converges, tripling the gentle-motion SimMotion
-// profile's mean velocity error over the scored window (whole-window
-// mean measured 0.29 -> 0.92 m/s; the cold-start half reaches 1.54 m/s
-// and the settled second half returns to the 0.29 m/s floor). Re-tune
-// the two ratios jointly, trading heading lock time against the
-// cold-start level transient.
-pub(super) const BASE_MAG_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.005;
+/// Blend ratio $1 - \mathrm{ratio}$ of the magnetometer attitude
+/// correction of [`integrate_mag`], tuned for the dipped full-field
+/// update: unlike the pre-wiring horizontal-only partition, the
+/// shortest arc between the estimated and measured field carries level
+/// evidence, and while the mag calibration converges that arc is driven
+/// by the calibrator's azimuthal error — the chase tips the level by
+/// $\sin\delta$ of the azimuthal residual per sample, and the acc filter
+/// pulls it back at `BASE_GRAV_RATIO`, leaking the tilt into the 6-DoF
+/// velocity at $\tau_v$ gain. The cold-start level tilt therefore
+/// settles at the mag/grav balance of that drive: on the gentle-motion
+/// SimMotion profile the cold-start scored half's mean velocity error
+/// measures 1.54 m/s at the pre-wiring 0.005, 0.81 at 0.0025, and 0.38
+/// at this 0.00125 — the settled floor's scale. The heading lock time
+/// trades against it with $1/\mathrm{ratio}$ scaling: a 30 deg heading
+/// step decays with a measured ~33 s e-fold (against ~9 s at 0.005) to
+/// the same ~1 deg converged floor, and the default 20 RPM profile,
+/// whose velocity error is the rotation-lag leak, is unaffected
+/// (measured mean |v_est| 0.63 m/s, halves 0.76 -> 0.55 m/s).
+pub(super) const BASE_MAG_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.00125;
 
 /// Blend ratio $1 - \mathrm{ratio}$ of the per-sample dip-state update. The
 /// vertical field component feeds [`FusionState::mag_dip_sin`] rather
 /// than the attitude correction directly, so its innovation is
 /// yaw-invariant and the remaining disturbance is the roll/pitch error
-/// the acc filter keeps small; the ratio can therefore be small,
-/// tracking the slow geographic drift of the true dip rather than
-/// chasing single noisy readings.
+/// the acc filter keeps small; the ratio can therefore stay small
+/// relative to the reading noise, tracking the slow evolution of the
+/// field's vertical component — the geographic drift of the true dip
+/// and, during the mag calibration's cold start, the converging
+/// calibrator's vertical error, which the dip state must absorb before
+/// the attitude correction can tip the level with it (2.5x the
+/// pre-re-tune 0.02: measured gentle-motion cold-start mean velocity
+/// error 0.42 -> 0.38 m/s alongside the `BASE_MAG_RATIO` re-tune).
 ///
 /// `pub(in crate::fusion)` rather than `pub(super)`: both estimators' test
 /// suites pin the blend rate against this constant.
-pub(in crate::fusion) const BASE_DIP_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.02;
+pub(in crate::fusion) const BASE_DIP_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.05;
 
 pub(in crate::fusion) const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; // microseconds
 
@@ -215,11 +227,15 @@ pub(in crate::fusion) fn integrate_mag(state: &mut FusionState, mag_rub: &Vector
     // produce the same vertical residual, so this correction and the dip
     // refinement above converge to a self-consistent (level, dip) pair
     // rather than the true level alone — the acc filter keeps the level
-    // observable in production, and `BASE_MAG_RATIO` and `BASE_DIP_RATIO`
-    // must be re-tuned jointly. The reference's unit norm makes the
-    // near-pole azimuth gate unnecessary: a field approaching the
-    // vertical carries its heading evidence in a vanishing horizontal
-    // component, while its (now usable) dip evidence still levels.
+    // observable in production, and the jointly tuned `BASE_MAG_RATIO`
+    // and `BASE_DIP_RATIO` (see their doc comments for the measured
+    // heading-lock/cold-start trade) keep the correction's level pull
+    // small enough that the calibrator's converging directional error
+    // cannot tilt it through the acc filter. The reference's unit norm
+    // makes the near-pole azimuth gate unnecessary: a field approaching
+    // the vertical carries its heading evidence in a vanishing
+    // horizontal component, while its (now usable) dip evidence still
+    // levels.
     let dip_cos = (1.0 - dip_sin * dip_sin).sqrt();
     let estimated_field = attitude.inverse() * Vector3::new(dip_cos, 0.0, dip_sin);
     let correction_opt =

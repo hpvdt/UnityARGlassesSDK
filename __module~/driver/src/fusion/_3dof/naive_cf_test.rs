@@ -97,7 +97,7 @@ fn update_mag_keeps_level_with_dipped_field() {
     // true north; the full-field correction carries level evidence too, but
     // the learned dip cancels the reference's 60 deg dip component, so the
     // level tilt stays bounded by the calibration fit residual (measured
-    // 1.4e-3) — where a horizontal-only reference would instead tip the
+    // 1.7e-4) — where a horizontal-only reference would instead tip the
     // attitude by the full unmodeled 60 deg dip
     let dip = 60.0f32.to_radians();
     let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
@@ -135,7 +135,7 @@ fn update_mag_gravity_hint_reports_dip() {
     // the reported projection is bias-limited by the working fit's
     // preconditioner gap: $\kappa/(\gamma r) = g^T A_w^{-1} A m$ reaches
     // the exact dip only as $A_w \to A$, and this fixture's strong
-    // (3, 2, 1.5) anisotropy leaves a measured 2.4 deg error at 60 deg
+    // (3, 2, 1.5) anisotropy leaves a measured 0.9 deg error at 60 deg
     // dip; 3 deg bounds that with margin
     let result = fusion
         .state
@@ -232,9 +232,9 @@ fn update_mag_refines_dip_to_self_consistent_pair() {
 
     // one step moves the state by exactly the blend weight
     // $1 - \mathrm{ratio}$ (`BASE_DIP_RATIO`) of the residual,
-    // 0.02 * sin(60 deg) ~ 0.017; the fit's ~7.5 mrad
-    // down-axis error is scaled down by the same factor to ~1.4e-4
-    // (measured 1.4e-4), so a full-replacement or zero-blend update
+    // 0.05 * sin(60 deg) ~ 0.043; the fit's ~7.5 mrad
+    // down-axis error is scaled down by the same factor to ~3.7e-4
+    // (measured 3.9e-4), so a full-replacement or zero-blend update
     // lands far outside the 1e-3 bound
     fusion.integrate_mag(&dipped_rub, 0);
     let first = fusion.state.mag_dip_sin.expect("dip state present");
@@ -251,7 +251,7 @@ fn update_mag_refines_dip_to_self_consistent_pair() {
     }
 
     // the refinement keeps running: the dip climbs past half the seed
-    // error (measured 46.5 deg against the 30 deg bound), so a state
+    // error (measured 58.0 deg against the 30 deg bound), so a state
     // that stops refining after the first step fails here
     let dip_sin = fusion.state.mag_dip_sin.expect("dip state present");
     assert!(
@@ -348,11 +348,14 @@ fn update_mag_correction_tips_level_through_learned_dip() {
     fusion.integrate_mag(&dipped_rub, 0);
 
     // one step moves the tilt by BASE_MAG_RATIO of the ~0.5 rad
-    // reference/reading gap (>= 2e-3); the horizontal-only partition
-    // leaves it exactly unchanged
+    // reference/reading gap (measured 5.8e-4, ~0.9 of the ratio-scaled
+    // gap); the bound keeps half the scaled gap so it tracks the tuned
+    // ratio, while the horizontal-only partition leaves the tilt
+    // exactly unchanged
     let tilt_after = ((fusion.state.attitude.inverse() * Vector3::z()) - Vector3::z()).norm();
+    let scaled_step = crate::fusion::_3dof::naive_cf_core::BASE_MAG_RATIO * 0.5;
     assert!(
-        tilt_after < tilt_before - 1.0e-3,
+        tilt_after < tilt_before - 0.5 * scaled_step,
         "level tilt unchanged at {tilt_after} (before {tilt_before}): the correction never used the dip"
     );
 }
@@ -448,7 +451,7 @@ fn update_mag_locks_yaw_near_the_magnetic_poles() {
     }
 
     // the yaw stays locked: the residual drift is second order in the
-    // tilt evidence (measured 1.0e-4), where an azimuth-trusting
+    // tilt evidence (measured 5.6e-5), where an azimuth-trusting
     // correction would spin the heading toward the noise
     let (_, _, yaw) = fusion.state.attitude.euler_angles();
     assert!(
@@ -457,10 +460,9 @@ fn update_mag_locks_yaw_near_the_magnetic_poles() {
     );
 
     // the level absorbs the tilt evidence: the correction tips by the
-    // reference/reading gap (measured 0.012, about twice the field's
-    // 0.01 horizontal norm plus the fit residual), where a
-    // horizontal-only reference would instead rotate by the ~1.55 rad
-    // north/vertical mismatch
+    // reference/reading gap (measured 0.008, the field's 0.01 horizontal
+    // norm plus the fit residual), where a horizontal-only reference
+    // would instead rotate by the ~1.55 rad north/vertical mismatch
     assert_level(&fusion.state.attitude, 0.05);
     assert!(
         max_innovation < 0.05,

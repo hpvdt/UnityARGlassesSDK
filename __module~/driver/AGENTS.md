@@ -245,6 +245,7 @@ appear in this list. Add a new acronym here in the same change that introduces i
   exports the consistency reporting mirrors).
 - **PRNG:** Pseudo-Random Number Generator.
 - **RMS:** Root Mean Square.
+- **RPM:** Revolutions Per Minute.
 - **RUB:** Right-Up-Back Android sensor coordinate frame.
 - **RUF:** Right-Up-Forward Unity game-engine coordinate frame.
 - **SGD:** Stochastic Gradient Descent.

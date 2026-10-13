@@ -107,7 +107,7 @@ fn update_mag_keeps_level_with_dipped_field() {
     // true north; the full-field correction carries level evidence too, but
     // the learned dip cancels the reference's 60 deg dip component, so the
     // level tilt stays bounded by the calibration fit residual (measured
-    // 1.4e-3) — where a horizontal-only reference would instead tip the
+    // 1.7e-4) — where a horizontal-only reference would instead tip the
     // attitude by the full unmodeled 60 deg dip
     let dip = 60.0f32.to_radians();
     let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
@@ -185,9 +185,9 @@ fn update_mag_refines_dip_to_self_consistent_pair() {
     fusion.state.mag_dip_sin = Some(0.0);
 
     // one step moves the state by exactly BASE_DIP_RATIO of the
-    // residual, 0.02 * sin(60 deg) ~ 0.017; the fit's ~7.5 mrad
-    // down-axis error is scaled down by the same factor to ~1.4e-4
-    // (measured 1.4e-4), so a full-replacement or zero-blend update
+    // residual, 0.05 * sin(60 deg) ~ 0.043; the fit's ~7.5 mrad
+    // down-axis error is scaled down by the same factor to ~3.7e-4
+    // (measured 3.9e-4), so a full-replacement or zero-blend update
     // lands far outside the 1e-3 bound
     fusion.integrate_mag(&dipped_rub, 0);
     let first = fusion.state.mag_dip_sin.expect("dip state present");
@@ -204,7 +204,7 @@ fn update_mag_refines_dip_to_self_consistent_pair() {
     }
 
     // the refinement keeps running: the dip climbs past half the seed
-    // error (measured 46.5 deg against the 30 deg bound), so a state
+    // error (measured 58.0 deg against the 30 deg bound), so a state
     // that stops refining after the first step fails here
     let dip_sin = fusion.state.mag_dip_sin.expect("dip state present");
     assert!(
@@ -298,7 +298,7 @@ fn update_mag_locks_yaw_near_the_magnetic_poles() {
     }
 
     // the yaw stays locked: the residual drift is second order in the
-    // tilt evidence (measured 1.0e-4), where an azimuth-trusting
+    // tilt evidence (measured 5.6e-5), where an azimuth-trusting
     // correction would spin the heading toward the noise
     let (_, _, yaw) = fusion.state.attitude.euler_angles();
     assert!(
@@ -307,10 +307,9 @@ fn update_mag_locks_yaw_near_the_magnetic_poles() {
     );
 
     // the level absorbs the tilt evidence: the correction tips by the
-    // reference/reading gap (measured 0.012, about twice the field's
-    // 0.01 horizontal norm plus the fit residual), where a
-    // horizontal-only reference would instead rotate by the ~1.55 rad
-    // north/vertical mismatch
+    // reference/reading gap (measured 0.008, the field's 0.01 horizontal
+    // norm plus the fit residual), where a horizontal-only reference
+    // would instead rotate by the ~1.55 rad north/vertical mismatch
     assert_level(&fusion.state.attitude, 0.05);
     assert!(
         max_innovation < 0.05,
@@ -665,11 +664,11 @@ fn velocity_stays_bounded_on_continuous_motion() {
     /// Scored span, split into halves for the no-accumulation check.
     const SCORED_EVENTS: usize = 3000;
     /// Bound on the mean estimated speed over the scored span, in m/s
-    /// (measured 0.62: the rotation-lag leak floor at $\tau_v$ gain).
+    /// (measured 0.63: the rotation-lag leak floor at $\tau_v$ gain).
     const MAX_MEAN_ESTIMATE_NORM: f32 = 2.0;
     /// Margin by which the second half's mean error may exceed the first
     /// half's, in m/s: the auto-regression must hold the leak floor flat
-    /// (measured 0.74 -> 0.54).
+    /// (measured 0.76 -> 0.55).
     const HALVES_ERROR_MARGIN: f32 = 0.15;
 
     let (mean_estimate, _mean_truth, mean_error_first, mean_error_second, consistency) =
@@ -699,29 +698,33 @@ fn velocity_stays_bounded_on_continuous_motion() {
 /// residual and the estimate keeps the true speed scale. Wiring the
 /// learned dip into the attitude correction adds a cold-start phase on
 /// top: while the mag calibration converges, the full-field correction
-/// absorbs the calibrator's directional error into the level, and the
-/// acc filter's pull against it leaks gravity into the velocity; once
-/// the calibration, dip, and level converge, the leak returns to the
-/// pre-wiring attitude-lag floor. The two scored halves pin the two
-/// phases separately. Instantaneous direction is leak-dominated and not
-/// asserted; the clean tracking evidence is the synthetic closed-form,
-/// burst, and free-fall tests.
+/// chases the calibrator's azimuthal error, and the level content of that
+/// chase — fought by the acc filter — leaks gravity into the velocity.
+/// The re-tuned `BASE_MAG_RATIO`/`BASE_DIP_RATIO` keep that leak at the
+/// settled attitude-lag floor (see the constants' doc comments for the
+/// measured heading-lock trade the re-tune makes), so both scored halves
+/// pin the same floor and the cold-start bound doubles as the regression
+/// guard against the transient re-inflating. Instantaneous direction is
+/// leak-dominated and not asserted; the clean tracking evidence is the
+/// synthetic closed-form, burst, and free-fall tests.
 #[test]
 fn velocity_tracks_gentle_motion() {
     const WARMUP_EVENTS: usize = 1500;
     const SCORED_EVENTS: usize = 3000;
     /// Bound on the cold-start half's mean absolute velocity error, in
-    /// m/s (measured 1.54): the calibration-transient leak above, which
-    /// re-tuning the mag/dip blend ratios must shrink.
-    const MAX_COLD_START_ABS_ERROR: f32 = 2.0;
+    /// m/s (measured 0.38): the calibration-transient leak must stay at
+    /// the settled floor's scale — at the pre-re-tune blend ratios this
+    /// half measured 1.54 m/s, so a regressed cold-start transient fails
+    /// here well before the settled bound would.
+    const MAX_COLD_START_ABS_ERROR: f32 = 0.45;
     /// Bound on the settled half's mean absolute velocity error, in m/s
     /// (measured 0.29, the pre-wiring floor): after calibration, dip,
     /// and level converge, only the attitude-lag leak may remain.
     const MAX_SETTLED_ABS_ERROR: f32 = 0.45;
-    /// Ratio band for mean estimated vs true speed (measured 4.3): the
-    /// cold-start leak inflates the mean estimate far past the true
-    /// scale; the estimate must neither collapse nor blow up.
-    const MAGNITUDE_RATIO_BAND: (f32, f32) = (0.4, 6.0);
+    /// Ratio band for mean estimated vs true speed (measured 1.25): the
+    /// estimate must keep the true speed scale — neither the collapsed
+    /// nor the leak-inflated side of the band is acceptable.
+    const MAGNITUDE_RATIO_BAND: (f32, f32) = (0.6, 2.0);
 
     let config = crate::sim::sim_motion::Config {
         seed: 0xA15E_D00D_5EED_0002,
