@@ -84,7 +84,7 @@ pub(in crate::fusion) fn integrate_gyro(
     prev_gyro: &mut (Vector3<f32>, u64),
     gyro_rub: &Vector3<f32>,
     t: u64,
-) -> () {
+) {
     let gyro = rub_to_frd(gyro_rub);
 
     let d_t1 /*$dt_1$*/ = t - prev_gyro.1;
@@ -94,7 +94,7 @@ pub(in crate::fusion) fn integrate_gyro(
     if d_t1_f > 0.0 {
         let increment = UnitQuaternion::from_euler_angles(d_s1_t1.x, d_s1_t1.y, d_s1_t1.z);
 
-        state.attitude = state.attitude * increment;
+        state.attitude *= increment;
         let _ = state.consistency.sources.gyro.record(increment.angle());
     }
 
@@ -126,7 +126,7 @@ pub(in crate::fusion) fn integrate_acc(
     state: &mut FusionState,
     acc_rub: &Vector3<f32>,
     _t: u64,
-) -> () {
+) {
     let acc = rub_to_frd(acc_rub);
 
     if acc.norm() < 1.0 {
@@ -169,7 +169,7 @@ pub(in crate::fusion) fn integrate_mag(
     state: &mut FusionState,
     mag_rub: &Vector3<f32>,
     t: u64,
-) -> () {
+) {
     let mag_raw = rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
 
     // gravity direction is already estimated by the acc complementary filter
@@ -206,6 +206,26 @@ pub(in crate::fusion) fn integrate_mag(
         None => vertical,
     };
     state.mag_dip_sin = Some(dip_sin.clamp(-1.0, 1.0));
+
+    // TODO: attitude_correction_ignores_learned_dip
+    // The heading correction compares only the horizontal component
+    // `mag_horizontal` of the calibrated field `mag_normalised`
+    // against the estimated north `estimated_north`, so the learned
+    // dip state `FusionState::mag_dip_sin` never enters the attitude
+    // update: the correction is a pure rotation about the estimated
+    // down axis `down_body` and cannot move the level the acc filter
+    // maintains.
+    // Recommended fix: compare the full calibrated field against the
+    // dipped FRD reference field `(cos(delta), 0, sin(delta))` built
+    // from `mag_dip_sin`, dropping the horizontal projection and its
+    // azimuth gate `MIN_HEADING_MAG_FIELD_NORM`, so the correction
+    // also feeds the level. CAUTION: a level (roll/pitch) error and a
+    // dip error produce the same vertical residual, so the dip
+    // refinement and the full-field correction converge to a
+    // self-consistent (level, dip) pair rather than the true level
+    // alone — the acc filter keeps the level observable in production,
+    // and `BASE_MAG_RATIO` and `BASE_DIP_RATIO` must be re-tuned
+    // jointly when lifting the partition.
 
     // Heading step: only the field's horizontal component (a pure
     // north reading) is compared against estimated north. Both vectors
