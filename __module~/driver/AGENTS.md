@@ -60,7 +60,7 @@ These rules apply to Rust files in this crate.
 
 ### Documentation and Comments
 
-- Give public items useful `///` doc comments. Use `//!` for module-level behavior
+- Give public items useful `///` doc comments. Use `/*!` & `*/` for module-level behavior
   or constraints.
 - Document observable behavior: units, blocking behavior, feature or platform
   availability, error conditions, panics, and safety requirements when relevant.
