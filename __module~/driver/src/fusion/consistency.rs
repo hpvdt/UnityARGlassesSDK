@@ -58,11 +58,13 @@ pub struct EmaTracking {
 
 impl EmaTracking {
     /// Exponential averaging decay per sample. At factor 0.9 the filter's
-    /// continuous-equivalent time constant is $\tau \approx -dt / \ln 0.9 \approx 9.5$ samples
-    /// ($\approx 0.48$ s at a 20 Hz magnetometer rate, $\approx 0.1$ s at 100 Hz). PX4's
-    /// `test_ratio_filtered` instead uses a dt-dependent gain $\alpha = dt / (dt + \tau)$ with
-    /// a fixed $\tau = 0.5$ s, so its memory is rate-independent; switching this to a
-    /// dt-dependent gain is a refinement for when sample timestamps are wired in.
+    /// continuous-equivalent time constant is about $-1 / \ln 0.9 \approx 9.5$
+    /// samples ($\approx 0.48$ s at a 20 Hz magnetometer rate, $\approx 0.1$ s
+    /// at 100 Hz). PX4's `test_ratio_filtered` instead uses a rate-independent
+    /// gain — the sample interval divided by the interval plus a fixed
+    /// 0.5 s time constant — so its memory is rate-independent; switching this
+    /// filter to such a time-scaled gain is a refinement for when sample
+    /// timestamps are wired in.
     pub const AVG_DECAY: f32 = 0.90;
 
     /// Record one sample: `last` takes it and `ema` folds it in by [`Self::AVG_DECAY`].
