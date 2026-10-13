@@ -2,8 +2,10 @@
 // This file is part of ar-drivers-rs
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
-//! Mad Gaze Glow AR glasses support. See [`MadGazeGlow`]
-//! It only uses [`serialport`] for communication.
+/*!
+Mad Gaze Glow AR glasses support. See [`MadGazeGlow`]
+It only uses [`serialport`] for communication.
+*/
 
 use std::{collections::VecDeque, io::Seek, thread::sleep, time::Duration};
 

@@ -1,27 +1,28 @@
-//!
-//! High-level interface of glasses & state estimation, with the following built-in fusion pipeline:
-//!
-//! (the first version should only use complementary filter for simplicity and sanity test)
-//!
-//! - roll/pitch <= acc + gyro (complementary filter)
-//!   - assuming that acc vector always pointed up, spacecraft moving in that direction can create 1G artificial gravity
-//!     - TODO: this obviously assumes no steadily accelerating frame, at which point up d_acc has to be used for correction
-//!       (both `_3dof` and `_6dof` inherit the assumption; the `_6dof` velocity channel models the translational
-//!       component separately, but a single acc reading cannot correct attitude and acceleration jointly)
-//! - gyro-yaw <= gyro (integrate over time)
-//! - mag-dip <= two independent estimates: the fusion state's `mag_dip_sin`, initialized from the first
-//!   usable calibrated reading and refined per sample from the field's vertical component measured through
-//!   the acc-maintained level, and the calibrator's `dip_sin` ($\kappa / (\gamma r)$, the gravity-surrogate
-//!   fit statistic over the retained calibration rows, absent while gravity hints are unused)
-//! - mag-yaw <= mag horizontal component + roll/pitch (never corrects the level)
-//! - yaw <= mag-yaw + gyro-gyro (complementary filter)
-//!   - TODO: add EKF/ESKF (error-state/multiplicative KF, https://arxiv.org/abs/1711.02508)
-//! - linear velocity <= acc (specific force minus gravity, world frame) + zero-velocity regression (`_6dof`)
-//!
-//! CAUTION: unlike [[GlassesEvent]], all states & outputs should use FRD reference frame
-//!  (forward, right, down, corresponding to roll, pitch, yaw in Euler angles-represented rotation)
-//!
-//! FRD is the standard frame for aerospace.
+/*!
+High-level interface of glasses & state estimation, with the following built-in fusion pipeline:
+
+(the first version should only use complementary filter for simplicity and sanity test)
+
+- roll/pitch <= acc + gyro (complementary filter)
+  - assuming that acc vector always pointed up, spacecraft moving in that direction can create 1G artificial gravity
+    - TODO: this obviously assumes no steadily accelerating frame, at which point up d_acc has to be used for correction
+      (both `_3dof` and `_6dof` inherit the assumption; the `_6dof` velocity channel models the translational
+      component separately, but a single acc reading cannot correct attitude and acceleration jointly)
+- gyro-yaw <= gyro (integrate over time)
+- mag-dip <= two independent estimates: the fusion state's `mag_dip_sin`, initialized from the first
+  usable calibrated reading and refined per sample from the field's vertical component measured through
+  the acc-maintained level, and the calibrator's `dip_sin` ($\kappa / (\gamma r)$, the gravity-surrogate
+  fit statistic over the retained calibration rows, absent while gravity hints are unused)
+- mag-yaw <= mag horizontal component + roll/pitch (never corrects the level)
+- yaw <= mag-yaw + gyro-gyro (complementary filter)
+  - TODO: add EKF/ESKF (error-state/multiplicative KF, https://arxiv.org/abs/1711.02508)
+- linear velocity <= acc (specific force minus gravity, world frame) + zero-velocity regression (`_6dof`)
+
+CAUTION: unlike [[GlassesEvent]], all states & outputs should use FRD reference frame
+ (forward, right, down, corresponding to roll, pitch, yaw in Euler angles-represented rotation)
+
+FRD is the standard frame for aerospace.
+*/
 use std::fmt;
 
 use nalgebra::{UnitQuaternion, Vector3};

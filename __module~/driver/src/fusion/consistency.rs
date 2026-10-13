@@ -1,42 +1,42 @@
-//!
-//! ArduPilot/PX4-style estimator consistency reporting for the fusion pipeline (draft).
-//!
-//! Both flight stacks report estimator health through *innovation consistency checks*: for each
-//! observation source ("aiding source" in PX4) the innovation $\nu$ (residual between
-//! measurement and prediction) is squared against its expected variance $\Sigma$ and an
-//! innovation gate $\eta$ in multiples of the innovation standard deviation $\sqrt{\Sigma}$:
-//!
-//! $$\rho = \frac{\nu^2}{\eta^2 \, \Sigma}$$
-//!
-//! A sample with `test_ratio` $\rho \ge 1$ fails the check (ArduPilot `magTestRatio`,
-//! `yawTestRatio`, `velTestRatio`, `posTestRatio`, `hgtTestRatio`; PX4 aid-source `test_ratio`),
-//! and the source is healthy while the ratio stays below 1 (ArduPilot `magHealth`,
-//! `velCheckPassed`, `posCheckPassed`). The filtered value $\bar{\rho}$ is the published
-//! estimator-health signal: PX4's aid-source `test_ratio_filtered`, which `estimator_status`
-//! exports as `*_test_ratio = sqrt(max(|test_ratio_filtered|))`, and ArduPilot's
-//! `EKF_STATUS_REPORT` `*_variance` fields, exported as $\sqrt{\rho}$.
-//!
-//! [`SourceConsistency`] is estimator-agnostic:
-//!
-//! - complementary filter (e.g. `NaiveCF`): $\nu$ is the pre-correction angular residual and
-//!   $\Sigma$ a configured innovation variance. [`SourceConsistency::record_scaled`]
-//!   reconstructs $\nu$ from the post-blend correction the filter applies:
-//!   `UnitQuaternion::scaled_rotation_between` scales the rotation angle exactly, so the
-//!   residual is the applied correction divided by the blend ratio (code constants
-//!   `BASE_GRAV_RATIO`, `BASE_MAG_RATIO`).
-//! - EKF/ESKF: $\nu$ is the observation innovation and $\Sigma$ the live innovation variance;
-//!   [`SourceConsistency::record_with_variance`] consumes both per sample.
-//!
-//! [`Consistency`] aggregates the acc/gyro/mag sources and fuses their verdicts, mirroring the
-//! per-source fields of PX4 `EstimatorAidSource1d.msg` (`observation`/`observation_variance` are
-//! deliberately omitted: the measurement and prediction live in the estimator, this tracker
-//! only sees innovations) and ArduPilot's `NavEKF3_core` `*TestRatio`/`*InnovGate` members.
-//! Angular magnitudes are frame-free scalars; the residuals derive from FRD vectors per the
-//! module convention. `Fusion` exposes the report through `consistency()` and the
-//! non-overridable [`FusionConsistency`] verdict: `NaiveCF` fills it via
-//! [`SourceConsistency::record_scaled`]/[`SourceConsistency::record`], a future EKF via
-//! [`SourceConsistency::record_with_variance`].
-//!
+/*!
+ArduPilot/PX4-style estimator consistency reporting for the fusion pipeline (draft).
+
+Both flight stacks report estimator health through *innovation consistency checks*: for each
+observation source ("aiding source" in PX4) the innovation $\nu$ (residual between
+measurement and prediction) is squared against its expected variance $\Sigma$ and an
+innovation gate $\eta$ in multiples of the innovation standard deviation $\sqrt{\Sigma}$:
+
+$$\rho = \frac{\nu^2}{\eta^2 \, \Sigma}$$
+
+A sample with `test_ratio` $\rho \ge 1$ fails the check (ArduPilot `magTestRatio`,
+`yawTestRatio`, `velTestRatio`, `posTestRatio`, `hgtTestRatio`; PX4 aid-source `test_ratio`),
+and the source is healthy while the ratio stays below 1 (ArduPilot `magHealth`,
+`velCheckPassed`, `posCheckPassed`). The filtered value $\bar{\rho}$ is the published
+estimator-health signal: PX4's aid-source `test_ratio_filtered`, which `estimator_status`
+exports as `*_test_ratio = sqrt(max(|test_ratio_filtered|))`, and ArduPilot's
+`EKF_STATUS_REPORT` `*_variance` fields, exported as $\sqrt{\rho}$.
+
+[`SourceConsistency`] is estimator-agnostic:
+
+- complementary filter (e.g. `NaiveCF`): $\nu$ is the pre-correction angular residual and
+  $\Sigma$ a configured innovation variance. [`SourceConsistency::record_scaled`]
+  reconstructs $\nu$ from the post-blend correction the filter applies:
+  `UnitQuaternion::scaled_rotation_between` scales the rotation angle exactly, so the
+  residual is the applied correction divided by the blend ratio (code constants
+  `BASE_GRAV_RATIO`, `BASE_MAG_RATIO`).
+- EKF/ESKF: $\nu$ is the observation innovation and $\Sigma$ the live innovation variance;
+  [`SourceConsistency::record_with_variance`] consumes both per sample.
+
+[`Consistency`] aggregates the acc/gyro/mag sources and fuses their verdicts, mirroring the
+per-source fields of PX4 `EstimatorAidSource1d.msg` (`observation`/`observation_variance` are
+deliberately omitted: the measurement and prediction live in the estimator, this tracker
+only sees innovations) and ArduPilot's `NavEKF3_core` `*TestRatio`/`*InnovGate` members.
+Angular magnitudes are frame-free scalars; the residuals derive from FRD vectors per the
+module convention. `Fusion` exposes the report through `consistency()` and the
+non-overridable [`FusionConsistency`] verdict: `NaiveCF` fills it via
+[`SourceConsistency::record_scaled`]/[`SourceConsistency::record`], a future EKF via
+[`SourceConsistency::record_with_variance`].
+*/
 use std::fmt;
 
 use super::{Fusion, NineAxis};

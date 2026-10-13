@@ -2,13 +2,15 @@
 // This file is part of ar-drivers-rs
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
-//! XREAL Light AR glasses support. See [`XrealLight`]
-//! It only uses [`hidapi`] for communication.
-//!
-//! **Important note**: The XREAL Light requires constant heartbeats in 3D SBS mode,
-//! or else it switches the screen off. This heartbeat is sent periodically when
-//! [`XrealLight::read_event`] is called, so be sure to constantly call that function (at least once
-//! every half a second or so)
+/*!
+XREAL Light AR glasses support. See [`XrealLight`]
+It only uses [`hidapi`] for communication.
+
+**Important note**: The XREAL Light requires constant heartbeats in 3D SBS mode,
+or else it switches the screen off. This heartbeat is sent periodically when
+[`XrealLight::read_event`] is called, so be sure to constantly call that function (at least once
+every half a second or so)
+*/
 
 use std::{
     collections::{HashMap, VecDeque},

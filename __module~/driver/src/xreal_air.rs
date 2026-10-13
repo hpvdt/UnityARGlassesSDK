@@ -5,8 +5,10 @@
 // Based on code by thejackimonster
 // See https://gitlab.com/TheJackiMonster/nrealAirLinuxDriver
 
-//! XREAL Air AR glasses support. See [`XrealAir`]
-//! It only uses [`hidapi`] for communication.
+/*!
+XREAL Air AR glasses support. See [`XrealAir`]
+It only uses [`hidapi`] for communication.
+*/
 
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};

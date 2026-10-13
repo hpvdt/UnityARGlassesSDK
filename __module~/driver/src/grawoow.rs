@@ -2,8 +2,10 @@
 // This file is part of ar-drivers-rs
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
-//! Grawoow G530 (a.k.a. MetaVision M53) glasses support. See [`GrawoowG530`]
-//! It only uses [`rusb`] for communication.
+/*!
+Grawoow G530 (a.k.a. MetaVision M53) glasses support. See [`GrawoowG530`]
+It only uses [`rusb`] for communication.
+*/
 
 use std::time::{Duration, Instant};
 

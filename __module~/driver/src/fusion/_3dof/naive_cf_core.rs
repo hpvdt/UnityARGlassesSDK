@@ -1,20 +1,20 @@
-//!
-//! Shared attitude pipeline of the naive complementary filters.
-//!
-//! The estimators built on [`FusionState`] run the same attitude machinery:
-//! gyroscope dead-reckoning, the gravity-direction correction helper, the
-//! magnetometer heading correction, the dip-state refinement, attitude
-//! renormalization, and the blocking device event loop. This module holds
-//! that machinery once, together with the shared blend-ratio and frame
-//! constants. Each estimator owns its state struct and calls these free
-//! functions with `&mut FusionState` plus its own previous-sample
-//! bookkeeping (e.g. `prev_gyro`), so estimators delegate through thin
-//! methods without sharing a struct layout.
-//!
-//! All estimated state follows the FRD world-frame conventions of the fusion
-//! module; raw sensor arguments stay in the device's RUB frame and are
-//! converted at the boundary.
-//!
+/*!
+Shared attitude pipeline of the naive complementary filters.
+
+The estimators built on [`FusionState`] run the same attitude machinery:
+gyroscope dead-reckoning, the gravity-direction correction helper, the
+magnetometer heading correction, the dip-state refinement, attitude
+renormalization, and the blocking device event loop. This module holds
+that machinery once, together with the shared blend-ratio and frame
+constants. Each estimator owns its state struct and calls these free
+functions with `&mut FusionState` plus its own previous-sample
+bookkeeping (e.g. `prev_gyro`), so estimators delegate through thin
+methods without sharing a struct layout.
+
+All estimated state follows the FRD world-frame conventions of the fusion
+module; raw sensor arguments stay in the device's RUB frame and are
+converted at the boundary.
+*/
 
 use nalgebra::{UnitQuaternion, Vector3};
 

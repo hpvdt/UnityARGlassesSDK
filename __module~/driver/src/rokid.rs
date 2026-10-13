@@ -2,8 +2,10 @@
 // This file is part of ar-drivers-rs
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
-//! Rokid Air AR glasses support. See [`RokidAir`]
-//! It only uses [`rusb`] for communication.
+/*!
+Rokid Air AR glasses support. See [`RokidAir`]
+It only uses [`rusb`] for communication.
+*/
 
 use std::{collections::VecDeque, time::Duration};
 

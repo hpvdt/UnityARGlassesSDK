@@ -1,95 +1,96 @@
-//!
-//! NaiveCF is the 6-DoF augmentation of the naive complementary filter: it
-//! estimates the same 3 DoF attitude as `_3dof::NaiveCF` plus the 3 DoF
-//! linear velocity, from the identical 9-axis IMU.
-//!
-//! # Accelerometer model
-//!
-//! The accelerometer measures the specific force (felt acceleration), the
-//! sum of the body's translational acceleration $a$ and the reaction to
-//! gravity. With $S$ the body-to-world attitude and $G_{\mathrm{ACC}}$ the
-//! felt gravity at rest $(0, 0, -9.81)$ m/s^2 in the FRD world frame, a level
-//! reading decomposes as
-//!
-//! $$f_{body} = S^{-1}\,(a_{world} + G_{\mathrm{ACC}})$$
-//!
-//! so the world-frame translational acceleration follows by rotating the
-//! reading through the attitude and removing felt gravity:
-//!
-//! $$a_{world} = S\, f_{body} - G_{\mathrm{ACC}}$$
-//!
-//! # Update channels
-//!
-//! The attitude pipeline is shared with `_3dof` through
-//! [`crate::fusion::_3dof::naive_cf_core`]: gyroscope dead-reckoning prediction,
-//! then the gravity-direction state-sensor correction. That correction keeps
-//! the `_3dof` gravity-only assumption — one 3-axis reading cannot
-//! jointly constrain attitude and translational acceleration, so under a
-//! steadily accelerating frame both estimators' level converges towards the
-//! tilted specific force (the "1G artificial gravity" limitation recorded
-//! in the fusion module docs; no complementary blend of the same single
-//! reading can undo it, so the gravity channel keeps the
-//! zero-acceleration assumption there).
-//!
-//! The velocity channel is the 6-DoF addition, one complementary filter
-//! following the shared update law
-//! $S = \mathrm{ratio}\,(S^{-} + d\tilde{S}_1\, dt_1) + (1 - \mathrm{ratio})\, \tilde{S}_2$:
-//!
-//! - rate sensor: $a_{world}$ above, the high-frequency dead-reckoning
-//!   increment $d\tilde{S}_1\, dt_1 = a\,dt$;
-//! - state sensor: the zero-velocity pseudo-observation $\tilde{S}_2 = 0$ —
-//!   a head-mounted device is at rest far more often than it moves, so the
-//!   correction is the auto-regression of the estimate towards zero;
-//! - blend: rate-independent $\mathrm{ratio} = e^{-dt/\tau_v}$ with the
-//!   regression time constant $\tau_v$, giving
-//!
-//! $$v = e^{-dt/\tau_v}\,(v^{-} + a_{world}\, dt)$$
-//!
-//! The regression bounds the accelerometer's integratable errors (bias,
-//! attitude-induced gravity leakage) at $\tau_v$ times their magnitude,
-//! and the estimate decays to zero whenever the device actually rests.
-//! Acceleration bursts shorter than the gravity correction's lock time
-//! (about $1 / (\mathrm{BASE\_GRAV\_RATIO})$ samples) are tracked before the
-//! level absorbs them as tilt. Under continuous rotation the gravity
-//! correction carries a small level lag (the same lag the 3-DoF attitude
-//! has), whose leaked gravity bounds the velocity accuracy on moving
-//! traces — the measured floor is $\sim g \sin(\mathrm{lag}) \cdot \tau_v$.
-//!
-//! # Relation to published filters
-//!
-//! The attitude pipeline shared with `_3dof` is a P-only instance of the
-//! explicit complementary filter of Mahony, Hamel and Pflimlin, "Nonlinear
-//! Complementary Filters on the Special Orthogonal Group" (IEEE Trans.
-//! Autom. Control 53(5), 2008, DOI 10.1109/TAC.2008.923738): the gyroscope
-//! propagates the attitude, and each state-sensor reading applies a
-//! proportional correction along the rotation carrying the predicted
-//! inertial direction onto the measured one. This repo keeps the
-//! correction as a scaled rotation
-//! ([`crate::fusion::_3dof::naive_cf_core::get_correction`]) with a fixed
-//! per-sample blend fraction as the proportional gain, and leaves out the
-//! integral (gyro-bias) term.
-//!
-//! The 6-DoF pipeline — a complementary attitude filter feeding
-//! gravity-compensated integration of the specific force in the world
-//! frame, with zero-velocity information as the only low-frequency
-//! velocity aid — is the foot-mounted pedestrian dead-reckoning
-//! architecture of Fourati, Manamanni, Afilal and Handrich, "Position
-//! Estimation Approach by Complementary Filter-aided IMU for Indoor
-//! Environment" (ECC 2013; journal version "Heterogeneous Data Fusion
-//! Algorithm for Pedestrian Navigation via Foot-Mounted Inertial
-//! Measurement Unit and Complementary Filter", IEEE Trans. Instrum.
-//! Meas. 64(1), 2015, DOI 10.1109/TIM.2014.2335912). The deviation: a
-//! foot-mounted IMU has detectable stance phases, so Fourati resets the
-//! velocity to zero at each detected stance (a hard zero-velocity
-//! update), while head-mounted glasses have no reliable rest phase to
-//! detect. This filter therefore applies the same zero-velocity
-//! information continuously as the complementary blend above: an
-//! exponentially forgetting (soft) zero-velocity update. The continuous
-//! form cannot misfire on a false detection, at the price of never
-//! fully trusting the pseudo-observation — a device under sustained
-//! acceleration is pulled towards $v \approx a\,\tau_v$ instead of being
-//! tracked indefinitely, and the estimate decays to zero over
-//! $\tau_v$ whenever the device rests.
+/*!
+NaiveCF is the 6-DoF augmentation of the naive complementary filter: it
+estimates the same 3 DoF attitude as `_3dof::NaiveCF` plus the 3 DoF
+linear velocity, from the identical 9-axis IMU.
+
+# Accelerometer model
+
+The accelerometer measures the specific force (felt acceleration), the
+sum of the body's translational acceleration $a$ and the reaction to
+gravity. With $S$ the body-to-world attitude and $G_{\mathrm{ACC}}$ the
+felt gravity at rest $(0, 0, -9.81)$ m/s^2 in the FRD world frame, a level
+reading decomposes as
+
+$$f_{body} = S^{-1}\,(a_{world} + G_{\mathrm{ACC}})$$
+
+so the world-frame translational acceleration follows by rotating the
+reading through the attitude and removing felt gravity:
+
+$$a_{world} = S\, f_{body} - G_{\mathrm{ACC}}$$
+
+# Update channels
+
+The attitude pipeline is shared with `_3dof` through
+[`crate::fusion::_3dof::naive_cf_core`]: gyroscope dead-reckoning prediction,
+then the gravity-direction state-sensor correction. That correction keeps
+the `_3dof` gravity-only assumption — one 3-axis reading cannot
+jointly constrain attitude and translational acceleration, so under a
+steadily accelerating frame both estimators' level converges towards the
+tilted specific force (the "1G artificial gravity" limitation recorded
+in the fusion module docs; no complementary blend of the same single
+reading can undo it, so the gravity channel keeps the
+zero-acceleration assumption there).
+
+The velocity channel is the 6-DoF addition, one complementary filter
+following the shared update law
+$S = \mathrm{ratio}\,(S^{-} + d\tilde{S}_1\, dt_1) + (1 - \mathrm{ratio})\, \tilde{S}_2$:
+
+- rate sensor: $a_{world}$ above, the high-frequency dead-reckoning
+  increment $d\tilde{S}_1\, dt_1 = a\,dt$;
+- state sensor: the zero-velocity pseudo-observation $\tilde{S}_2 = 0$ —
+  a head-mounted device is at rest far more often than it moves, so the
+  correction is the auto-regression of the estimate towards zero;
+- blend: rate-independent $\mathrm{ratio} = e^{-dt/\tau_v}$ with the
+  regression time constant $\tau_v$, giving
+
+$$v = e^{-dt/\tau_v}\,(v^{-} + a_{world}\, dt)$$
+
+The regression bounds the accelerometer's integratable errors (bias,
+attitude-induced gravity leakage) at $\tau_v$ times their magnitude,
+and the estimate decays to zero whenever the device actually rests.
+Acceleration bursts shorter than the gravity correction's lock time
+(about $1 / (\mathrm{BASE\_GRAV\_RATIO})$ samples) are tracked before the
+level absorbs them as tilt. Under continuous rotation the gravity
+correction carries a small level lag (the same lag the 3-DoF attitude
+has), whose leaked gravity bounds the velocity accuracy on moving
+traces — the measured floor is $\sim g \sin(\mathrm{lag}) \cdot \tau_v$.
+
+# Relation to published filters
+
+The attitude pipeline shared with `_3dof` is a P-only instance of the
+explicit complementary filter of Mahony, Hamel and Pflimlin, "Nonlinear
+Complementary Filters on the Special Orthogonal Group" (IEEE Trans.
+Autom. Control 53(5), 2008, DOI 10.1109/TAC.2008.923738): the gyroscope
+propagates the attitude, and each state-sensor reading applies a
+proportional correction along the rotation carrying the predicted
+inertial direction onto the measured one. This repo keeps the
+correction as a scaled rotation
+([`crate::fusion::_3dof::naive_cf_core::get_correction`]) with a fixed
+per-sample blend fraction as the proportional gain, and leaves out the
+integral (gyro-bias) term.
+
+The 6-DoF pipeline — a complementary attitude filter feeding
+gravity-compensated integration of the specific force in the world
+frame, with zero-velocity information as the only low-frequency
+velocity aid — is the foot-mounted pedestrian dead-reckoning
+architecture of Fourati, Manamanni, Afilal and Handrich, "Position
+Estimation Approach by Complementary Filter-aided IMU for Indoor
+Environment" (ECC 2013; journal version "Heterogeneous Data Fusion
+Algorithm for Pedestrian Navigation via Foot-Mounted Inertial
+Measurement Unit and Complementary Filter", IEEE Trans. Instrum.
+Meas. 64(1), 2015, DOI 10.1109/TIM.2014.2335912). The deviation: a
+foot-mounted IMU has detectable stance phases, so Fourati resets the
+velocity to zero at each detected stance (a hard zero-velocity
+update), while head-mounted glasses have no reliable rest phase to
+detect. This filter therefore applies the same zero-velocity
+information continuously as the complementary blend above: an
+exponentially forgetting (soft) zero-velocity update. The continuous
+form cannot misfire on a false detection, at the price of never
+fully trusting the pseudo-observation — a device under sustained
+acceleration is pulled towards $v \approx a\,\tau_v$ instead of being
+tracked indefinitely, and the estimate decays to zero over
+$\tau_v$ whenever the device rests.
+*/
 
 use nalgebra::{UnitQuaternion, Vector3};
 

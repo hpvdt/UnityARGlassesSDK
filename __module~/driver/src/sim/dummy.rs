@@ -1,4 +1,6 @@
-//! Minimal simulated glasses that emit a constant level attitude, for smoke tests.
+/*!
+Minimal simulated glasses that emit a constant level attitude, for smoke tests.
+*/
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

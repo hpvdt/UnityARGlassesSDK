@@ -1,8 +1,10 @@
-//! Deterministic simulated AR glasses for integration tests.
-//!
-//! Events are precomputed by a background generator thread into a small
-//! bounded buffer, so [`ARGlasses::read_event`] only loads from that buffer
-//! while the simulation cost stays off the caller's critical path.
+/*!
+Deterministic simulated AR glasses for integration tests.
+
+Events are precomputed by a background generator thread into a small
+bounded buffer, so [`ARGlasses::read_event`] only loads from that buffer
+while the simulation cost stays off the caller's critical path.
+*/
 
 use std::f32::consts::PI;
 use std::sync::mpsc::{self, Receiver};

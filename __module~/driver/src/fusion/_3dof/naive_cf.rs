@@ -1,34 +1,35 @@
-//!
-//! NaiveCF is a simple sensor fusion algorithm that uses a complementary filter.
-//!
-//! Complementary filter with a very simple update algorithm. With $S$ and $S^{-}$ the current and
-//! previous estimated state, $d\tilde{S}_1$ a rate sensor reading (e.g. gyroscope: high frequency, high
-//! drift, dead reckoning), $\tilde{S}_2$ a state sensor reading (e.g. gravity/accelerometer, magnetometer:
-//! low frequency, high noise, low drift), $dt_1$ the time elapsed since the last rate sensor sample, and
-//! $\mathrm{ratio}$ the blend ratio:
-//!
-//! $$S = \mathrm{ratio}\, (S^{-} + d\tilde{S}_1\, dt_1) + (1 - \mathrm{ratio})\, \tilde{S}_2$$
-//!
-//! This implies:
-//!
-//! - The algorithm natively supports state sensor(s) with different sampling frequency, incomplete
-//!   reading, or unreliable reading, as the $\tilde{S}_2$ variable is merely an optional correction.
-//! - The interpolation between $\tilde{S}_2$ and the rate-integrated prediction doesn't need to be linear
-//!   or additive, e.g. 3D angular interpolation is multiplicative.
-//! - The ratio can be adjusted based on quality and frequency of the state sensor(s).
-//!
-//! Most glasses have acc & grav/acc readings in 1 bundle, but I prefer not using this assumption and still
-//! update them independently.
-//!
-//! The attitude pipeline shared with the other naive complementary-filter
-//! estimators (gyroscope dead-reckoning, magnetometer heading correction,
-//! the gravity-direction correction helper, and the device event loop)
-//! lives in [`crate::fusion::_3dof::naive_cf_core`]. This estimator keeps its
-//! 3-DoF-specific gravity correction, which reads the accelerometer as a
-//! pure gravity-direction sensor.
-//!
-//! # example:
-//!  TODO: fill
+/*!
+NaiveCF is a simple sensor fusion algorithm that uses a complementary filter.
+
+Complementary filter with a very simple update algorithm. With $S$ and $S^{-}$ the current and
+previous estimated state, $d\tilde{S}_1$ a rate sensor reading (e.g. gyroscope: high frequency, high
+drift, dead reckoning), $\tilde{S}_2$ a state sensor reading (e.g. gravity/accelerometer, magnetometer:
+low frequency, high noise, low drift), $dt_1$ the time elapsed since the last rate sensor sample, and
+$\mathrm{ratio}$ the blend ratio:
+
+$$S = \mathrm{ratio}\, (S^{-} + d\tilde{S}_1\, dt_1) + (1 - \mathrm{ratio})\, \tilde{S}_2$$
+
+This implies:
+
+- The algorithm natively supports state sensor(s) with different sampling frequency, incomplete
+  reading, or unreliable reading, as the $\tilde{S}_2$ variable is merely an optional correction.
+- The interpolation between $\tilde{S}_2$ and the rate-integrated prediction doesn't need to be linear
+  or additive, e.g. 3D angular interpolation is multiplicative.
+- The ratio can be adjusted based on quality and frequency of the state sensor(s).
+
+Most glasses have acc & grav/acc readings in 1 bundle, but I prefer not using this assumption and still
+update them independently.
+
+The attitude pipeline shared with the other naive complementary-filter
+estimators (gyroscope dead-reckoning, magnetometer heading correction,
+the gravity-direction correction helper, and the device event loop)
+lives in [`crate::fusion::_3dof::naive_cf_core`]. This estimator keeps its
+3-DoF-specific gravity correction, which reads the accelerometer as a
+pure gravity-direction sensor.
+
+# example:
+ TODO: fill
+*/
 
 use nalgebra::{UnitQuaternion, Vector3};
 

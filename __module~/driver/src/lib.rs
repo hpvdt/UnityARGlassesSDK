@@ -3,37 +3,39 @@
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
 #![warn(missing_docs)]
-//! This crate contains a simplified driver for XREAL, Rokid, Grawoow and Mad Gaze AR glasses.
-//! It supports getting basic sensor data and setting up the display.
-//!
-//! Example usage (in a thread, probably):
-//! ```ignore
-//! let mut glasses = any_glasses().unwrap();
-//! loop {
-//!     match glasses.read_event().unwrap() {
-//!         GlassesEvent::AccGyro {accelerometer, gyroscope} => ...,
-//!         GlassesEvent::Magnetometer(data) => ...,
-//!         GlassesEvent::KeyPress(data) => ...,
-//!         _ => {}
-//!     }
-//! }
-//! ```
-//!
-//! As opposed to e.g. Rokid's own API, this is all that you get, since this is what comes
-//! out of the hardware. To get quaternions, you should probably use a lib that implements
-//! Madgwicks algorithm or a proper EKF. One good choice is the `eskf` crate.
-//!
-//! ## Feature flags
-//!
-//! Support for individual AR glasses types can be enabled with the following features:
-//!
-//! * `mad_gaze`: Mad Gaze Glow
-//! * `xreal`: XREAL Air, Air 2, Air 2 Pro, Air 2 Ultra and XREAL Light
-//! * `rokid`: Rokid Air
-//! * `grawoow`: Grawoow G530 (a.k.a. Metavision M53)
-//!
-//! All of them are enabled by default, which may bring in some unwanted dependencies if you
-//! only want to support a specific type.
+/*!
+This crate contains a simplified driver for XREAL, Rokid, Grawoow and Mad Gaze AR glasses.
+It supports getting basic sensor data and setting up the display.
+
+Example usage (in a thread, probably):
+```ignore
+let mut glasses = any_glasses().unwrap();
+loop {
+    match glasses.read_event().unwrap() {
+        GlassesEvent::AccGyro {accelerometer, gyroscope} => ...,
+        GlassesEvent::Magnetometer(data) => ...,
+        GlassesEvent::KeyPress(data) => ...,
+        _ => {}
+    }
+}
+```
+
+As opposed to e.g. Rokid's own API, this is all that you get, since this is what comes
+out of the hardware. To get quaternions, you should probably use a lib that implements
+Madgwicks algorithm or a proper EKF. One good choice is the `eskf` crate.
+
+## Feature flags
+
+Support for individual AR glasses types can be enabled with the following features:
+
+* `mad_gaze`: Mad Gaze Glow
+* `xreal`: XREAL Air, Air 2, Air 2 Pro, Air 2 Ultra and XREAL Light
+* `rokid`: Rokid Air
+* `grawoow`: Grawoow G530 (a.k.a. Metavision M53)
+
+All of them are enabled by default, which may bring in some unwanted dependencies if you
+only want to support a specific type.
+*/
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
