@@ -220,14 +220,15 @@ fn update_mag_refines_dip_towards_true_dip() {
     // the dip state starts deliberately wrong (equator dip); the
     // per-sample complementary refinement must pull it towards the
     // 60 deg true dip the calibrated readings carry, converging by the
-    // (1 - BASE_DIP_RATIO)^n factor of the blend
+    // $\mathrm{ratio}^n$ factor of the blend (`BASE_DIP_RATIO` per step)
     let dip = 60.0f32.to_radians();
     let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
     fusion.state.mag_dip_sin = Some(0.0);
 
-    // one step moves the state by exactly BASE_DIP_RATIO of the
-    // residual, 0.02 * sin(60 deg) ~ 0.017; the fit's ~7.5 mrad
+    // one step moves the state by exactly the blend weight
+    // $1 - \mathrm{ratio}$ (`BASE_DIP_RATIO`) of the residual,
+    // 0.02 * sin(60 deg) ~ 0.017; the fit's ~7.5 mrad
     // down-axis error is scaled down by the same factor to ~1.4e-4
     // (measured 1.4e-4), so a full-replacement or zero-blend update
     // lands far outside the 1e-3 bound
@@ -398,7 +399,7 @@ fn update_mag_skips_heading_near_the_magnetic_poles() {
     fusion.state.consistency.sources.mag = Default::default();
 
     // field ~0.6 deg off vertical: horizontal norm 0.01 is below
-    // MIN_HEADING_FIELD_NORM, so its azimuth is gated as pure noise
+    // MIN_HEADING_MAG_FIELD_NORM, so its azimuth is gated as pure noise
     let near_vertical = Vector3::new(0.01, 0.0, (1.0_f32 - 1.0e-4).sqrt());
     fusion.state.attitude =
         UnitQuaternion::from_euler_angles(0.0, 0.0, std::f32::consts::FRAC_PI_2);

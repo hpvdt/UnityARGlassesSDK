@@ -14,8 +14,9 @@ fn felt_gravity_frd() -> Vector3<f32> {
 }
 
 /// Closed form of the velocity recurrence
-/// $v_n = (v_{n-1} + a\,dt)\,e^{-dt/\tau_v}$ for a constant acceleration:
-/// $v_n = e^{-n\,dt/\tau_v} v_0 + a\,dt\,e^{-dt/\tau_v}\,(1-e^{-n\,dt/\tau_v})/(1-e^{-dt/\tau_v})$.
+/// $v_n = (v_{n-1} + a\,dt_v)\,e^{-dt_v/\tau_v}$ for a constant
+/// acceleration:
+/// $v_n = e^{-n\,dt_v/\tau_v} v_0 + a\,dt_v\,e^{-dt_v/\tau_v}\,(1-e^{-n\,dt_v/\tau_v})/(1-e^{-dt_v/\tau_v})$.
 fn expected_velocity(
     v0: Vector3<f64>,
     a: Vector3<f64>,
@@ -23,9 +24,9 @@ fn expected_velocity(
     tau_s: f64,
     n: u32,
 ) -> Vector3<f32> {
-    let phi = (-dt_s / tau_s).exp();
-    let blend = dt_s * phi * (1.0 - phi.powi(n as i32)) / (1.0 - phi);
-    (v0 * phi.powi(n as i32) + a * blend).map(|x| x as f32)
+    let ratio = (-dt_s / tau_s).exp();
+    let blend = dt_s * ratio * (1.0 - ratio.powi(n as i32)) / (1.0 - ratio);
+    (v0 * ratio.powi(n as i32) + a * blend).map(|x| x as f32)
 }
 
 #[test]
@@ -313,7 +314,9 @@ fn gravity_correction_levels_a_stationary_device() {
         fusion.integrate_acc(&acc_rub, t);
         fusion.integrate_velocity(&acc_rub, t);
         if sample == 250 {
-            // (1 - BASE_GRAV_RATIO)^250 scales 30 deg down to ~8.5 deg;
+            // the blend weight $1 - \mathrm{ratio}$ (`BASE_GRAV_RATIO`)
+            // leaves the retention factor $\mathrm{ratio}^{250}$ scaling
+            // 30 deg down to ~8.5 deg;
             // a frozen design sits at ~29.9 deg here
             assert!(
                 fusion.state.attitude.angle() < 15.0f32.to_radians(),
@@ -367,7 +370,8 @@ fn velocity_regresses_to_zero() {
     fusion.state.linear_velocity = v0;
 
     // 250 samples of 40 ms: the auto-regression is the exact per-sample
-    // factor exp(-dt/tau_v), so 10 s decays v0 by exp(-5)
+    // factor $e^{-dt_v/\tau_v}$, so 10 s decays the initial velocity by
+    // $e^{-5}$
     let acc_rub = frd_to_rub(felt_gravity_frd());
     for sample in 1..=250u64 {
         fusion.integrate_velocity(&acc_rub, sample * 40_000);
@@ -415,8 +419,9 @@ fn velocity_tracks_short_acceleration_burst() {
     fusion.prev_acc = (Vector3::zeros(), 0);
 
     // 2 m/s^2 for 2 s (50 samples), then rest: the burst is far shorter
-    // than the gravity correction's lock time (~1/BASE_GRAV_RATIO samples),
-    // so the level stays near true and the velocity tracks the burst; the
+    // than the gravity correction's lock time (about $1/(1-\mathrm{ratio})$
+    // samples), so the level stays near true and the velocity tracks the
+    // burst; the
     // acceleration is not truly sustained, so no artificial-gravity lock
     // forms and afterwards the estimate regresses back to zero
     let burst_rub = frd_to_rub(Vector3::new(2.0, 0.0, 0.0) + felt_gravity_frd());
@@ -430,8 +435,9 @@ fn velocity_tracks_short_acceleration_burst() {
         fusion.integrate_velocity(&burst_rub, t);
     }
     let burst_end = fusion.state.linear_velocity.x;
-    // regression alone would reach a*dt*phi*(1-phi^50)/(1-phi) ~ 2.3 m/s;
-    // the early level lock costs a fraction of it
+    // regression alone would reach the closed-form
+    // $a\, dt_v\, \mathrm{ratio}\, (1 - \mathrm{ratio}^{50}) / (1 - \mathrm{ratio})$
+    // ~ 2.3 m/s; the early level lock costs a fraction of it
     assert!(
         (1.4..=2.7).contains(&burst_end),
         "burst velocity {burst_end}"

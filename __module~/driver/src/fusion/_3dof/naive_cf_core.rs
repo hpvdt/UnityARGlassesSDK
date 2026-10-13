@@ -50,7 +50,7 @@ pub(in crate::fusion) const BASE_DIP_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.02;
 /// without actual heading evidence.
 pub(super) const MIN_HEADING_MAG_FIELD_NORM: f32 = 0.1;
 
-pub(in crate::fusion) const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; //microseconds
+pub(in crate::fusion) const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; // microseconds
 
 /// Felt gravity (specific force at rest) in the FRD world frame, m/s^2.
 pub(in crate::fusion) const G_ACC_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
@@ -60,7 +60,7 @@ pub(super) const DOWN_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, 1.0);
 /// horizontal component points here whatever the dip angle.
 pub(super) const NORTH_FRD: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
 
-///read until next valid event. Blocks.
+/// Reads until the next valid event. Blocks.
 pub(in crate::fusion) fn next_event(state: &mut FusionState) -> GlassesEvent {
     loop {
         match state.glasses.read_event() {
