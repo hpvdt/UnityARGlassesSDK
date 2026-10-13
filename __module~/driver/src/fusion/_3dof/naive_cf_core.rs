@@ -37,7 +37,10 @@ pub(super) const BASE_MAG_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.005;
 /// disturbance is the roll/pitch error the acc filter keeps small; the
 /// ratio can therefore be small, tracking the slow geographic drift of
 /// the true dip rather than chasing single noisy readings.
-pub(super) const BASE_DIP_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.02;
+///
+/// `pub(in crate::fusion)` rather than `pub(super)`: both estimators' test
+/// suites pin the blend rate against this constant.
+pub(in crate::fusion) const BASE_DIP_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.02;
 
 /// Minimum norm of the calibrated field's horizontal component, as a
 /// fraction of the unit field, below which the heading update is gated.

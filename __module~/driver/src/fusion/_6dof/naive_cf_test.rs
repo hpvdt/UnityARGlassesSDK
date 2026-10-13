@@ -139,12 +139,18 @@ fn update_mag_initializes_dip_from_first_calibrated_reading() {
         .unwrap();
     assert_eq!(result.dip_sin, None);
     assert_eq!(fusion.state.mag_dip_sin, None);
+    // (the probe also deposits one hint-less sample into the
+    // already-full cache; the tolerance below absorbs the fit's
+    // response)
 
     // the first usable reading initializes the dip state from the
     // field's vertical projection onto the estimated down axis; the
     // reading itself, not the calibrator's record, supplies the value
     fusion.integrate_mag(&dipped_rub, 0);
 
+    // 1 deg basis: the seeded exact-fit calibrates directions to
+    // sub-mrad-scale error — `update_mag_uses_shared_mag_calibrator`
+    // bounds the north residual at 0.001 rad — leaving >15x margin
     let dip_sin = fusion.state.mag_dip_sin.expect("dip state initialized");
     assert!(
         (dip_sin.asin() - dip).abs() < 1.0f32.to_radians(),
@@ -172,16 +178,76 @@ fn update_mag_refines_dip_towards_true_dip() {
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
     fusion.state.mag_dip_sin = Some(0.0);
 
-    for t in 0..800 {
+    // one step moves the state by exactly BASE_DIP_RATIO of the
+    // residual, 0.02 * sin(60 deg) ~ 0.017; the fit's sub-mrad
+    // directional error is scaled down by the same factor, so a
+    // full-replacement or zero-blend update lands far outside the
+    // 1e-3 bound
+    fusion.integrate_mag(&dipped_rub, 0);
+    let first = fusion.state.mag_dip_sin.expect("dip state present");
+    let ratio = crate::fusion::_3dof::naive_cf_core::BASE_DIP_RATIO;
+    assert!(
+        (first - ratio * dip.sin()).abs() < 1.0e-3,
+        "first dip step {}, expected {} * sin(60 deg)",
+        first,
+        ratio
+    );
+
+    for t in 1..800 {
         fusion.integrate_mag(&dipped_rub, t);
     }
 
+    // same 1 deg fit-error basis as the initialization test
     let dip_sin = fusion.state.mag_dip_sin.expect("dip state present");
     assert!(
         (dip_sin.asin() - dip).abs() < 1.0f32.to_radians(),
         "dip_sin={}, expected sin({})",
         dip_sin,
         dip
+    );
+}
+
+#[test]
+fn update_mag_dip_projects_onto_estimated_down_axis() {
+    let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let scale = Vector3::new(3.0, 2.0, 1.5);
+    *fusion.state.mag_calibrator = seeded_calibrator(offset, scale);
+    fusion.state.attitude = UnitQuaternion::from_euler_angles(0.0, 0.5, 0.0);
+    fusion.state.consistency.sources.mag = Default::default();
+
+    // the true device is level with a 60 deg-dipped northern field, but
+    // the estimate is 0.5 rad pitched: the reading (body frame = world
+    // frame) projected onto the ESTIMATED down axis lands ~0.35 away
+    // from the world-frame projection, because the pitched down axis
+    // turns away from the dipping field. The heading step still runs
+    // (the tilted level leaves a large horizontal component) but it
+    // rotates about the estimated down axis, which it cannot move, so
+    // the dip's fixed point stays the estimated-down projection alone
+    let dip = 60.0f32.to_radians();
+    let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
+    let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
+    let expected = (fusion.state.attitude.inverse() * Vector3::z()).dot(&dipped_north);
+
+    // guard the fixture's discriminating power: the two projections
+    // must stay well separated
+    assert!(
+        (expected - dipped_north.z).abs() > 0.1,
+        "fixture tilt too small to distinguish the projections: {expected}"
+    );
+
+    for t in 0..800 {
+        fusion.integrate_mag(&dipped_rub, t);
+    }
+
+    // the anisotropic fixture's fit leaves a measured ~0.006
+    // directional error at this dipped direction (~0.001 at north), so
+    // 0.02 bounds the projection gap with margin while staying >17x
+    // tighter than the ~0.35 separation the test discriminates on
+    let dip_sin = fusion.state.mag_dip_sin.expect("dip state present");
+    assert!(
+        (dip_sin - expected).abs() < 2.0e-2,
+        "dip_sin={dip_sin}, expected the estimated-down projection {expected}"
     );
 }
 
@@ -215,7 +281,8 @@ fn update_mag_skips_heading_near_the_magnetic_poles() {
 
     // the gated azimuth still carries full dip evidence: the dip state
     // refined from the near-vertical reading while the heading stayed
-    // locked
+    // locked (1e-3 basis: the exact-fit calibration's directional
+    // error is sub-mrad, leaving an order of magnitude of margin)
     let dip_sin = fusion.state.mag_dip_sin.expect("dip state present");
     assert!((dip_sin - near_vertical.z).abs() < 1.0e-3);
 }
