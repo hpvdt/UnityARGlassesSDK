@@ -239,9 +239,12 @@ appear in this list. Add a new acronym here in the same change that introduces i
 - **JSON:** JavaScript Object Notation.
 - **KF:** Kalman Filter.
 - **LLM:** Large Language Model.
+- **MAVLink:** Micro Air Vehicle Link, the lightweight UAV messaging protocol (whose estimator-health
+  exports the consistency reporting mirrors).
 - **PRNG:** Pseudo-Random Number Generator.
 - **RMS:** Root Mean Square.
 - **RUB:** Right-Up-Back Android sensor coordinate frame.
+- **RUF:** Right-Up-Forward Unity game-engine coordinate frame.
 - **SGD:** Stochastic Gradient Descent.
 - **SDK:** Software Development Kit.
 - **SPD:** Symmetric Positive-Definite.
