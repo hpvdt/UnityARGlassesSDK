@@ -46,7 +46,7 @@ pub struct NaiveCF {
 
 impl NaiveCF {
     pub fn new(glasses: Box<dyn ARGlasses>) -> Result<Self> {
-        let mut fusion = NaiveCF {
+        let mut fusion = Self {
             state: FusionState::new(glasses),
             prev_gyro: (Vector3::zeros(), 0),
         };
@@ -54,36 +54,34 @@ impl NaiveCF {
         loop {
             //wait for the first non-zero gyro reading
             let next_event = naive_cf_core::next_event(&mut fusion.state);
-            match next_event {
-                GlassesEvent::AccGyro {
-                    accelerometer: _,
-                    gyroscope,
-                    timestamp,
-                } => {
-                    //if gyroscope != Vector3::zeros() {
-                    fusion.prev_gyro = (rub_to_frd(&gyroscope), timestamp);
-                    return Ok(fusion);
-                    //}
-                }
-                _ => {}
+            if let GlassesEvent::AccGyro {
+                gyroscope,
+                timestamp,
+                ..
+            } = next_event
+            {
+                //if gyroscope != Vector3::zeros() {
+                fusion.prev_gyro = (rub_to_frd(&gyroscope), timestamp);
+                return Ok(fusion);
+                //}
             }
         }
     }
 
     /// Dead-reckoning prediction step; see [`naive_cf_core::integrate_gyro`].
-    pub(super) fn integrate_gyro(&mut self, gyro_rub: &Vector3<f32>, t: u64) -> () {
+    pub(super) fn integrate_gyro(&mut self, gyro_rub: &Vector3<f32>, t: u64) {
         naive_cf_core::integrate_gyro(&mut self.state, &mut self.prev_gyro, gyro_rub, t);
     }
 
     /// Gravity-direction state-sensor correction; see
     /// [`naive_cf_core::integrate_acc`].
-    fn integrate_acc(&mut self, acc_rub: &Vector3<f32>, t: u64) -> () {
+    fn integrate_acc(&mut self, acc_rub: &Vector3<f32>, t: u64) {
         naive_cf_core::integrate_acc(&mut self.state, acc_rub, t);
     }
 
     const REGRESS_ROLL_FACTOR: f32 = 0.0;
     #[allow(dead_code)]
-    pub(super) fn integrate_regress_roll(&mut self) -> () {
+    pub(super) fn integrate_regress_roll(&mut self) {
         // Unused, this is only used for testing
         if !Self::REGRESS_ROLL_FACTOR.is_finite() || (Self::REGRESS_ROLL_FACTOR <= 0.0) {
             return;
@@ -96,7 +94,7 @@ impl NaiveCF {
     }
 
     /// Magnetometer heading correction; see [`naive_cf_core::integrate_mag`].
-    pub(super) fn integrate_mag(&mut self, mag_rub: &Vector3<f32>, t: u64) -> () {
+    pub(super) fn integrate_mag(&mut self, mag_rub: &Vector3<f32>, t: u64) {
         naive_cf_core::integrate_mag(&mut self.state, mag_rub, t);
     }
 
@@ -126,7 +124,7 @@ impl Fusion for NaiveCF {
         self.state.consistency
     }
 
-    fn update(&mut self) -> () {
+    fn update(&mut self) {
         let event = naive_cf_core::next_event(&mut self.state);
         match event {
             GlassesEvent::AccGyro {

@@ -28,14 +28,14 @@ impl AhrsCorrection {
     //
     // Quaternion: right hand, ijkw
     /// Correction with the standard forward-right-down (FRD) reference frame.
-    pub fn frd(fusion: Box<dyn Fusion>) -> AhrsCorrection {
-        AhrsCorrection {
+    pub fn frd(fusion: Box<dyn Fusion>) -> Self {
+        Self {
             // defaults to RUF reference frame of Unity game engine
             fusion,
-            neutral_bias: (AhrsCorrection::q_id(), AhrsCorrection::q_id()),
+            neutral_bias: (Self::q_id(), Self::q_id()),
             euler_bias: Vector3::new(0.0, 0.0, 0.0),
             euler_order: Vector3::new(1, 2, 3),
-            quaternion_bias: (AhrsCorrection::q_id(), AhrsCorrection::q_id()),
+            quaternion_bias: (Self::q_id(), Self::q_id()),
             quaternion_order: Vector4::new(1, 2, 3, 4),
         }
     }
@@ -50,17 +50,17 @@ impl AhrsCorrection {
     //
     // Quaternion: left hand, ijkw ?
     /// Correction matching the AirAPI_Windows reference frame, with neutral heading 90° pitch down.
-    pub fn left_fru_down(fusion: Box<dyn Fusion>) -> AhrsCorrection {
-        AhrsCorrection {
+    pub fn left_fru_down(fusion: Box<dyn Fusion>) -> Self {
+        Self {
             // defaults to RUF reference frame of Unity game engine
             fusion,
             // neutral_bias: UnitQuaternion::from_euler_angles(0.0, PI * 0.5, 0.0),
-            neutral_bias: (AhrsCorrection::q_id(), AhrsCorrection::q_id()),
+            neutral_bias: (Self::q_id(), Self::q_id()),
             euler_bias: Vector3::new(0.0, PI * 0.5, 0.0),
             euler_order: Vector3::new(1, 2, -3),
             quaternion_bias: (
                 // UnitQuaternion::from_euler_angles(0.0, PI * 0.5, 0.0),
-                AhrsCorrection::q_id(),
+                Self::q_id(),
                 UnitQuaternion::from_euler_angles(0.0, PI * 0.5, 0.0),
                 // AHRS::q_id(),
             ),
@@ -74,8 +74,7 @@ impl AhrsCorrection {
 
     fn attitude_quaternion_frd(&self) -> UnitQuaternion<f32> {
         let original = self.fusion.attitude_quaternion();
-        let corrected = self.neutral_bias.0 * original * self.neutral_bias.1;
-        corrected
+        self.neutral_bias.0 * original * self.neutral_bias.1
     }
 
     /// Attitude as Euler angles (roll, pitch, yaw) in the configured frame, in radians.
@@ -84,13 +83,11 @@ impl AhrsCorrection {
         // TODO: add roundtrip test
         let frd = Vector3::new(roll, pitch, yaw);
         let biased = frd + self.euler_bias;
-        let ordered = self.euler_order.map(|v| {
+        self.euler_order.map(|v| {
             let index = (v.abs() - 1) as usize;
             let vv = biased.get(index).unwrap();
-            let vv_with_sign = vv * (v.signum() as f32);
-            vv_with_sign
-        });
-        ordered
+            vv * (v.signum() as f32)
+        })
     }
 
     /// Attitude as Euler angles (roll, pitch, yaw) in the configured frame, in degrees.
@@ -118,7 +115,7 @@ impl Fusion for AhrsCorrection {
         self.fusion.consistency()
     }
 
-    fn update(&mut self) -> () {
+    fn update(&mut self) {
         self.fusion.update()
     }
 
@@ -133,14 +130,11 @@ impl Fusion for AhrsCorrection {
         let ordered = self.quaternion_order.map(|v| {
             let index = (v.abs() - 1) as usize;
             let vv = biased.get(index).unwrap();
-            let vv_with_sign = vv * (v.signum() as f32);
-            vv_with_sign
+            vv * (v.signum() as f32)
         });
 
-        let q_ordered = UnitQuaternion::from_quaternion(Quaternion::new(
+        UnitQuaternion::from_quaternion(Quaternion::new(
             ordered[3], ordered[0], ordered[1], ordered[2],
-        ));
-
-        q_ordered
+        ))
     }
 }
