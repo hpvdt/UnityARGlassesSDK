@@ -191,8 +191,8 @@ pub(in crate::fusion) fn integrate_mag(
     // right after boot cannot flip the update's sign; only roll/pitch
     // error propagates, which the acc filter holds small relative to
     // `BASE_DIP_RATIO`'s pull. The first usable reading initializes the
-    // state directly — the sine of the angle between the estimated down
-    // axis and the field — so it exists even while the calibrator's
+    // state directly — the field's vertical projection onto the
+    // estimated down axis — so it exists even while the calibrator's
     // gravity surrogate is unseeded and its `dip_sin` record absent, and
     // it never returns to `None` afterwards.
     let attitude = &state.attitude;

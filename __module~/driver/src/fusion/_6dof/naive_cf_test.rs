@@ -140,10 +140,9 @@ fn update_mag_initializes_dip_from_first_calibrated_reading() {
     assert_eq!(result.dip_sin, None);
     assert_eq!(fusion.state.mag_dip_sin, None);
 
-    // the first usable reading initializes the dip state from the sine
-    // of the angle between the estimated down axis and the calibrated
-    // field; the reading's projection, not the calibrator's record,
-    // supplies the value
+    // the first usable reading initializes the dip state from the
+    // field's vertical projection onto the estimated down axis; the
+    // reading itself, not the calibrator's record, supplies the value
     fusion.integrate_mag(&dipped_rub, 0);
 
     let dip_sin = fusion.state.mag_dip_sin.expect("dip state initialized");

@@ -281,8 +281,8 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 
 - **$\mathrm{ratio}$:** Blend ratio of the naive complementary filter,
   $S = \mathrm{ratio}\, (S^{-} + d\tilde{S}_1\, dt_1) + (1 - \mathrm{ratio})\, \tilde{S}_2$; the state-sensor
-  correction weight $1 - \mathrm{ratio}$ appears in code as `BASE_GRAV_RATIO`, `BASE_MAG_RATIO`, and the
-  `scale` parameter of `naive_cf_core::get_correction`.
+  correction weight $1 - \mathrm{ratio}$ appears in code as `BASE_GRAV_RATIO`, `BASE_MAG_RATIO`,
+  `BASE_DIP_RATIO`, and the `scale` parameter of `naive_cf_core::get_correction`.
 - **$S$:** Current estimated attitude state (unit quaternion) of the naive complementary filter (code field
   `FusionState::attitude`).
 - **$S^{-}$:** Previous estimated attitude state of the naive complementary filter.

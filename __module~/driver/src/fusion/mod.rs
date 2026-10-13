@@ -95,7 +95,9 @@ impl<T: fmt::Display> fmt::Display for NineAxis<T> {
     }
 }
 
-/// Shared fusion algorithm state: glasses device, current attitude, and magnetometer calibration.
+/// Shared fusion algorithm state: glasses device, current attitude,
+/// magnetic dip and linear velocity estimates, and magnetometer
+/// calibration.
 pub struct FusionState {
     /// Glasses device the state reads events from.
     pub glasses: Box<dyn ARGlasses>,
@@ -121,8 +123,8 @@ pub struct FusionState {
     /// estimate.
     ///
     /// `None` until the first usable calibrated magnetometer direction,
-    /// which initializes it from the sine of the angle between the
-    /// estimated down axis and the field; never `None` again afterwards.
+    /// which initializes it from the field's vertical projection onto
+    /// the estimated down axis; never `None` again afterwards.
     pub mag_dip_sin: Option<f32>, /*$\sin\delta$*/
 
     /// Linear velocity estimate in the world FRD frame, in m/s; updated by
