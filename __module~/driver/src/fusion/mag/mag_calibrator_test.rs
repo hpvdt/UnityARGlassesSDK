@@ -14,9 +14,9 @@ use super::{
 impl<const N: usize> MagCalibrator<N> {
     /// Independently recomputes the two terms of the radial online
     /// objective of the current working parameters: the mean square of the
-    /// algebraic residual `phi(u_i)^T theta - 1` over the retained cache in
-    /// normalized cache coordinates, row by row in ascending order, and the
-    /// shape-regularization loss `0.5 * lambda * ||Q - c * I||_F^2`.
+    /// algebraic residual $\phi(u_i)^T \theta - 1$ over the retained cache
+    /// in normalized cache coordinates, row by row in ascending order, and
+    /// the shape-regularization loss $\frac{\lambda}{2} \|Q - c I\|_F^2$.
     /// Deliberately duplicates the accumulation inside `update_quality`
     /// instead of calling it, so the tests cross-check the production path.
     /// Gated on a valid working candidate to mirror the gating in
@@ -972,11 +972,11 @@ fn mag_calibrator_gravity_surrogate_survives_strong_anisotropy() {
         }
     }
 
-    // The unpreconditioned surrogate pinned `g_i^T A m_i` rather than the
-    // exact dip `g_i^T m_i`, so rotated full-SPD soft iron biased the fit
+    // The unpreconditioned surrogate pinned $g_i^T A m_i$ rather than the
+    // exact dip $g_i^T m_i$, so rotated full-SPD soft iron biased the fit
     // toward isotropy: the rotated cases above regressed at every tested
-    // nonzero weight (already +0.3 aggregate probe error at weight `0.003`).
-    // The preconditioned surrogate pins `g_i^T A_w^{-1} A m_i`, which
+    // nonzero weight (already +0.3 aggregate probe error at weight 0.003).
+    // The preconditioned surrogate pins $g_i^T A_w^{-1} A m_i$, which
     // converges to the exact dip as the working correction converges; the
     // regression is gone and every case in this sweep improves instead.
     // The aggregate must therefore be strictly better than the plain fit —
@@ -1041,7 +1041,7 @@ fn mag_calibrator_uses_gravity_by_default() {
 
     // The learned dip projection converges to the exact dip: with the
     // co-rotated hint stream the reported `dip_sin` is the constant
-    // `g^T m` of the world pair, while a gravity-disabled calibrator never
+    // $g^T m$ of the world pair, while a gravity-disabled calibrator never
     // reports one.
     let expected_dip_sin = world_gravity.dot(&world_mag);
     let dip_sin = hinted_result

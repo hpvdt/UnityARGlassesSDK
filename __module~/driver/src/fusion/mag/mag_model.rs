@@ -83,6 +83,9 @@ pub(super) struct MagModel<const N: usize> {
     /// 384 KiB stack.
     pub(super) samples: Box<MagSamples<N>>,
     pub(super) parameters: SVector<f32, CALIBRATION_PARAMETER_COUNT>, /*$\theta$*/
+    // TODO: extract gravity_frame & learned_gravity_projection into a new optional struct called "LearnedGravityState"
+    //  which contains 2 fields, both are none-optional
+    //  the instance here will be optional, indicating that LearnedState are either available or not
     /// Learned scalar $\kappa$ of the gravity surrogate: the projection of
     /// the preconditioned gravity direction $\tilde{g}_i = A_w^{-1} g_i$
     /// onto the ellipsoid normal $n_i = Q u_i + q / 2$ at a retained row,
@@ -90,10 +93,6 @@ pub(super) struct MagModel<const N: usize> {
     /// approximately constant across rows. `None` until seeded once from the
     /// first usable gravity observation, then refined by the optimizer
     /// gradient steps.
-    ///
-    // TODO: extract gravity_frame & learned_gravity_projection into a new optional struct called "LearnedGravityState"
-    //  which contains 2 fields, both are none-optional
-    //  the instance here will be optional, indicating that LearnedState are either available or not
     pub(super) learned_gravity_projection: Option<f32>, /*$\kappa$*/
     /// Gravity preconditioner frame $A_w^{-1}$: the inverse of the current
     /// working soft-iron correction, symmetrized with each eigenvalue clamped
@@ -106,7 +105,7 @@ pub(super) struct MagModel<const N: usize> {
     /// correction $A_w$ matches the true $A$. Identity until the first valid
     /// working candidate refreshes it; refreshed by [`MagModel::update_quality`].
     pub(super) gravity_frame: Matrix3<f32>, /*$A_w^{-1}$*/
-    pub(super) gravity_weight: f32,                                   /*$w_g$*/
+    pub(super) gravity_weight: f32, /*$w_g$*/
     /// Live calibration quality factors of the current working candidate,
     /// reset together with the model minimum and recomputed by
     /// `update_quality` on every publication evaluation; its `dip_sin`
@@ -147,9 +146,10 @@ impl<const N: usize> MagModel<N> {
             * (shape - Matrix3::identity() * SHAPE_PRIOR_SCALE).norm_squared()
     }
 
-    /// Radial feature vector of the normalized ellipsoid equation: the
-    /// quadratic and linear terms whose dot product with `parameters` is the
-    /// algebraic residual `phi^T theta - 1`.
+    /// Radial feature vector $\phi(u)$ of the normalized ellipsoid
+    /// equation: the quadratic and linear terms whose dot product with the
+    /// packed coefficients $\theta$ is the algebraic residual
+    /// $\phi(u)^T \theta - 1$.
     pub(super) fn features(sample: Vector3<f32>) -> SVector<f32, CALIBRATION_PARAMETER_COUNT> {
         SVector::from_row_slice(&[
             sample.x * sample.x,
@@ -197,13 +197,14 @@ impl<const N: usize> MagModel<N> {
         }
     }
 
-    /// Unpacks the packed coefficient vector `parameters` into the shape
-    /// matrix `Q` and the linear coefficient vector `q` of the ellipsoid
-    /// equation `u^T Q u + q^T u = 1`.
+    /// Unpacks the packed coefficient vector $\theta$ into the shape
+    /// matrix $Q$ and the linear coefficient vector $q$ of the ellipsoid
+    /// equation $u^T Q\, u + q^T u = 1$.
     pub(super) fn unpack_ellipsoid_coefficients(
         parameters: &SVector<f32, CALIBRATION_PARAMETER_COUNT>,
     ) -> (Matrix3<f32>, Vector3<f32>) {
-        // Diagonal [Q00, Q11, Q22] followed by packed off-diagonal [Q01, Q02, Q12].
+        // Diagonal $[Q_{00}, Q_{11}, Q_{22}]$ followed by packed
+        // off-diagonal $[Q_{01}, Q_{02}, Q_{12}]$.
         let shape = Matrix3::from_fn(|row, col| {
             let index = if row == col { row } else { row + col + 2 };
             parameters[index]
@@ -425,15 +426,15 @@ impl<const N: usize> MagModel<N> {
     /// evaluated per row.
     ///
     /// Historical note: with the earlier physical residual
-    /// `||A (x_i - b)|| - 1` the Air 1 replay showed block-long post-warmup
+    /// $\|A (x_i - b)\| - 1$ the Air 1 replay showed block-long post-warmup
     /// dips in the reported radial statistic. The physical residual scales
     /// against the optimizer's algebraic residual by the state-dependent
-    /// factor `2 * gamma` and warps outliers differently, so the statistic
+    /// factor $2 \gamma$ and warps outliers differently, so the statistic
     /// could degrade while the optimizer kept descending its own objective.
     /// Recomputing the loss from the algebraic residual
-    /// `phi(u_i)^T theta - 1` — the optimizer's own data term — removed the
-    /// dips: the Air 1 post-warmup radial loss stayed low for thousands of
-    /// consecutive evaluations.
+    /// $\phi(u_i)^T \theta - 1$ — the optimizer's own data term — removed
+    /// the dips: the Air 1 post-warmup radial loss stayed low for
+    /// thousands of consecutive evaluations.
     pub(super) fn update_quality(&mut self) -> Option<CalibrationCandidate> {
         // The dip projection record of the quality is refreshed only by a
         // usable candidate below and retained across unusable ones,
@@ -468,7 +469,7 @@ impl<const N: usize> MagModel<N> {
             None
         };
         // The radial loss accumulates the square of the algebraic
-        // ellipsoid residual `phi(u_i)^T theta - 1` over every retained
+        // ellipsoid residual $\phi(u_i)^T \theta - 1$ over every retained
         // row, in fixed ascending row order so the result is
         // bit-deterministic, and the shape-regularization loss below adds
         // once — exactly the radial online objective $J_r$ the optimizer
@@ -476,7 +477,7 @@ impl<const N: usize> MagModel<N> {
         // per-observation averaged while the regularizer enters once).
         //
         // The gravity loss accumulates the projection residual
-        // `psi(u_i, g_i)^T theta - kappa` and its scale sum over the
+        // $\psi_i^T \theta - \kappa$ and its scale sum over the
         // retained rows carrying a gravity direction, normalized by the
         // projection scale $\sigma_g$ (RMS projection over the same rows,
         // floored below), exactly as in the online objective: the relative

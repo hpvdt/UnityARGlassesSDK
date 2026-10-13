@@ -15,7 +15,7 @@ High-level interface of glasses & state estimation, with the following built-in 
   fit statistic over the retained calibration rows, absent while gravity hints are unused)
 - mag-yaw <= mag horizontal component + roll/pitch (never corrects the level)
 - yaw <= mag-yaw + gyro-gyro (complementary filter)
-  - TODO: add EKF/ESKF (error-state/multiplicative KF, https://arxiv.org/abs/1711.02508)
+  - TODO: add EKF/ESKF (error-state/multiplicative KF, <https://arxiv.org/abs/1711.02508>)
 - linear velocity <= acc (specific force minus gravity, world frame) + zero-velocity regression (`_6dof`)
 
 CAUTION: unlike [[GlassesEvent]], all states & outputs should use FRD reference frame

@@ -23,7 +23,7 @@ pub(super) const MIN_PUBLICATION_STREAK: usize = 55;
 const MIN_MAG_NORM: f32 = 0.4;
 /// Default gravity-surrogate weight. With the preconditioned surrogate, the
 /// projection target converges to the exact magnetic dip
-/// `g_i^T m_i` (see `MagModel::gravity_frame`), so a retained gravity
+/// $g_i^T m_i$ (see `MagModel::gravity_frame`), so a retained gravity
 /// direction should always inform the fit: the rotated-eigenvector
 /// anisotropy sweep that regressed under the unpreconditioned surrogate now
 /// improves in every case
@@ -287,7 +287,7 @@ impl<const N: usize> MagCalibrator<N> {
         Some(row)
     }
 
-    /// Stacks feature rows into a batched `B x 9` matrix.
+    /// Stacks feature rows into a batched $|B| \times 9$ matrix.
     fn feature_matrix(rows: &[SVector<f32, CALIBRATION_PARAMETER_COUNT>]) -> DMatrix<f32> {
         DMatrix::from_fn(rows.len(), CALIBRATION_PARAMETER_COUNT, |row, col| {
             rows[row][col]
