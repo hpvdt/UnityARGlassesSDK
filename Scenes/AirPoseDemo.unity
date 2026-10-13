@@ -737,7 +737,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2287e3bbd4df40f479f67e897063d994, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  readMethod: 2
+  readMethod: 0
   verboseLogging: 1
   mouseSensitivity: 100
 --- !u!1 &998764281

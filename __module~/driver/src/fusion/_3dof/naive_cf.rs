@@ -95,13 +95,8 @@ impl NaiveCF {
     }
 
     /// Magnetometer heading correction; see [`naive_cf_core::integrate_mag`].
-    pub(super) fn integrate_mag(
-        &mut self,
-        mag_rub: &Vector3<f32>,
-        calibration_use_gravity: bool,
-        t: u64,
-    ) -> () {
-        naive_cf_core::integrate_mag(&mut self.state, mag_rub, calibration_use_gravity, t);
+    pub(super) fn integrate_mag(&mut self, mag_rub: &Vector3<f32>, t: u64) -> () {
+        naive_cf_core::integrate_mag(&mut self.state, mag_rub, t);
     }
 
     fn renormalize(&mut self) {
@@ -155,7 +150,7 @@ impl Fusion for NaiveCF {
                 // The heading update uses only the field's horizontal
                 // component, so the magnetometer never corrects the level
                 // estimate the acc filter maintains.
-                self.integrate_mag(&magnetometer, true, timestamp);
+                self.integrate_mag(&magnetometer, timestamp);
                 self.renormalize();
             }
             _ => {

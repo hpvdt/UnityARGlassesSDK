@@ -29,7 +29,7 @@ pub(super) const BASE_GRAV_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.005;
 //const BASE_GRAV_RATIO: f32 = 0.0; //no grav
 // const BASE_GRAV_RATIO: f32 = 1.0; //absolute correction, no gyro
 
-pub(super) const BASE_MAG_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.1;
+pub(super) const BASE_MAG_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.005;
 
 /// Minimum norm of the calibrated field's horizontal component, as a
 /// fraction of the unit field, below which the heading update is gated.
@@ -37,7 +37,7 @@ pub(super) const BASE_MAG_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.1;
 /// (near the magnetic poles) carries almost no azimuth information, so
 /// its horizontal noise would rotate the attitude about the down axis
 /// without actual heading evidence.
-pub(super) const MIN_HEADING_FIELD_NORM: f32 = 0.1;
+pub(super) const MIN_HEADING_MAG_FIELD_NORM: f32 = 0.1;
 
 pub(in crate::fusion) const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; //microseconds
 
@@ -157,17 +157,12 @@ pub(in crate::fusion) fn integrate_acc(
 pub(in crate::fusion) fn integrate_mag(
     state: &mut FusionState,
     mag_rub: &Vector3<f32>,
-    calibration_use_gravity: bool,
     t: u64,
 ) -> () {
     let mag_raw = rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
 
-    let gravity_hint: Option<Vector3<f32>> = if calibration_use_gravity {
-        // gravity direction is already estimated by the acc complementary filter
-        Some(state.attitude.inverse() * G_ACC_FRD)
-    } else {
-        None
-    };
+    // gravity direction is already estimated by the acc complementary filter
+    let gravity_hint: Option<Vector3<f32>> = Some(state.attitude.inverse() * G_ACC_FRD);
     let result = match state
         .mag_calibrator
         .evaluate_correct(mag_raw, gravity_hint, t)
@@ -194,7 +189,7 @@ pub(in crate::fusion) fn integrate_mag(
     let down_body = attitude.inverse() * DOWN_FRD;
     let vertical = mag_normalised.dot(&down_body);
     let mag_horizontal = mag_normalised - vertical * down_body;
-    if mag_horizontal.norm() < MIN_HEADING_FIELD_NORM {
+    if mag_horizontal.norm() < MIN_HEADING_MAG_FIELD_NORM {
         return;
     }
 
