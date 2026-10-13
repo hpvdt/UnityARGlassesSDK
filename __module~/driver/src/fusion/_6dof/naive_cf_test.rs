@@ -118,6 +118,75 @@ fn update_mag_keeps_level_with_dipped_field() {
 }
 
 #[test]
+fn update_mag_initializes_dip_from_first_calibrated_reading() {
+    let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let scale = Vector3::new(3.0, 2.0, 1.5);
+    *fusion.state.mag_calibrator = seeded_calibrator(offset, scale);
+    fusion.state.attitude = UnitQuaternion::identity();
+    fusion.state.consistency.sources.mag = Default::default();
+
+    // the seeded calibrator has never seen a gravity hint, so its
+    // `dip_sin` record is absent before the first integration; the
+    // fusion state's dip estimate must not depend on that record
+    let dip = 60.0f32.to_radians();
+    let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
+    let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
+    let result = fusion
+        .state
+        .mag_calibrator
+        .evaluate_correct(offset + scale.component_mul(&dipped_north), None, 0)
+        .unwrap();
+    assert_eq!(result.dip_sin, None);
+    assert_eq!(fusion.state.mag_dip_sin, None);
+
+    // the first usable reading initializes the dip state from the sine
+    // of the angle between the estimated down axis and the calibrated
+    // field; the reading's projection, not the calibrator's record,
+    // supplies the value
+    fusion.integrate_mag(&dipped_rub, 0);
+
+    let dip_sin = fusion.state.mag_dip_sin.expect("dip state initialized");
+    assert!(
+        (dip_sin.asin() - dip).abs() < 1.0f32.to_radians(),
+        "dip_sin={}, expected sin({})",
+        dip_sin,
+        dip
+    );
+}
+
+#[test]
+fn update_mag_refines_dip_towards_true_dip() {
+    let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let scale = Vector3::new(3.0, 2.0, 1.5);
+    *fusion.state.mag_calibrator = seeded_calibrator(offset, scale);
+    fusion.state.attitude = UnitQuaternion::identity();
+    fusion.state.consistency.sources.mag = Default::default();
+
+    // the dip state starts deliberately wrong (equator dip); the
+    // per-sample complementary refinement must pull it towards the
+    // 60 deg true dip the calibrated readings carry, converging by the
+    // (1 - BASE_DIP_RATIO)^n factor of the blend
+    let dip = 60.0f32.to_radians();
+    let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
+    let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
+    fusion.state.mag_dip_sin = Some(0.0);
+
+    for t in 0..800 {
+        fusion.integrate_mag(&dipped_rub, t);
+    }
+
+    let dip_sin = fusion.state.mag_dip_sin.expect("dip state present");
+    assert!(
+        (dip_sin.asin() - dip).abs() < 1.0f32.to_radians(),
+        "dip_sin={}, expected sin({})",
+        dip_sin,
+        dip
+    );
+}
+
+#[test]
 fn update_mag_skips_heading_near_the_magnetic_poles() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     let offset = Vector3::new(11.0, -7.0, 5.0);
@@ -144,6 +213,12 @@ fn update_mag_skips_heading_near_the_magnetic_poles() {
         "attitude moved from {initial:?} to {:?}",
         fusion.state.attitude
     );
+
+    // the gated azimuth still carries full dip evidence: the dip state
+    // refined from the near-vertical reading while the heading stayed
+    // locked
+    let dip_sin = fusion.state.mag_dip_sin.expect("dip state present");
+    assert!((dip_sin - near_vertical.z).abs() < 1.0e-3);
 }
 
 /// The 6-DoF estimator must level a stationary device exactly like the 3-DoF
