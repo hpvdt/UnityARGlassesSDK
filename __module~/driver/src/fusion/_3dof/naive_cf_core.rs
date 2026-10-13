@@ -122,11 +122,7 @@ pub(in crate::fusion) fn get_correction(
 /// sensor disabled) carry no usable direction and are skipped. The applied
 /// correction is recorded into the acc consistency source, reconstructed
 /// from the post-blend angle through the blend ratio.
-pub(in crate::fusion) fn integrate_acc(
-    state: &mut FusionState,
-    acc_rub: &Vector3<f32>,
-    _t: u64,
-) {
+pub(in crate::fusion) fn integrate_acc(state: &mut FusionState, acc_rub: &Vector3<f32>, _t: u64) {
     let acc = rub_to_frd(acc_rub);
 
     if acc.norm() < 1.0 {
@@ -165,11 +161,7 @@ pub(in crate::fusion) fn integrate_acc(
 /// reading, independently of the calibrator's `dip_sin` fit statistic),
 /// while the attitude update compares only the field's horizontal
 /// component against estimated north (leaving level to the acc filter).
-pub(in crate::fusion) fn integrate_mag(
-    state: &mut FusionState,
-    mag_rub: &Vector3<f32>,
-    t: u64,
-) {
+pub(in crate::fusion) fn integrate_mag(state: &mut FusionState, mag_rub: &Vector3<f32>, t: u64) {
     let mag_raw = rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
 
     // gravity direction is already estimated by the acc complementary filter

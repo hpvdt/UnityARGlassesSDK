@@ -300,6 +300,43 @@ fn update_mag_dip_projects_onto_estimated_down_axis() {
     );
 }
 
+/// Open issue: the attitude correction must compare the full calibrated
+/// field against the dipped reference built from `mag_dip_sin`, instead
+/// of the horizontal component alone; until then the level the acc
+/// filter maintains is provably invariant under the mag correction.
+#[test]
+#[ignore = "open issue: the attitude correction ignores the learned dip state"]
+fn update_mag_correction_tips_level_through_learned_dip() {
+    let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
+    let offset = Vector3::new(11.0, -7.0, 5.0);
+    let scale = Vector3::new(3.0, 2.0, 1.5);
+    *fusion.state.mag_calibrator = seeded_calibrator(offset, scale);
+    fusion.state.consistency.sources.mag = Default::default();
+
+    // level true device with a 60 deg-dipped northern field, estimate
+    // pitched 0.5 rad, dip state seeded to the true field: the
+    // full-field correction must pull the level toward truth, which a
+    // horizontal-only correction can never do (its rotation axis is
+    // the estimated down axis, which leaves the tilt untouched)
+    let dip = 60.0f32.to_radians();
+    fusion.state.attitude = UnitQuaternion::from_euler_angles(0.0, 0.5, 0.0);
+    fusion.state.mag_dip_sin = Some(dip.sin());
+    let tilt_before = ((fusion.state.attitude.inverse() * Vector3::z()) - Vector3::z()).norm();
+    let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
+    let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
+
+    fusion.integrate_mag(&dipped_rub, 0);
+
+    // one step moves the tilt by BASE_MAG_RATIO of the ~0.5 rad
+    // reference/reading gap (>= 2e-3); the horizontal-only partition
+    // leaves it exactly unchanged
+    let tilt_after = ((fusion.state.attitude.inverse() * Vector3::z()) - Vector3::z()).norm();
+    assert!(
+        tilt_after < tilt_before - 1.0e-3,
+        "level tilt unchanged at {tilt_after} (before {tilt_before}): the correction never used the dip"
+    );
+}
+
 #[test]
 fn update_mag_keeps_dip_across_unusable_readings() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
