@@ -262,7 +262,7 @@ fn update_mag_skips_heading_near_the_magnetic_poles() {
     fusion.state.consistency.sources.mag = Default::default();
 
     // field ~0.6 deg off vertical: horizontal norm 0.01 is below
-    // MIN_HEADING_FIELD_NORM, so its azimuth is gated as pure noise
+    // MIN_HEADING_MAG_FIELD_NORM, so its azimuth is gated as pure noise
     let near_vertical = Vector3::new(0.01, 0.0, (1.0_f32 - 1.0e-4).sqrt());
     fusion.state.attitude =
         UnitQuaternion::from_euler_angles(0.0, 0.0, std::f32::consts::FRAC_PI_2);
@@ -511,7 +511,7 @@ fn fusion_trait_exposes_linear_velocity() {
 
     assert_eq!(Fusion::linear_velocity(&fusion), velocity);
 
-    // the wrapper forwards the world-FRDM state untouched: its attitude
+    // the wrapper forwards the world-FRD state untouched: its attitude
     // output conventions do not apply to linear velocity
     let ahrs = AhrsCorrection::frd(Box::new(fusion));
     assert_eq!(Fusion::linear_velocity(&ahrs), velocity);
