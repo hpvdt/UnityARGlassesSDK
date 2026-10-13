@@ -1,7 +1,5 @@
-/*
-magnetometer calibration: sample retention, online ellipsoid fitting, and live
-quality assessment for the fusion pipeline
-*/
+//! Magnetometer calibration: sample retention, online ellipsoid fitting, and live
+//! quality assessment for the fusion pipeline.
 mod bad_mag_cause;
 pub use bad_mag_cause::{BadCalibration, BadMagCause, BadReading};
 
