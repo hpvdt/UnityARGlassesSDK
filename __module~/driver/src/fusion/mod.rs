@@ -9,8 +9,10 @@ high level interface of glasses & state estimation, with the following built-in 
       (both `_3dof` and `_6dof` inherit the assumption; the `_6dof` velocity channel models the translational
       component separately, but a single acc reading cannot correct attitude and acceleration jointly)
 - gyro-yaw <= gyro (integrate over time)
-- mag-dip <= the calibrator's learned dip projection $\kappa / (\gamma r)$, reported as `dip_sin` (state of
-  the calibrator's gravity surrogate, not of the attitude estimate)
+- mag-dip <= two independent estimates: the fusion state's `mag_dip_sin`, initialized from the first
+  usable calibrated reading and refined per sample from the field's vertical component measured through
+  the acc-maintained level, and the calibrator's `dip_sin` ($\kappa / (\gamma r)$, the gravity-surrogate
+  fit statistic over the retained calibration rows, absent while gravity hints are unused)
 - mag-yaw <= mag horizontal component + roll/pitch (never corrects the level)
 - yaw <= mag-yaw + gyro-gyro (complementary filter)
   - TODO: add EKF/ESKF (error-state/multiplicatory KF, https://arxiv.org/abs/1711.02508)
@@ -102,6 +104,27 @@ pub struct FusionState {
     /// Latest attitude estimate as a unit quaternion.
     pub attitude: UnitQuaternion<f32>, /*$S$*/
 
+    /// Sine of the estimated magnetic dip (inclination) angle $\delta$,
+    /// positive when the magnetic field points below the horizon, so its
+    /// FRD reference direction is $(\cos\delta, 0, \sin\delta)$. Magnetic
+    /// north only coincides with horizontal north at the magnetic equator,
+    /// so the dip is part of the state.
+    ///
+    /// This is the attitude pipeline's own per-sample estimate, independent
+    /// of the calibrator's [`CalibrationQuality::dip_sin`]: that record is
+    /// the gravity-surrogate fit statistic over the retained calibration
+    /// rows and is absent while gravity hints are unused, while this state
+    /// converges against the calibrated magnetometer reading measured
+    /// through the acc-maintained level. The complementary refinement
+    /// leaves the attitude untouched — the heading correction uses only
+    /// the field's horizontal component — so the dip never tips the level
+    /// estimate.
+    ///
+    /// `None` until the first usable calibrated magnetometer direction,
+    /// which initializes it from the sine of the angle between the
+    /// estimated down axis and the field; never `None` again afterwards.
+    pub mag_dip_sin: Option<f32>, /*$\sin\delta$*/
+
     /// Linear velocity estimate in the world FRD frame, in m/s; updated by
     /// the `_6dof` estimator's auto-regressed dead reckoning, left at zero
     /// by the `_3dof` estimator.
@@ -125,12 +148,13 @@ pub struct FusionState {
 }
 
 impl FusionState {
-    /// Creates a shared fusion state with identity attitude and empty
-    /// calibration state.
+    /// Creates a shared fusion state with identity attitude, unseeded
+    /// magnetic dip, and empty calibration state.
     pub fn new(glasses: Box<dyn ARGlasses>) -> Self {
         Self {
             glasses,
             attitude: UnitQuaternion::identity(),
+            mag_dip_sin: None,
             linear_velocity: Vector3::zeros(),
             consistency: Consistency::attitude_defaults(),
             mag_calibrator: Box::new(MagCalibrator::new()),

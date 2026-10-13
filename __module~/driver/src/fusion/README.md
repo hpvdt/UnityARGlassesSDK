@@ -194,9 +194,11 @@ confidence, which is the coverage factor alone, clamped to $[0, 1]$. `Calibratio
 `dip_sin`: the learned dip projection $\kappa / (\gamma r)$ of the latest usable working candidate (`None`
 while gravity is disabled or the projection $\kappa$ unseeded, retained across later unusable candidates),
 expressed in the caller's gravity-hint sign convention. The whole record reaches fusion callers through
-`MagCalibrationResult`'s `Deref`; the dip estimate lives only there rather than in the fusion state, and the
-heading update of `NaiveCF` uses only the field's horizontal component, so the magnetometer never corrects
-the level.
+`MagCalibrationResult`'s `Deref`. It serves the calibration objective — the gravity-surrogate fit statistic
+over the retained rows — while `FusionState::mag_dip_sin` is the attitude pipeline's independent dip state,
+initialized from the first usable calibrated reading and refined per sample from the field's vertical
+component through the acc-maintained level. Neither estimate enters the heading update of `NaiveCF`, which
+uses only the field's horizontal component, so the magnetometer never corrects the level.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
 change only after 55 valid updates at confidence at least `0.0125`, including while the cache is partial. Confidence in

@@ -288,11 +288,14 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$S^{-}$:** Previous estimated attitude state of the naive complementary filter.
 - **$dt_1$:** Time elapsed since the last rate-sensor sample (code variable `d_t1`).
 - **$\delta$:** Magnetic dip (inclination) angle of the FRD reference field $(\cos\delta, 0, \sin\delta)$,
-  positive below the horizon; estimated by the calibrator's gravity surrogate as the projection
-  $g^T m = -\sin\delta$ (in the accelerometer-hint convention) and reported as $\kappa / (\gamma r)$
-  (code field `dip_sin` of `CalibrationQuality`). It is not part of the fusion state: the magnetometer
-  heading correction uses only the field's horizontal component, so the field's vertical split never
-  tips the level estimate.
+  positive below the horizon. Tracked as $\sin\delta$ in two independent estimates: the fusion state's own
+  per-sample estimate (code field `mag_dip_sin` of `FusionState`), initialized from the first usable
+  calibrated reading and refined per magnetometer sample from the field's vertical component measured
+  through the acc-maintained level; and the calibrator's gravity-surrogate projection
+  $g^T m = -\sin\delta$ (in the accelerometer-hint convention), reported as $\kappa / (\gamma r)$
+  (code field `dip_sin` of `CalibrationQuality`) and absent while gravity hints are unused. Neither
+  estimate enters the magnetometer heading correction, which uses only the field's horizontal component,
+  so the field's vertical split never tips the level estimate.
 
 #### 6-DoF Linear Velocity
 

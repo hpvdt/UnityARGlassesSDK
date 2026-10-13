@@ -3,13 +3,13 @@
 //!
 //! The estimators built on [`FusionState`] run the same attitude machinery:
 //! gyroscope dead-reckoning, the gravity-direction correction helper, the
-//! magnetometer heading correction, attitude renormalization, and the
-//! blocking device event loop. This module holds that machinery once,
-//! together with the shared blend-ratio and frame constants. Each estimator
-//! owns its state struct and calls these free functions with `&mut
-//! FusionState` plus its own previous-sample bookkeeping (e.g. `prev_gyro`),
-//! so estimators delegate through thin methods without sharing a struct
-//! layout.
+//! magnetometer heading correction, the dip-state refinement, attitude
+//! renormalization, and the blocking device event loop. This module holds
+//! that machinery once, together with the shared blend-ratio and frame
+//! constants. Each estimator owns its state struct and calls these free
+//! functions with `&mut FusionState` plus its own previous-sample
+//! bookkeeping (e.g. `prev_gyro`), so estimators delegate through thin
+//! methods without sharing a struct layout.
 //!
 //! All estimated state follows the FRD world-frame conventions of the fusion
 //! module; raw sensor arguments stay in the device's RUB frame and are
@@ -30,6 +30,14 @@ pub(super) const BASE_GRAV_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.005;
 // const BASE_GRAV_RATIO: f32 = 1.0; //absolute correction, no gyro
 
 pub(super) const BASE_MAG_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.005;
+
+/// Blend ratio $1 - \mathrm{ratio}$ of the per-sample dip-state update. The
+/// vertical field component feeds [`FusionState::mag_dip_sin`] instead of
+/// the attitude, so its innovation is yaw-invariant and the remaining
+/// disturbance is the roll/pitch error the acc filter keeps small; the
+/// ratio can therefore be small, tracking the slow geographic drift of
+/// the true dip rather than chasing single noisy readings.
+pub(super) const BASE_DIP_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.02;
 
 /// Minimum norm of the calibrated field's horizontal component, as a
 /// fraction of the unit field, below which the heading update is gated.
@@ -148,12 +156,12 @@ pub(in crate::fusion) fn integrate_acc(
 /// reading is never corrected towards a purely horizontal north. The
 /// single vector observation cannot fix attitude and dip jointly — a
 /// level (roll/pitch) error and a dip error produce the same vertical
-/// residual — so the attitude update compares only the field's
-/// horizontal component against estimated north (leaving level to the
-/// acc filter), while the dip itself is estimated by the calibrator's
-/// gravity surrogate and reported as the result's `dip_sin` record
-/// ($\kappa / (\gamma r) = g^T m = -\sin\delta$ with the acc-style
-/// hint passed here).
+/// residual — so the update is partitioned: the field's vertical
+/// component, measured through the acc-maintained level, refines only
+/// [`FusionState::mag_dip_sin`] (initialized from the first usable
+/// reading, independently of the calibrator's `dip_sin` fit statistic),
+/// while the attitude update compares only the field's horizontal
+/// component against estimated north (leaving level to the acc filter).
 pub(in crate::fusion) fn integrate_mag(
     state: &mut FusionState,
     mag_rub: &Vector3<f32>,
@@ -176,6 +184,26 @@ pub(in crate::fusion) fn integrate_mag(
         None => return,
     };
 
+    // Dip step: the vertical component of the calibrated field, measured
+    // through the level the acc filter maintains, is the dip evidence the
+    // fusion state owns. It is invariant to heading error (a rotation
+    // about the down axis preserves it), so even the large yaw transient
+    // right after boot cannot flip the update's sign; only roll/pitch
+    // error propagates, which the acc filter holds small relative to
+    // `BASE_DIP_RATIO`'s pull. The first usable reading initializes the
+    // state directly — the sine of the angle between the estimated down
+    // axis and the field — so it exists even while the calibrator's
+    // gravity surrogate is unseeded and its `dip_sin` record absent, and
+    // it never returns to `None` afterwards.
+    let attitude = &state.attitude;
+    let down_body = attitude.inverse() * DOWN_FRD;
+    let vertical = mag_normalised.dot(&down_body);
+    let dip_sin = match state.mag_dip_sin {
+        Some(previous) => previous + BASE_DIP_RATIO * (vertical - previous),
+        None => vertical,
+    };
+    state.mag_dip_sin = Some(dip_sin.clamp(-1.0, 1.0));
+
     // Heading step: only the field's horizontal component (a pure
     // north reading) is compared against estimated north. Both vectors
     // are perpendicular to estimated down — north as a world
@@ -185,9 +213,6 @@ pub(in crate::fusion) fn integrate_mag(
     // field's dip. The vertical component is invariant to heading
     // error (a rotation about the down axis preserves it) and carries
     // exactly the dip the heading correction must stay blind to.
-    let attitude = &state.attitude;
-    let down_body = attitude.inverse() * DOWN_FRD;
-    let vertical = mag_normalised.dot(&down_body);
     let mag_horizontal = mag_normalised - vertical * down_body;
     if mag_horizontal.norm() < MIN_HEADING_MAG_FIELD_NORM {
         return;

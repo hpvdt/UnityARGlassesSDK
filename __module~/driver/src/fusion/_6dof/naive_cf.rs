@@ -241,9 +241,11 @@ impl Fusion for NaiveCF {
                 // preconditioned gravity surrogate anchored to the exact
                 // magnetic dip, whose learned projection
                 // $\kappa / (\gamma r)$ the result reports as `dip_sin`.
-                // The heading update uses only the field's horizontal
-                // component, so the magnetometer never corrects the level
-                // estimate the acc filter maintains.
+                // The field's vertical component refines the fusion
+                // state's own `mag_dip_sin` estimate, and the heading
+                // update uses only the field's horizontal component, so
+                // the magnetometer never corrects the level estimate the
+                // acc filter maintains.
                 self.integrate_mag(&magnetometer, timestamp);
                 self.renormalize();
             }
