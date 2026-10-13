@@ -152,7 +152,8 @@ fn update_mag_gravity_hint_reports_dip() {
     // the fusion state's own estimate carries the same dip in the
     // opposite sign convention: positive below the horizon, against
     // the acc-style hint's up-pointing projection (tolerance basis:
-    // the fit-error bound documented in
+    // the seeded fit's down-axis error at this dipped direction, as
+    // measured in
     // `update_mag_initializes_dip_from_first_calibrated_reading`)
     let mag_dip_sin = fusion.state.mag_dip_sin.expect("dip state present");
     assert!(
@@ -194,9 +195,10 @@ fn update_mag_initializes_dip_from_first_calibrated_reading() {
     // reading itself, not the calibrator's record, supplies the value
     fusion.integrate_mag(&dipped_rub, 0);
 
-    // 1 deg basis: the seeded exact-fit calibrates directions to
-    // sub-mrad-scale error — `update_mag_uses_shared_mag_calibrator`
-    // bounds the north residual at 0.001 rad — leaving >15x margin
+    // 1 deg basis: the seeded anisotropic fit leaves a measured ~0.85
+    // deg asin gap at this 60 deg-dipped direction (its ~15 mrad
+    // directional error carries a ~7.5 mrad down-axis component), so
+    // the bound holds with ~1.2x margin on the measured fixture
     let dip_sin = fusion.state.mag_dip_sin.expect("dip state initialized");
     assert!(
         (dip_sin.asin() - dip).abs() < 1.0f32.to_radians(),
@@ -225,10 +227,10 @@ fn update_mag_refines_dip_towards_true_dip() {
     fusion.state.mag_dip_sin = Some(0.0);
 
     // one step moves the state by exactly BASE_DIP_RATIO of the
-    // residual, 0.02 * sin(60 deg) ~ 0.017; the fit's sub-mrad
-    // directional error is scaled down by the same factor, so a
-    // full-replacement or zero-blend update lands far outside the
-    // 1e-3 bound
+    // residual, 0.02 * sin(60 deg) ~ 0.017; the fit's ~7.5 mrad
+    // down-axis error is scaled down by the same factor to ~1.4e-4
+    // (measured 1.4e-4), so a full-replacement or zero-blend update
+    // lands far outside the 1e-3 bound
     fusion.integrate_mag(&dipped_rub, 0);
     let first = fusion.state.mag_dip_sin.expect("dip state present");
     let ratio = crate::fusion::_3dof::naive_cf_core::BASE_DIP_RATIO;
@@ -286,10 +288,11 @@ fn update_mag_dip_projects_onto_estimated_down_axis() {
         fusion.integrate_mag(&dipped_rub, t);
     }
 
-    // the anisotropic fixture's fit leaves a measured ~0.006
-    // directional error at this dipped direction (~0.001 at north), so
-    // 0.02 bounds the projection gap with margin while staying >17x
-    // tighter than the ~0.35 separation the test discriminates on
+    // the anisotropic fixture's fit leaves a measured ~0.006 converged
+    // gap at this dipped direction (a mid-run transient ~0.012 while
+    // the hinted samples flood the cache), so 0.02 bounds it with
+    // margin while staying >17x tighter than the ~0.35 separation the
+    // test discriminates on
     let dip_sin = fusion.state.mag_dip_sin.expect("dip state present");
     assert!(
         (dip_sin - expected).abs() < 2.0e-2,
