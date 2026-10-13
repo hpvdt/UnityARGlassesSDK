@@ -65,7 +65,7 @@ fn update_mag_uses_shared_mag_calibrator() {
     let raw_north = offset + scale.component_mul(&calibrated_north);
     let north_rub = frd_to_rub(raw_north);
 
-    fusion.integrate_mag(&north_rub, true, 0);
+    fusion.integrate_mag(&north_rub, 0);
 
     assert!(fusion.state.consistency.sources.mag.innovation < 0.001);
     assert!(fusion.state.attitude.angle() < 0.001);
@@ -103,7 +103,7 @@ fn update_mag_keeps_level_with_dipped_field() {
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
 
     for t in 0..800 {
-        fusion.integrate_mag(&dipped_rub, false, t);
+        fusion.integrate_mag(&dipped_rub, t);
         assert_level(&fusion.state.attitude, 1.0e-3);
     }
 }
@@ -127,7 +127,7 @@ fn update_mag_gravity_hint_reports_dip() {
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
 
     for t in 0..800 {
-        fusion.integrate_mag(&dipped_rub, true, t);
+        fusion.integrate_mag(&dipped_rub, t);
         assert_level(&fusion.state.attitude, 1.0e-3);
     }
 
@@ -172,7 +172,7 @@ fn update_mag_keeps_level_under_yaw_error() {
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&body_dipped));
 
     for t in 0..800 {
-        fusion.integrate_mag(&dipped_rub, false, t);
+        fusion.integrate_mag(&dipped_rub, t);
         assert_level(&fusion.state.attitude, 1.0e-3);
     }
 }
@@ -194,7 +194,7 @@ fn update_mag_skips_heading_near_the_magnetic_poles() {
     let near_vertical_rub = frd_to_rub(offset + scale.component_mul(&near_vertical));
 
     for t in 0..800 {
-        fusion.integrate_mag(&near_vertical_rub, true, t);
+        fusion.integrate_mag(&near_vertical_rub, t);
     }
 
     // no heading innovation was ever recorded and the yaw offset survives
@@ -216,7 +216,7 @@ fn update_mag_discards_ill_conditioned_calibration() {
     let raw_mag = Vector3::new(10.0005, -4.9990, 3.00025);
     let mag_rub = frd_to_rub(raw_mag);
 
-    fusion.integrate_mag(&mag_rub, true, 0);
+    fusion.integrate_mag(&mag_rub, 0);
 
     assert_eq!(fusion.state.consistency.sources.mag.innovation, 0.0);
     assert_eq!(fusion.state.attitude.angle(), 0.0);
