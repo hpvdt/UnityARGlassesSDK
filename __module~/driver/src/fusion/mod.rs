@@ -13,7 +13,7 @@ High-level interface of glasses & state estimation, with the following built-in 
   usable calibrated reading and refined per sample from the field's vertical component measured through
   the acc-maintained level, and the calibrator's `dip_sin` ($\kappa / (\gamma r)$, the gravity-surrogate
   fit statistic over the retained calibration rows, absent while gravity hints are unused)
-- mag-yaw <= mag horizontal component + roll/pitch (never corrects the level)
+- mag-yaw & level <= mag full field vs the dipped reference built from `mag_dip_sin` (heading and level jointly; acc keeps the level observable)
 - yaw <= mag-yaw + gyro-gyro (complementary filter)
   - TODO: add EKF/ESKF (error-state/multiplicative KF, <https://arxiv.org/abs/1711.02508>)
 - linear velocity <= acc (specific force minus gravity, world frame) + zero-velocity regression (`_6dof`)
@@ -117,10 +117,13 @@ pub struct FusionState {
     /// the gravity-surrogate fit statistic over the retained calibration
     /// rows and is absent while gravity hints are unused, while this state
     /// converges against the calibrated magnetometer reading measured
-    /// through the acc-maintained level. The complementary refinement
-    /// leaves the attitude untouched — the heading correction uses only
-    /// the field's horizontal component — so the dip never tips the level
-    /// estimate.
+    /// through the acc-maintained level. The attitude correction consumes
+    /// this state directly: it compares the full calibrated field against
+    /// the dipped reference $(\cos\delta, 0, \sin\delta)$ built from it, so
+    /// the dip feeds both the heading and the level — a level error and a
+    /// dip error produce the same vertical residual, so the refinement and
+    /// the correction converge to a self-consistent (level, dip) pair,
+    /// with the acc filter keeping the level observable in production.
     ///
     /// `None` until the first usable calibrated magnetometer direction,
     /// which initializes it from the field's vertical projection onto

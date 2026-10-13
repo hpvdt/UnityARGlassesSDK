@@ -197,8 +197,11 @@ expressed in the caller's gravity-hint sign convention. The whole record reaches
 `MagCalibrationResult`'s `Deref`. It serves the calibration objective — the gravity-surrogate fit statistic
 over the retained rows — while `FusionState::mag_dip_sin` is the attitude pipeline's independent dip state,
 initialized from the first usable calibrated reading and refined per sample from the field's vertical
-component through the acc-maintained level. Neither estimate enters the heading update of `NaiveCF`, which
-uses only the field's horizontal component, so the magnetometer never corrects the level.
+component through the acc-maintained level. The attitude update compares the full calibrated field against
+the dipped reference $(\cos\delta, 0, \sin\delta)$ built from `FusionState::mag_dip_sin`, so the
+magnetometer corrects the heading and, jointly with the acc filter, the level; a level error and a dip
+error produce the same vertical residual, so the dip refinement and the correction converge to a
+self-consistent (level, dip) pair, with the acc filter keeping the level observable in production.
 
 Working coefficients and published correction parameters are separate. The hard-iron offset and soft-iron correction
 change only after 55 valid updates at confidence at least `0.0125`, including while the cache is partial. Confidence in

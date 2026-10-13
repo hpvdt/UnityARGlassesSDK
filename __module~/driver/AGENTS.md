@@ -298,9 +298,13 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
   calibrated reading and refined per magnetometer sample from the field's vertical component measured
   through the acc-maintained level; and the calibrator's gravity-surrogate projection
   $g^T m = -\sin\delta$ (in the accelerometer-hint convention), reported as $\kappa / (\gamma r)$
-  (code field `dip_sin` of `CalibrationQuality`) and absent while gravity hints are unused. Neither
-  estimate enters the magnetometer heading correction, which uses only the field's horizontal component,
-  so the field's vertical split never tips the level estimate.
+  (code field `dip_sin` of `CalibrationQuality`) and absent while gravity hints are unused. The fusion
+  state's estimate feeds the magnetometer attitude correction, which compares the full calibrated field
+  against the dipped reference $(\cos\delta, 0, \sin\delta)$ built from it (code locals `dip_sin` and
+  `dip_cos` of `naive_cf_core::integrate_mag`), so the correction carries the heading and the level
+  evidence jointly; a level error and a dip error produce the same vertical residual, so the dip refinement
+  and the correction converge to a self-consistent (level, dip) pair, with the acc filter keeping the level
+  observable in production.
 
 #### 6-DoF Linear Velocity
 

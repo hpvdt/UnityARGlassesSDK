@@ -21,9 +21,9 @@ Most glasses have acc & grav/acc readings in 1 bundle, but I prefer not using th
 update them independently.
 
 The attitude pipeline shared with the other naive complementary-filter
-estimators (gyroscope dead-reckoning, magnetometer heading correction,
-the gravity-direction correction helper, and the device event loop)
-lives in [`crate::fusion::_3dof::naive_cf_core`]. This estimator keeps its
+estimators (gyroscope dead-reckoning, the magnetometer attitude
+correction, the gravity-direction correction helper, and the device event
+loop) lives in [`crate::fusion::_3dof::naive_cf_core`]. This estimator keeps its
 3-DoF-specific gravity correction, which reads the accelerometer as a
 pure gravity-direction sensor.
 
@@ -93,7 +93,8 @@ impl NaiveCF {
         self.state.attitude = UnitQuaternion::from_euler_angles(corrected_roll, pitch, yaw);
     }
 
-    /// Magnetometer heading correction; see [`naive_cf_core::integrate_mag`].
+    /// Magnetometer attitude correction; see
+    /// [`naive_cf_core::integrate_mag`].
     pub(super) fn integrate_mag(&mut self, mag_rub: &Vector3<f32>, t: u64) {
         naive_cf_core::integrate_mag(&mut self.state, mag_rub, t);
     }
@@ -147,10 +148,11 @@ impl Fusion for NaiveCF {
                 // magnetic dip, whose learned projection
                 // $\kappa / (\gamma r)$ the result reports as `dip_sin`.
                 // The field's vertical component refines the fusion
-                // state's own `mag_dip_sin` estimate, and the heading
-                // update uses only the field's horizontal component, so
-                // the magnetometer never corrects the level estimate the
-                // acc filter maintains.
+                // state's own `mag_dip_sin` estimate, and the attitude
+                // update compares the full field against the dipped
+                // reference built from it, so the magnetometer corrects
+                // the heading and, jointly with the acc filter, the
+                // level.
                 self.integrate_mag(&magnetometer, timestamp);
                 self.renormalize();
             }

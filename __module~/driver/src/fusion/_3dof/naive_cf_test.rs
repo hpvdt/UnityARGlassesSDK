@@ -73,8 +73,8 @@ fn update_mag_uses_shared_mag_calibrator() {
 
 /// Asserts the attitude keeps a level down axis within `tolerance`. A yaw
 /// (heading) component passes by construction — only roll/pitch tilts are
-/// checked, which is exactly the error the dip partition must prevent the
-/// magnetometer from ever producing.
+/// checked, which the learned-dip reference must bound to the calibration
+/// fit residual instead of letting the field's dip leak into the level.
 #[track_caller]
 fn assert_level(attitude: &UnitQuaternion<f32>, tolerance: f32) {
     let down_body = attitude.inverse() * Vector3::z();
@@ -94,17 +94,18 @@ fn update_mag_keeps_level_with_dipped_field() {
     fusion.state.consistency.sources.mag = Default::default();
 
     // field dips 60 deg below the horizon and its horizontal component is
-    // true north; the heading step may only ever yaw towards the azimuthal
-    // residual of the fitted calibration, so the level must stay exact
-    // throughout, where a full-vector correction would instead tip the
-    // attitude by the unmodeled 60 deg dip
+    // true north; the full-field correction carries level evidence too, but
+    // the learned dip cancels the reference's 60 deg dip component, so the
+    // level tilt stays bounded by the calibration fit residual (measured
+    // 1.4e-3) — where a horizontal-only reference would instead tip the
+    // attitude by the full unmodeled 60 deg dip
     let dip = 60.0f32.to_radians();
     let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
 
     for t in 0..800 {
         fusion.integrate_mag(&dipped_rub, t);
-        assert_level(&fusion.state.attitude, 1.0e-3);
+        assert_level(&fusion.state.attitude, 5.0e-3);
     }
 }
 
@@ -120,15 +121,15 @@ fn update_mag_gravity_hint_reports_dip() {
     // field dips 60 deg below the horizon with true-north horizontal
     // component, and the acc-style gravity hint (pointing up) is passed on
     // every integration: the calibrator's gravity surrogate learns the
-    // projection $g^T m = -\sin\delta$ while the attitude level must stay
-    // exact throughout
+    // projection $g^T m = -\sin\delta$ while the attitude level stays
+    // within the calibration fit residual throughout
     let dip = 60.0f32.to_radians();
     let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
 
     for t in 0..800 {
         fusion.integrate_mag(&dipped_rub, t);
-        assert_level(&fusion.state.attitude, 1.0e-3);
+        assert_level(&fusion.state.attitude, 5.0e-3);
     }
 
     // the reported projection is bias-limited by the working fit's
@@ -209,7 +210,7 @@ fn update_mag_initializes_dip_from_first_calibrated_reading() {
 }
 
 #[test]
-fn update_mag_refines_dip_towards_true_dip() {
+fn update_mag_refines_dip_to_self_consistent_pair() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let scale = Vector3::new(3.0, 2.0, 1.5);
@@ -218,9 +219,12 @@ fn update_mag_refines_dip_towards_true_dip() {
     fusion.state.consistency.sources.mag = Default::default();
 
     // the dip state starts deliberately wrong (equator dip); the
-    // per-sample complementary refinement must pull it towards the
-    // 60 deg true dip the calibrated readings carry, converging by the
-    // $\mathrm{ratio}^n$ factor of the blend (`BASE_DIP_RATIO` per step)
+    // per-sample complementary refinement pulls it towards the 60 deg
+    // true dip the calibrated readings carry — but in this acc-less
+    // loop nothing holds the level, so the seeded dip error trades
+    // against the level along the level-dip unobservable direction and
+    // the (level, dip) pair converges self-consistently (the acc filter
+    // pins the level in production, letting the dip reach the true dip)
     let dip = 60.0f32.to_radians();
     let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
@@ -246,13 +250,27 @@ fn update_mag_refines_dip_towards_true_dip() {
         fusion.integrate_mag(&dipped_rub, t);
     }
 
-    // same 1 deg fit-error basis as the initialization test
+    // the refinement keeps running: the dip climbs past half the seed
+    // error (measured 46.5 deg against the 30 deg bound), so a state
+    // that stops refining after the first step fails here
     let dip_sin = fusion.state.mag_dip_sin.expect("dip state present");
     assert!(
-        (dip_sin.asin() - dip).abs() < 1.0f32.to_radians(),
-        "dip_sin={}, expected sin({})",
-        dip_sin,
-        dip
+        dip_sin.asin() > 0.5 * dip,
+        "dip stalled at {} deg",
+        dip_sin.asin().to_degrees()
+    );
+
+    // the pair lands on the self-consistent manifold: the level tip
+    // and the missing dip sum to the true dip (measured 59.6 deg; the
+    // ~0.4 deg shortfall is the fixture's fit residual, so the same
+    // 1 deg basis as the initialization test bounds it)
+    let (_, pitch, _) = fusion.state.attitude.euler_angles();
+    assert!(
+        (pitch + dip_sin.asin() - dip).abs() < 1.0f32.to_radians(),
+        "level/dip pair drifted off the manifold: pitch {} deg + dip {} deg vs {} deg",
+        pitch.to_degrees(),
+        dip_sin.asin().to_degrees(),
+        dip.to_degrees()
     );
 }
 
@@ -269,10 +287,11 @@ fn update_mag_dip_projects_onto_estimated_down_axis() {
     // the estimate is 0.5 rad pitched: the reading (body frame = world
     // frame) projected onto the ESTIMATED down axis lands ~0.35 away
     // from the world-frame projection, because the pitched down axis
-    // turns away from the dipping field. The heading step still runs
-    // (the tilted level leaves a large horizontal component) but it
-    // rotates about the estimated down axis, which it cannot move, so
-    // the dip's fixed point stays the estimated-down projection alone
+    // turns away from the dipping field. The dip state initializes from
+    // that same projection, so the (level, dip) pair starts exactly on
+    // its self-consistent manifold and the full-field correction
+    // vanishes there: the dip's fixed point stays the estimated-down
+    // projection alone
     let dip = 60.0f32.to_radians();
     let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
@@ -301,12 +320,12 @@ fn update_mag_dip_projects_onto_estimated_down_axis() {
     );
 }
 
-/// Open issue: the attitude correction must compare the full calibrated
-/// field against the dipped reference built from `mag_dip_sin`, instead
-/// of the horizontal component alone; until then the level the acc
-/// filter maintains is provably invariant under the mag correction.
+/// Pins the learned-dip wiring of the attitude correction: the
+/// full-field comparison against the dipped reference must pull the
+/// level toward truth, which the pre-wiring horizontal-only partition
+/// could never do (its rotation axis was the estimated down axis,
+/// leaving the tilt untouched).
 #[test]
-#[ignore = "open issue: the attitude correction ignores the learned dip state"]
 fn update_mag_correction_tips_level_through_learned_dip() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     let offset = Vector3::new(11.0, -7.0, 5.0);
@@ -372,13 +391,17 @@ fn update_mag_keeps_level_under_yaw_error() {
     fusion.state.attitude = UnitQuaternion::identity();
     fusion.state.consistency.sources.mag = Default::default();
 
-    // field dips 30 deg below the horizon; initial yaw is 180 deg off, so
-    // the horizontal component of the body reading points at body -x: the
-    // measured and estimated north agree and the attitude estimate sits at
-    // a (wrong-heading) fixed point of the heading step — the very case
-    // where a vertical or meridional-tangent correction would tip the
-    // level
+    // field dips 30 deg below the horizon; initial yaw is 180 deg off and
+    // the reading is crafted through the estimate's own body frame, so
+    // the measured and estimated dipped fields agree exactly: the
+    // 180-deg-yawed estimate sits at a (wrong-heading) fixed point of
+    // the full-field correction too, which no single vector observation
+    // can break — the correction vanishes there (up to the fit
+    // residual), so the yaw stays locked where a correction that
+    // trusted a horizontal-only or vertical-only reference would
+    // rotate the attitude by the reference/reading gap
     fusion.state.attitude = UnitQuaternion::from_euler_angles(0.0, 0.0, std::f32::consts::PI);
+    let initial = fusion.state.attitude;
     let dip = 30.0f32.to_radians();
     let world_dipped = Vector3::new(dip.cos(), 0.0, dip.sin());
     let body_dipped = fusion.state.attitude.inverse() * world_dipped;
@@ -386,42 +409,68 @@ fn update_mag_keeps_level_under_yaw_error() {
 
     for t in 0..800 {
         fusion.integrate_mag(&dipped_rub, t);
-        assert_level(&fusion.state.attitude, 1.0e-3);
+        assert_level(&fusion.state.attitude, 5.0e-3);
     }
+
+    // the total motion stays at the fit-residual scale (measured 2.0e-3),
+    // so the wrong heading survives: 2e-3 of motion cannot hide any yaw
+    // resolution
+    assert!(
+        (fusion.state.attitude * initial.inverse()).angle() < 5.0e-3,
+        "attitude moved from the 180-deg ambiguity fixed point: {:?} -> {:?}",
+        initial,
+        fusion.state.attitude
+    );
 }
 
 #[test]
-fn update_mag_skips_heading_near_the_magnetic_poles() {
+fn update_mag_locks_yaw_near_the_magnetic_poles() {
     let mut fusion = NaiveCF::new(Box::new(crate::sim::SimMotion::new())).unwrap();
     let offset = Vector3::new(11.0, -7.0, 5.0);
     let scale = Vector3::new(3.0, 2.0, 1.5);
     *fusion.state.mag_calibrator = seeded_calibrator(offset, scale);
     fusion.state.consistency.sources.mag = Default::default();
 
-    // field ~0.6 deg off vertical: horizontal norm 0.01 is below
-    // MIN_HEADING_MAG_FIELD_NORM, so its azimuth is gated as pure noise
+    // field ~0.6 deg off vertical: its 0.01 horizontal norm makes the
+    // azimuth pure noise, but the full-field correction has no explicit
+    // pole gate anymore — the near-vertical reference self-gates the
+    // heading content to that vanishing horizontal component while the
+    // tilt evidence still levels
     let near_vertical = Vector3::new(0.01, 0.0, (1.0_f32 - 1.0e-4).sqrt());
     fusion.state.attitude =
         UnitQuaternion::from_euler_angles(0.0, 0.0, std::f32::consts::FRAC_PI_2);
-    let initial = fusion.state.attitude;
     let near_vertical_rub = frd_to_rub(offset + scale.component_mul(&near_vertical));
 
+    let mut max_innovation = 0.0f32;
     for t in 0..800 {
         fusion.integrate_mag(&near_vertical_rub, t);
+        max_innovation = max_innovation.max(fusion.state.consistency.sources.mag.innovation);
     }
 
-    // no heading innovation was ever recorded and the yaw offset survives
-    assert_eq!(fusion.state.consistency.sources.mag.innovation, 0.0);
+    // the yaw stays locked: the residual drift is second order in the
+    // tilt evidence (measured 1.0e-4), where an azimuth-trusting
+    // correction would spin the heading toward the noise
+    let (_, _, yaw) = fusion.state.attitude.euler_angles();
     assert!(
-        (fusion.state.attitude * initial.inverse()).angle() < 1.0e-6,
-        "attitude moved from {initial:?} to {:?}",
-        fusion.state.attitude
+        (yaw - std::f32::consts::FRAC_PI_2).abs() < 1.0e-3,
+        "yaw drifted to {yaw}"
     );
 
-    // the gated azimuth still carries full dip evidence: the dip state
-    // refined from the near-vertical reading while the heading stayed
-    // locked (1e-3 basis: the exact-fit calibration's directional
-    // error is sub-mrad, leaving an order of magnitude of margin)
+    // the level absorbs the tilt evidence: the correction tips by the
+    // reference/reading gap (measured 0.012, about twice the field's
+    // 0.01 horizontal norm plus the fit residual), where a
+    // horizontal-only reference would instead rotate by the ~1.55 rad
+    // north/vertical mismatch
+    assert_level(&fusion.state.attitude, 0.05);
+    assert!(
+        max_innovation < 0.05,
+        "pole innovation {max_innovation} exceeds the tilt evidence"
+    );
+
+    // the near-vertical reading still carries full dip evidence: the dip
+    // state refined from it while the heading stayed locked (measured
+    // 3e-5 against the exact-fit calibration's sub-mrad directional
+    // error)
     let dip_sin = fusion.state.mag_dip_sin.expect("dip state present");
     assert!((dip_sin - near_vertical.z).abs() < 1.0e-3);
 }

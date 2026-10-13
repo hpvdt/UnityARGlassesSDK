@@ -190,7 +190,8 @@ impl NaiveCF {
         self.prev_acc = (a_world, t);
     }
 
-    /// Magnetometer heading correction; see [`naive_cf_core::integrate_mag`].
+    /// Magnetometer attitude correction; see
+    /// [`naive_cf_core::integrate_mag`].
     pub(super) fn integrate_mag(&mut self, mag_rub: &Vector3<f32>, t: u64) {
         naive_cf_core::integrate_mag(&mut self.state, mag_rub, t);
     }
@@ -243,10 +244,11 @@ impl Fusion for NaiveCF {
                 // magnetic dip, whose learned projection
                 // $\kappa / (\gamma r)$ the result reports as `dip_sin`.
                 // The field's vertical component refines the fusion
-                // state's own `mag_dip_sin` estimate, and the heading
-                // update uses only the field's horizontal component, so
-                // the magnetometer never corrects the level estimate the
-                // acc filter maintains.
+                // state's own `mag_dip_sin` estimate, and the attitude
+                // update compares the full field against the dipped
+                // reference built from it, so the magnetometer corrects
+                // the heading and, jointly with the acc filter, the
+                // level.
                 self.integrate_mag(&magnetometer, timestamp);
                 self.renormalize();
             }

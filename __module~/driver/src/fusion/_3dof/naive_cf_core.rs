@@ -3,7 +3,7 @@ Shared attitude pipeline of the naive complementary filters.
 
 The estimators built on [`FusionState`] run the same attitude machinery:
 gyroscope dead-reckoning, the gravity-direction correction helper, the
-magnetometer heading correction, the dip-state refinement, attitude
+magnetometer attitude correction, the dip-state refinement, attitude
 renormalization, and the blocking device event loop. This module holds
 that machinery once, together with the shared blend-ratio and frame
 constants. Each estimator owns its state struct and calls these free
@@ -29,26 +29,30 @@ pub(super) const BASE_GRAV_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.005;
 //const BASE_GRAV_RATIO: f32 = 0.0; //no grav
 // const BASE_GRAV_RATIO: f32 = 1.0; //absolute correction, no gyro
 
+// TODO: retune_ratios_after_dip_wiring
+// `BASE_MAG_RATIO` and `BASE_DIP_RATIO` were tuned for the partitioned
+// update whose attitude correction was a pure heading rotation. Wiring
+// the learned dip into the attitude correction (see `integrate_mag`)
+// made the level absorb the calibrator's directional error while the
+// mag calibration converges, tripling the gentle-motion SimMotion
+// profile's mean velocity error over the scored window (whole-window
+// mean measured 0.29 -> 0.92 m/s; the cold-start half reaches 1.54 m/s
+// and the settled second half returns to the 0.29 m/s floor). Re-tune
+// the two ratios jointly, trading heading lock time against the
+// cold-start level transient.
 pub(super) const BASE_MAG_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.005;
 
 /// Blend ratio $1 - \mathrm{ratio}$ of the per-sample dip-state update. The
-/// vertical field component feeds [`FusionState::mag_dip_sin`] instead of
-/// the attitude, so its innovation is yaw-invariant and the remaining
-/// disturbance is the roll/pitch error the acc filter keeps small; the
-/// ratio can therefore be small, tracking the slow geographic drift of
-/// the true dip rather than chasing single noisy readings.
+/// vertical field component feeds [`FusionState::mag_dip_sin`] rather
+/// than the attitude correction directly, so its innovation is
+/// yaw-invariant and the remaining disturbance is the roll/pitch error
+/// the acc filter keeps small; the ratio can therefore be small,
+/// tracking the slow geographic drift of the true dip rather than
+/// chasing single noisy readings.
 ///
 /// `pub(in crate::fusion)` rather than `pub(super)`: both estimators' test
 /// suites pin the blend rate against this constant.
 pub(in crate::fusion) const BASE_DIP_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.02;
-
-/// Minimum norm of the calibrated field's horizontal component, as a
-/// fraction of the unit field, below which the heading update is gated.
-/// A field closer than $\arcsin(0.1) \approx 5.7^{\circ}$ to vertical
-/// (near the magnetic poles) carries almost no azimuth information, so
-/// its horizontal noise would rotate the attitude about the down axis
-/// without actual heading evidence.
-pub(super) const MIN_HEADING_MAG_FIELD_NORM: f32 = 0.1;
 
 pub(in crate::fusion) const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; // microseconds
 
@@ -56,9 +60,6 @@ pub(in crate::fusion) const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.
 pub(in crate::fusion) const G_ACC_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.81);
 /// Unit down axis of the FRD world frame.
 pub(super) const DOWN_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, 1.0);
-/// Unit magnetic-north axis of the FRD world frame; the field's
-/// horizontal component points here whatever the dip angle.
-pub(super) const NORTH_FRD: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
 
 /// Reads until the next valid event. Blocks.
 pub(in crate::fusion) fn next_event(state: &mut FusionState) -> GlassesEvent {
@@ -149,18 +150,23 @@ pub(in crate::fusion) fn integrate_acc(state: &mut FusionState, acc_rub: &Vector
     }
 }
 
-/// Magnetometer update with the magnetic dip $\delta$ partitioned out
-/// of the heading correction: the FRD reference field is
-/// $(\cos\delta, 0, \sin\delta)$, positive below the horizon, so the
-/// reading is never corrected towards a purely horizontal north. The
-/// single vector observation cannot fix attitude and dip jointly — a
-/// level (roll/pitch) error and a dip error produce the same vertical
-/// residual — so the update is partitioned: the field's vertical
-/// component, measured through the acc-maintained level, refines only
+/// Magnetometer update, with the magnetic dip $\delta$ wired into the
+/// attitude correction: the FRD reference field is
+/// $(\cos\delta, 0, \sin\delta)$, positive below the horizon, built from
+/// the learned dip state, so the reading is never corrected towards a
+/// purely horizontal north. The single vector observation cannot fix
+/// attitude and dip jointly — a level (roll/pitch) error and a dip error
+/// produce the same vertical residual — so the update is partitioned in
+/// time, not in direction: the field's vertical component, measured
+/// through the acc-maintained level, refines only
 /// [`FusionState::mag_dip_sin`] (initialized from the first usable
 /// reading, independently of the calibrator's `dip_sin` fit statistic),
-/// while the attitude update compares only the field's horizontal
-/// component against estimated north (leaving level to the acc filter).
+/// while the attitude update compares the full calibrated field against
+/// the dipped reference, feeding both the heading and the level. Both
+/// steps share the same gating condition — the calibrator's usable
+/// calibrated direction — so a field near the magnetic poles, whose
+/// azimuth is noise, self-gates its heading content to the vanishing
+/// horizontal component while its dip evidence still moves the level.
 pub(in crate::fusion) fn integrate_mag(state: &mut FusionState, mag_rub: &Vector3<f32>, t: u64) {
     let mag_raw = rub_to_frd(mag_rub); // reading is always muT (microTesla) pointing to north
 
@@ -196,46 +202,28 @@ pub(in crate::fusion) fn integrate_mag(state: &mut FusionState, mag_rub: &Vector
     let dip_sin = match state.mag_dip_sin {
         Some(previous) => previous + BASE_DIP_RATIO * (vertical - previous),
         None => vertical,
-    };
-    state.mag_dip_sin = Some(dip_sin.clamp(-1.0, 1.0));
-
-    // TODO: attitude_correction_ignores_learned_dip
-    // The heading correction compares only the horizontal component
-    // `mag_horizontal` of the calibrated field `mag_normalised`
-    // against the estimated north `estimated_north`, so the learned
-    // dip state `FusionState::mag_dip_sin` never enters the attitude
-    // update: the correction is a pure rotation about the estimated
-    // down axis `down_body` and cannot move the level the acc filter
-    // maintains.
-    // Recommended fix: compare the full calibrated field against the
-    // dipped FRD reference field `(cos(delta), 0, sin(delta))` built
-    // from `mag_dip_sin`, dropping the horizontal projection and its
-    // azimuth gate `MIN_HEADING_MAG_FIELD_NORM`, so the correction
-    // also feeds the level. CAUTION: a level (roll/pitch) error and a
-    // dip error produce the same vertical residual, so the dip
-    // refinement and the full-field correction converge to a
-    // self-consistent (level, dip) pair rather than the true level
-    // alone — the acc filter keeps the level observable in production,
-    // and `BASE_MAG_RATIO` and `BASE_DIP_RATIO` must be re-tuned
-    // jointly when lifting the partition.
-
-    // Heading step: only the field's horizontal component (a pure
-    // north reading) is compared against estimated north. Both vectors
-    // are perpendicular to estimated down — north as a world
-    // horizontal, the measured component by construction — so the
-    // correction is a pure heading rotation about the down axis and
-    // can never tip the level the acc filter maintains, whatever the
-    // field's dip. The vertical component is invariant to heading
-    // error (a rotation about the down axis preserves it) and carries
-    // exactly the dip the heading correction must stay blind to.
-    let mag_horizontal = mag_normalised - vertical * down_body;
-    if mag_horizontal.norm() < MIN_HEADING_MAG_FIELD_NORM {
-        return;
     }
+    .clamp(-1.0, 1.0);
+    state.mag_dip_sin = Some(dip_sin);
 
-    let estimated_north = attitude.inverse() * NORTH_FRD;
+    // Attitude step: the full calibrated field `mag_normalised` is
+    // compared against the estimated dipped reference field
+    // `estimated_field` = the world reference $(\cos\delta, 0, \sin\delta)$
+    // of the just-refined `dip_sin`, rotated into the body frame, so the
+    // correction carries both the heading and the level evidence the
+    // reading holds. CAUTION: a level (roll/pitch) error and a dip error
+    // produce the same vertical residual, so this correction and the dip
+    // refinement above converge to a self-consistent (level, dip) pair
+    // rather than the true level alone — the acc filter keeps the level
+    // observable in production, and `BASE_MAG_RATIO` and `BASE_DIP_RATIO`
+    // must be re-tuned jointly. The reference's unit norm makes the
+    // near-pole azimuth gate unnecessary: a field approaching the
+    // vertical carries its heading evidence in a vanishing horizontal
+    // component, while its (now usable) dip evidence still levels.
+    let dip_cos = (1.0 - dip_sin * dip_sin).sqrt();
+    let estimated_field = attitude.inverse() * Vector3::new(dip_cos, 0.0, dip_sin);
     let correction_opt =
-        UnitQuaternion::scaled_rotation_between(&estimated_north, &mag_horizontal, BASE_MAG_RATIO);
+        UnitQuaternion::scaled_rotation_between(&estimated_field, &mag_normalised, BASE_MAG_RATIO);
 
     match correction_opt {
         Some(correction_inv) => {
