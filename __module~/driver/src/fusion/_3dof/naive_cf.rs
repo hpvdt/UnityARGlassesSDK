@@ -164,6 +164,7 @@ impl Fusion for NaiveCF {
 }
 
 impl dyn Fusion {
+    // TODO : move into impl NaiveCF
     /// Create a 3-DoF fusion instance over whichever glasses are connected, or the SimMotion device.
     pub fn any_cf_3dof() -> crate::Result<Box<dyn Fusion>> {
         let glasses = any_glasses_or_dummy()?;

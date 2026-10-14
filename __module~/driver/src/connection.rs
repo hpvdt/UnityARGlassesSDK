@@ -22,12 +22,12 @@ static CONNECTION: Mutex<Option<Connection>> = Mutex::new(None);
 impl Connection {
     const ORDERING: Ordering = Ordering::SeqCst;
 
-    fn get() -> crate::Result<MutexGuard<'static, Option<Connection>>> {
+    fn get_or_new() -> crate::Result<MutexGuard<'static, Option<Connection>>> {
         let mut existing = Self::get_locked()?;
 
         if existing.is_none() {
-            let fusion = <dyn Fusion>::any_cf_3dof()?;
-            // let ahrs = AHRS::frd(fusion);
+            let fusion = <dyn Fusion>::any_cf_3dof()?; // TODO: this should be the default value of the argument of this function & `start` function
+                                                       // let ahrs = AHRS::frd(fusion);
             let ahrs = AhrsCorrection::left_fru_down(fusion);
 
             *existing = Some(Connection {
@@ -88,7 +88,7 @@ impl Connection {
 
     /// Lazily create the singleton connection and start its background fusion thread.
     pub fn start() -> crate::Result<()> {
-        let mut existing = Self::get()?;
+        let mut existing = Self::get_or_new()?;
         let conn = existing.as_mut().ok_or(crate::Error::ConcurrencyError)?;
 
         conn._start()
@@ -120,7 +120,7 @@ impl Connection {
     /// Pause the fusion thread, run `f` on the latest [`AhrsCorrection`], and resume updates.
     pub fn read_fusion<T>(f: &dyn Fn(&mut AhrsCorrection) -> T) -> crate::Result<T> {
         let (_fusion, _interrupting) = {
-            let existing = Self::get()?;
+            let existing = Self::get_or_new()?;
 
             let conn = existing.as_ref().ok_or(crate::Error::ConcurrencyError)?;
             (conn.fusion.clone(), conn.interrupting.clone())

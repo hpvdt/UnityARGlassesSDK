@@ -260,6 +260,7 @@ impl Fusion for NaiveCF {
 }
 
 impl dyn Fusion {
+    // TODO: move into impl NaiveCF
     /// Create a 6-DoF fusion instance (attitude plus world-frame linear
     /// velocity) over whichever glasses are connected, or the SimMotion
     /// device: the 6-DoF counterpart of `<dyn Fusion>::any_cf_3dof`.
