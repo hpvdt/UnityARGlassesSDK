@@ -60,12 +60,14 @@ These rules apply to Rust files in this crate.
 
 ### Documentation and Comments
 
-- Give public items useful `///` doc comments. Use `/*!` & `*/` for module-level behavior
-  or constraints.
+- Give public items useful doc comments (using one-line `///` or block `/** ... */`).
+  Use `/*! ... */` for module-level behavior or constraints.
 - Document observable behavior: units, blocking behavior, feature or platform
   availability, error conditions, panics, and safety requirements when relevant.
 - Explain non-obvious constraints, magic values, numerical thresholds, and
   invariants. Do not add comments that merely restate the code.
+- Empirical conditions in tests shouldb be expressed as assertion or log directly,
+  not comments
 - Keep existing copyright, attribution, and source notes intact when editing a
   file.
 
