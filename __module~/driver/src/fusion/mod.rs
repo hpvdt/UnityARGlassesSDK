@@ -33,7 +33,8 @@ use crate::ARGlasses;
 pub mod _3dof;
 pub use _3dof::AhrsCorrection;
 
-mod _6dof;
+/// 6-DoF fusion: attitude plus world-frame linear velocity estimation.
+pub mod _6dof;
 mod mag;
 pub use mag::{
     BadCalibration, BadMagCause, BadReading, CalibrationQuality, MagCalibrationResult,
