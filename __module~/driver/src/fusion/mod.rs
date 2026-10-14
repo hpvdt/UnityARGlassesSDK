@@ -29,7 +29,8 @@ use nalgebra::{UnitQuaternion, Vector3};
 
 use crate::ARGlasses;
 
-mod _3dof;
+/// 3-DoF attitude fusion: complementary-filter estimators with reference-frame correction.
+pub mod _3dof;
 pub use _3dof::AhrsCorrection;
 
 mod _6dof;

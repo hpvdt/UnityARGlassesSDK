@@ -23,7 +23,7 @@ update them independently.
 The attitude pipeline shared with the other naive complementary-filter
 estimators (gyroscope dead-reckoning, the magnetometer attitude
 correction, the gravity-direction correction helper, and the device event
-loop) lives in [`crate::fusion::_3dof::naive_cf_core`]. This estimator keeps its
+loop) lives in `naive_cf_core`. This estimator keeps its
 3-DoF-specific gravity correction, which reads the accelerometer as a
 pure gravity-direction sensor.
 
@@ -39,12 +39,20 @@ use crate::{any_glasses_or_dummy, ARGlasses, Error, GlassesEvent};
 
 type Result<T> = std::result::Result<T, Error>;
 
+/// Naive 3-DoF complementary-filter attitude estimator.
+///
+/// The attitude comes from gyroscope dead-reckoning corrected by the
+/// accelerometer (level) and the magnetometer (heading and level); the
+/// linear velocity stays at zero.
 pub struct NaiveCF {
+    /// Shared fusion state: device, attitude, dip, and calibration.
     pub state: FusionState,
-    pub prev_gyro: (Vector3<f32>, u64), //FRD
+    /// Previous gyroscope reading in FRD with its device timestamp in microseconds.
+    pub prev_gyro: (Vector3<f32>, u64),
 }
 
 impl NaiveCF {
+    /// Create a fusion instance over `glasses`, waiting for the first gyroscope reading.
     pub fn new(glasses: Box<dyn ARGlasses>) -> Result<Self> {
         let mut fusion = Self {
             state: FusionState::new(glasses),
@@ -66,6 +74,12 @@ impl NaiveCF {
                 //}
             }
         }
+    }
+
+    /// Create a 3-DoF fusion instance over whichever glasses are connected, or the SimMotion device.
+    pub fn any() -> Result<Box<dyn Fusion>> {
+        let glasses = any_glasses_or_dummy()?;
+        Ok(Box::new(Self::new(glasses)?))
     }
 
     /// Dead-reckoning prediction step; see [`naive_cf_core::integrate_gyro`].
@@ -160,14 +174,5 @@ impl Fusion for NaiveCF {
                 // TODO: handle KeyPress signal
             }
         }
-    }
-}
-
-impl dyn Fusion {
-    // TODO : move into impl NaiveCF
-    /// Create a 3-DoF fusion instance over whichever glasses are connected, or the SimMotion device.
-    pub fn any_cf_3dof() -> crate::Result<Box<dyn Fusion>> {
-        let glasses = any_glasses_or_dummy()?;
-        Ok(Box::new(NaiveCF::new(glasses)?))
     }
 }

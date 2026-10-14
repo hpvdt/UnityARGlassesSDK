@@ -2,10 +2,11 @@
 // This file is part of ar-drivers-rs
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
+use ar_drivers::fusion::_3dof::naive_cf::NaiveCF;
 use ar_drivers::fusion::{AhrsCorrection, Fusion};
 
 fn main() {
-    let mut fusion = <dyn Fusion>::any_cf_3dof().unwrap(); // Declare conn as mutable
+    let mut fusion = NaiveCF::any().unwrap(); // Declare conn as mutable
     let serial = fusion.glasses().serial().unwrap();
 
     println!("Got glasses, serial={}", serial);

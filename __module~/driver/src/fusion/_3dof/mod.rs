@@ -1,4 +1,5 @@
-pub(super) mod naive_cf;
+/// Naive 3-DoF complementary-filter attitude estimator.
+pub mod naive_cf;
 
 pub(in crate::fusion) mod naive_cf_core;
 #[cfg(test)]

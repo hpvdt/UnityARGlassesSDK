@@ -1,3 +1,4 @@
+use crate::fusion::_3dof::naive_cf::NaiveCF;
 use crate::fusion::{AhrsCorrection, Fusion};
 use crate::{rw, rw_write, Rw};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,8 +27,8 @@ impl Connection {
         let mut existing = Self::get_locked()?;
 
         if existing.is_none() {
-            let fusion = <dyn Fusion>::any_cf_3dof()?; // TODO: this should be the default value of the argument of this function & `start` function
-                                                       // let ahrs = AHRS::frd(fusion);
+            let fusion = NaiveCF::any()?; // TODO: this should be the default value of the argument of this function & `start` function
+                                          // let ahrs = AHRS::frd(fusion);
             let ahrs = AhrsCorrection::left_fru_down(fusion);
 
             *existing = Some(Connection {
