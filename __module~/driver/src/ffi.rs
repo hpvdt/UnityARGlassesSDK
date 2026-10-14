@@ -6,7 +6,7 @@ use crate::fusion::Fusion;
 /// Start the singleton connection and its background fusion thread. Always returns 1.
 #[no_mangle]
 pub extern "C" fn StartConnection() -> i32 {
-    Connection::start().unwrap();
+    Connection::start(None).unwrap();
     // println!("connection started");
     1
     // .map_or_else(|_| 1, |_| 0)

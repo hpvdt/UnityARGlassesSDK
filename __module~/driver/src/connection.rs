@@ -23,12 +23,22 @@ static CONNECTION: Mutex<Option<Connection>> = Mutex::new(None);
 impl Connection {
     const ORDERING: Ordering = Ordering::SeqCst;
 
-    fn get_or_new() -> crate::Result<MutexGuard<'static, Option<Connection>>> {
+    /// Return the singleton connection, creating it on first use.
+    ///
+    /// When `fusion` is `None`, creation falls back to the default 3-DoF
+    /// fusion over whichever glasses are connected; when the connection
+    /// already exists, `fusion` is ignored.
+    fn get_or_new(
+        fusion: Option<Box<dyn Fusion>>,
+    ) -> crate::Result<MutexGuard<'static, Option<Connection>>> {
         let mut existing = Self::get_locked()?;
 
         if existing.is_none() {
-            let fusion = NaiveCF::any()?; // TODO: this should be the default value of the argument of this function & `start` function
-                                          // let ahrs = AHRS::frd(fusion);
+            let fusion = match fusion {
+                Some(fusion) => fusion,
+                None => NaiveCF::any()?,
+            };
+            // let ahrs = AHRS::frd(fusion);
             let ahrs = AhrsCorrection::left_fru_down(fusion);
 
             *existing = Some(Connection {
@@ -88,8 +98,12 @@ impl Connection {
     }
 
     /// Lazily create the singleton connection and start its background fusion thread.
-    pub fn start() -> crate::Result<()> {
-        let mut existing = Self::get_or_new()?;
+    ///
+    /// When `fusion` is `None`, the default 3-DoF fusion over whichever
+    /// glasses are connected is used; when the connection already exists,
+    /// `fusion` is ignored.
+    pub fn start(fusion: Option<Box<dyn Fusion>>) -> crate::Result<()> {
+        let mut existing = Self::get_or_new(fusion)?;
         let conn = existing.as_mut().ok_or(crate::Error::ConcurrencyError)?;
 
         conn._start()
@@ -121,7 +135,7 @@ impl Connection {
     /// Pause the fusion thread, run `f` on the latest [`AhrsCorrection`], and resume updates.
     pub fn read_fusion<T>(f: &dyn Fn(&mut AhrsCorrection) -> T) -> crate::Result<T> {
         let (_fusion, _interrupting) = {
-            let existing = Self::get_or_new()?;
+            let existing = Self::get_or_new(None)?;
 
             let conn = existing.as_ref().ok_or(crate::Error::ConcurrencyError)?;
             (conn.fusion.clone(), conn.interrupting.clone())
@@ -142,3 +156,7 @@ impl Drop for Connection {
         let _ = self._stop();
     }
 }
+
+#[cfg(test)]
+#[path = "connection_tests.rs"]
+mod connection_tests;
