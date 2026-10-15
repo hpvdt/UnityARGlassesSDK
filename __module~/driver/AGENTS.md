@@ -234,6 +234,8 @@ appear in this list. Add a new acronym here in the same change that introduces i
 - **ESKF:** Error-State Kalman Filter.
 - **FFI:** Foreign Function Interface.
 - **FRD:** Forward-Right-Down aerospace coordinate frame.
+- **FRU:** Forward-Right-Up left-handed component order of the Unity-facing C ABI's attitude and
+  linear-velocity presentation.
 - **HID:** Human Interface Device.
 - **IEEE:** Institute of Electrical and Electronics Engineers.
 - **IMU:** Inertial Measurement Unit.
@@ -322,7 +324,9 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 - **$v$:** Estimated linear velocity in the world FRD frame, in m/s, updated by the `_6dof` estimator
   through the zero-velocity-regularized dead reckoning $v = e^{-dt_v/\tau_v}\,(v^{-} + a\, dt_v)$ and left
   at zero by the `_3dof` one (code field `FusionState::linear_velocity`, exposed through
-  `Fusion::linear_velocity` and forwarded unchanged by `AhrsCorrection`); $3 \times 1$.
+  `Fusion::linear_velocity`, forwarded unchanged by `AhrsCorrection`, and exported by the C ABI's
+  `GetLinearVelocity` in the left-handed FRU component order — the down component negated into up);
+  $3 \times 1$.
 - **$\tau_v$:** Time constant of the velocity auto-regression to zero, in seconds (code constant
   `NaiveCF::VELOCITY_REGRESS_TAU_S` of `_6dof`); the regression carries the zero-velocity
   pseudo-observation $\tilde{S}_2 = 0$ with the rate-independent blend $1 - \mathrm{ratio} = 1 -

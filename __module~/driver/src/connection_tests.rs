@@ -1,3 +1,5 @@
+use serial_test::serial;
+
 use super::Connection;
 use crate::fusion::_3dof::naive_cf::NaiveCF;
 use crate::fusion::Fusion;
@@ -14,6 +16,7 @@ fn serial() -> String {
 /// The `start` fusion argument is used on creation, ignored while running,
 /// and `None` falls back to the default discovery fusion.
 #[test]
+#[serial]
 fn start_uses_given_fusion_and_default_fallback() {
     Connection::stop().unwrap();
 
