@@ -23,6 +23,10 @@ namespace ArGlassesSDK.UI
 
         public float mouseSensitivity = 100.0f;
 
+        // 3-axis position is mapped from the linear velocity estimation with
+        // this ratio: meters of camera offset per m/s of estimated head velocity
+        public float velocityToPositionRatio = 1.0f;
+
 #if (UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN)
         [DllImport("ar_drivers.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern int StartConnection();
@@ -35,6 +39,9 @@ namespace ArGlassesSDK.UI
 
         [DllImport("ar_drivers.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr GetEuler();
+
+        [DllImport("ar_drivers.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr GetLinearVelocity();
 
 #elif (UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX)
     [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
@@ -49,6 +56,9 @@ namespace ArGlassesSDK.UI
     [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
     public static extern IntPtr GetQuaternion();
 
+    [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr GetLinearVelocity();
+
 #else
         [DllImport("libar_drivers.so", CallingConvention = CallingConvention.Cdecl)]
         public static extern int StartConnection();
@@ -61,6 +71,9 @@ namespace ArGlassesSDK.UI
 
         [DllImport("libar_drivers.so", CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr GetQuaternion();
+
+        [DllImport("libar_drivers.so", CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr GetLinearVelocity();
 
 #endif
 
@@ -330,11 +343,54 @@ namespace ArGlassesSDK.UI
 
         protected Rotation Attitude => _attitude ??= new Rotation(this);
 
-        public class Translation // TODO: enable it
-        {
-            private Vector3 _fromGlasses = Vector3.zero;
+        private Translation _position;
 
-            private Vector3 _fromMouse = Vector3.zero;
+        protected Translation Position => _position ??= new Translation(this);
+
+        public class Translation
+        {
+            protected readonly ARPoseProvider Outer;
+
+            public Translation(ARPoseProvider outer)
+            {
+                Outer = outer;
+            }
+
+            // velocity in Unity world axes, m/s
+            public Vector3 Velocity = Vector3.zero;
+
+            // position offset in Unity world axes, meters
+            public Vector3 Offset = Vector3.zero;
+
+            private float[] GetVelocityArray()
+            {
+                var ptr = GetLinearVelocity();
+                var r = new float[3];
+                Marshal.Copy(ptr, r, 0, 3);
+                return r;
+            }
+
+            public void UpdateFromGlasses()
+            {
+                var arr = GetVelocityArray();
+                // receiving in FRU order (left hand axes), the same presentation as GetEuler
+                // Forward, Right, Up
+
+                // converting to RUF order (Unity: x=Right, y=Up, z=Forward)
+                var mapped = new Vector3(arr[1], arr[2], arr[0]);
+
+                // the velocity is estimated in the glasses' FRD world frame, the Zeroing
+                // quaternion is that frame's yaw offset into Unity world (the world-frame
+                // part of the attitude's Mouse * Zeroing * Glasses conversion chain), so
+                // translation stays aligned with the zeroed view; Zeroing is yaw-only
+                Velocity = Outer.Attitude.Zeroing * mapped;
+
+                // the estimator's zero-velocity regression recenters the position
+                // whenever the glasses rest
+                Offset = Velocity * Outer.velocityToPositionRatio;
+
+                if (Outer.verboseLogging) Debug.Log($"Velocity mapped: {mapped}");
+            }
         }
 
         // Start is called before the first frame update
@@ -351,14 +407,18 @@ namespace ArGlassesSDK.UI
         // Update Pose
         public override PoseDataFlags GetPoseFromProvider(out Pose output)
         {
-            if (IsConnecting()) Attitude.UpdateFromGlasses();
+            if (IsConnecting())
+            {
+                Attitude.UpdateFromGlasses();
+                Position.UpdateFromGlasses();
+            }
 
             if (Input.GetMouseButton(1)) Attitude.UpdateFromMouse();
 
             var compound = Attitude.Mouse * Attitude.Zeroing * Attitude.Glasses;
 
-            output = new Pose(new Vector3(0, 0, 0), compound);
-            return PoseDataFlags.Rotation;
+            output = new Pose(Position.Offset, compound);
+            return PoseDataFlags.Rotation | PoseDataFlags.Position;
         }
     }
 }
