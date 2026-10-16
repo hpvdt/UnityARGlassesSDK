@@ -1,4 +1,4 @@
-use crate::fusion::_3dof::naive_cf::NaiveCF;
+use crate::fusion::_6dof::naive_cf::NaiveCF;
 use crate::fusion::{AhrsCorrection, Fusion};
 use crate::{rw, rw_write, Rw};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,9 +25,10 @@ impl Connection {
 
     /// Return the singleton connection, creating it on first use.
     ///
-    /// When `fusion` is `None`, creation falls back to the default 3-DoF
-    /// fusion over whichever glasses are connected; when the connection
-    /// already exists, `fusion` is ignored.
+    /// When `fusion` is `None`, creation falls back to the default 6-DoF
+    /// fusion (attitude plus world-frame linear velocity) over whichever
+    /// glasses are connected; when the connection already exists, `fusion`
+    /// is ignored.
     fn get_or_new(
         fusion: Option<Box<dyn Fusion>>,
     ) -> crate::Result<MutexGuard<'static, Option<Connection>>> {
@@ -99,9 +100,9 @@ impl Connection {
 
     /// Lazily create the singleton connection and start its background fusion thread.
     ///
-    /// When `fusion` is `None`, the default 3-DoF fusion over whichever
-    /// glasses are connected is used; when the connection already exists,
-    /// `fusion` is ignored.
+    /// When `fusion` is `None`, the default 6-DoF fusion (attitude plus
+    /// world-frame linear velocity) over whichever glasses are connected is
+    /// used; when the connection already exists, `fusion` is ignored.
     pub fn start(fusion: Option<Box<dyn Fusion>>) -> crate::Result<()> {
         let mut existing = Self::get_or_new(fusion)?;
         let conn = existing.as_mut().ok_or(crate::Error::ConcurrencyError)?;

@@ -44,20 +44,20 @@ namespace ArGlassesSDK.UI
         public static extern IntPtr GetLinearVelocity();
 
 #elif (UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX)
-    [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
-    public static extern int StartConnection();
+        [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int StartConnection();
 
-    [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
-    public static extern int StopConnection();
+        [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int StopConnection();
 
-    [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
-    public static extern IntPtr GetEuler();
+        [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr GetEuler();
 
-    [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
-    public static extern IntPtr GetQuaternion();
+        [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr GetQuaternion();
 
-    [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
-    public static extern IntPtr GetLinearVelocity();
+        [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr GetLinearVelocity();
 
 #else
         [DllImport("libar_drivers.so", CallingConvention = CallingConvention.Cdecl)]
@@ -245,13 +245,6 @@ namespace ArGlassesSDK.UI
                 Debug.Assert(r1 == r1.normalized, "unnormalised quaternion");
                 Debug.Assert(r2 == r2.normalized, "unnormalised quaternion from Euler angle");
 
-                // {
-                //     var error = ClampTo180(r1.eulerAngles - r2.eulerAngles);
-                //
-                //     Debug.Assert(error.magnitude <= errorBound,
-                //         $"error = {error}");
-                // }
-
                 {
                     Vector3 fwd;
                     {
@@ -356,11 +349,12 @@ namespace ArGlassesSDK.UI
                 Outer = outer;
             }
 
-            // velocity in Unity world axes, m/s
-            public Vector3 Velocity = Vector3.zero;
+            // velocity from the glasses, in Unity world axes, m/s
+            private Vector3 _fromGlasses = Vector3.zero;
 
-            // position offset in Unity world axes, meters
-            public Vector3 Offset = Vector3.zero;
+            // position offset in Unity world axes, meters; the estimator's
+            // zero-velocity regression recenters it whenever the glasses rest
+            public Vector3 Offset => _fromGlasses * Outer.velocityToPositionRatio;
 
             private float[] GetVelocityArray()
             {
@@ -383,11 +377,7 @@ namespace ArGlassesSDK.UI
                 // quaternion is that frame's yaw offset into Unity world (the world-frame
                 // part of the attitude's Mouse * Zeroing * Glasses conversion chain), so
                 // translation stays aligned with the zeroed view; Zeroing is yaw-only
-                Velocity = Outer.Attitude.Zeroing * mapped;
-
-                // the estimator's zero-velocity regression recenters the position
-                // whenever the glasses rest
-                Offset = Velocity * Outer.velocityToPositionRatio;
+                _fromGlasses = Outer.Attitude.Zeroing * mapped;
 
                 if (Outer.verboseLogging) Debug.Log($"Velocity mapped: {mapped}");
             }
