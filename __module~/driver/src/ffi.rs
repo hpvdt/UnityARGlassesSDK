@@ -6,6 +6,10 @@ use crate::connection::Connection;
 use crate::fusion::_6dof::naive_cf::NaiveCF;
 use crate::fusion::Fusion;
 
+// FIXME: too many "println!" that will never be read, they should be removed
+//  to tell C# program if the operation is successful, each FFI function should accept a mutable "error" argument in out position, which will be set to the error message if error occur
+//  this revision should affect both rust & C# code
+
 /// Start the singleton connection and its background fusion thread with the
 /// default 6-DoF fusion: the same attitude estimate as the 3-DoF one plus
 /// the world-frame linear velocity exposed by `GetLinearVelocity`. Returns
