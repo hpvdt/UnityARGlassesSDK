@@ -29,53 +29,71 @@ namespace ArGlassesSDK.UI
 
 #if (UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN)
         [DllImport("ar_drivers.dll", CallingConvention = CallingConvention.Cdecl)]
-        public static extern int StartConnection();
+        public static extern int StartConnection(out IntPtr error);
 
         [DllImport("ar_drivers.dll", CallingConvention = CallingConvention.Cdecl)]
-        public static extern int StopConnection();
+        public static extern int StopConnection(out IntPtr error);
 
         [DllImport("ar_drivers.dll", CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr GetQuaternion();
+        public static extern IntPtr GetQuaternion(out IntPtr error);
 
         [DllImport("ar_drivers.dll", CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr GetEuler();
+        public static extern IntPtr GetEuler(out IntPtr error);
 
         [DllImport("ar_drivers.dll", CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr GetLinearVelocity();
+        public static extern IntPtr GetLinearVelocity(out IntPtr error);
 
 #elif (UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX)
         [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
-        public static extern int StartConnection();
+        public static extern int StartConnection(out IntPtr error);
 
         [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
-        public static extern int StopConnection();
+        public static extern int StopConnection(out IntPtr error);
 
         [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr GetEuler();
+        public static extern IntPtr GetEuler(out IntPtr error);
 
         [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr GetQuaternion();
+        public static extern IntPtr GetQuaternion(out IntPtr error);
 
         [DllImport("libar_drivers.dylib", CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr GetLinearVelocity();
+        public static extern IntPtr GetLinearVelocity(out IntPtr error);
 
 #else
         [DllImport("libar_drivers.so", CallingConvention = CallingConvention.Cdecl)]
-        public static extern int StartConnection();
+        public static extern int StartConnection(out IntPtr error);
 
         [DllImport("libar_drivers.so", CallingConvention = CallingConvention.Cdecl)]
-        public static extern int StopConnection();
+        public static extern int StopConnection(out IntPtr error);
 
         [DllImport("libar_drivers.so", CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr GetEuler();
+        public static extern IntPtr GetEuler(out IntPtr error);
 
         [DllImport("libar_drivers.so", CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr GetQuaternion();
+        public static extern IntPtr GetQuaternion(out IntPtr error);
 
         [DllImport("libar_drivers.so", CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr GetLinearVelocity();
+        public static extern IntPtr GetLinearVelocity(out IntPtr error);
 
 #endif
+
+        // The native error pointer is valid only until the next native call,
+        // so it is copied into a managed string immediately after each call;
+        // null when the native operation succeeded.
+        private static string ReadNativeError(IntPtr error)
+        {
+            return error == IntPtr.Zero ? null : Marshal.PtrToStringAnsi(error);
+        }
+
+        // The per-frame getters keep the last pose on failure, so their error
+        // messages are only logged when verbose logging is turned on. The
+        // native message already names the failed operation and its cause.
+        protected void LogNativeError(IntPtr error)
+        {
+            if (!verboseLogging) return;
+            var message = ReadNativeError(error);
+            if (message != null) Debug.LogWarning(message);
+        }
 
         protected enum ConnectionStates
         {
@@ -96,7 +114,7 @@ namespace ArGlassesSDK.UI
         public void TryConnect()
         {
             // Start the connection
-            var code = StartConnection();
+            var code = StartConnection(out var error);
             if (code == 1)
             {
                 ConnectionState = ConnectionStates.StandBy;
@@ -104,7 +122,8 @@ namespace ArGlassesSDK.UI
             }
             else
             {
-                Debug.LogError("Connection error: return code " + code);
+                var message = ReadNativeError(error);
+                Debug.LogError("Connection error: return code " + code + (message == null ? "" : ": " + message));
             }
         }
 
@@ -113,7 +132,7 @@ namespace ArGlassesSDK.UI
         {
             if (IsConnecting())
             {
-                var code = StopConnection();
+                var code = StopConnection(out var error);
                 if (code == 1)
                 {
                     ConnectionState = ConnectionStates.Disconnected;
@@ -122,7 +141,9 @@ namespace ArGlassesSDK.UI
                 else
                 {
                     ConnectionState = ConnectionStates.Offline;
-                    Debug.LogWarning("Glassed disconnected with error: return code " + code);
+                    var message = ReadNativeError(error);
+                    Debug.LogWarning("Glassed disconnected with error: return code " + code +
+                                      (message == null ? "" : ": " + message));
                 }
             }
             else
@@ -152,7 +173,8 @@ namespace ArGlassesSDK.UI
 
             private float[] GetEulerArray()
             {
-                var ptr = GetEuler();
+                var ptr = GetEuler(out var error);
+                Outer.LogNativeError(error);
                 var r = new float[3];
                 Marshal.Copy(ptr, r, 0, 3);
                 return r;
@@ -166,7 +188,8 @@ namespace ArGlassesSDK.UI
 
             protected Quaternion Read_direct()
             {
-                var ptr = GetQuaternion();
+                var ptr = GetQuaternion(out var error);
+                Outer.LogNativeError(error);
                 // receiving in WIJK order (left hand)
                 // see https://github.com/xioTechnologies/Fusion/blob/e7d2b41e6506fa9c85492b91becf003262f14977/Fusion/FusionMath.h#L36
 
@@ -358,7 +381,8 @@ namespace ArGlassesSDK.UI
 
             private float[] GetVelocityArray()
             {
-                var ptr = GetLinearVelocity();
+                var ptr = GetLinearVelocity(out var error);
+                Outer.LogNativeError(error);
                 var r = new float[3];
                 Marshal.Copy(ptr, r, 0, 3);
                 return r;

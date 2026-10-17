@@ -1,6 +1,6 @@
 use crate::fusion::_6dof::naive_cf::NaiveCF;
 use crate::fusion::{AhrsCorrection, Fusion};
-use crate::{rw, rw_write, Rw};
+use crate::{rw, Rw};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -86,7 +86,12 @@ impl Connection {
             if _interrupting.load(Self::ORDERING) {
                 // println!("busy, no update")
             } else {
-                let mut ff = rw_write(&_fusion);
+                // a poisoned fusion state means `update` or a reader callback
+                // panicked; the failure has already surfaced on its own
+                // thread, so exiting here avoids a second panic
+                let Ok(mut ff) = _fusion.lock() else {
+                    break;
+                };
 
                 ff.update();
                 // println!("UPDATE!")
@@ -134,6 +139,10 @@ impl Connection {
     }
 
     /// Pause the fusion thread, run `f` on the latest [`AhrsCorrection`], and resume updates.
+    ///
+    /// Returns [`crate::Error::Other`] with "fusion state poisoned" when the
+    /// fusion state's mutex is poisoned (its thread or a reader panicked);
+    /// the connection must be stopped and started again to recover.
     pub fn read_fusion<T>(f: &dyn Fn(&mut AhrsCorrection) -> T) -> crate::Result<T> {
         let (_fusion, _interrupting) = {
             let existing = Self::get_or_new(None)?;
@@ -143,12 +152,16 @@ impl Connection {
         };
 
         _interrupting.store(true, Self::ORDERING);
-        let mut ahrs = rw_write(&_fusion);
-
-        let result = f(&mut ahrs);
+        // a poisoned fusion state means `update` or a reader callback
+        // panicked; report the failure instead of panicking here, where it
+        // would unwind across the C ABI
+        let result = match _fusion.lock() {
+            Ok(mut ahrs) => Ok(f(&mut ahrs)),
+            Err(_) => Err(crate::Error::Other("fusion state poisoned")),
+        };
 
         _interrupting.store(false, Self::ORDERING);
-        Ok(result)
+        result
     }
 }
 

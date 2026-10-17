@@ -104,10 +104,6 @@ fn rw<T>(v: T) -> Rw<T> {
     Arc::new(Mutex::new(v))
 }
 
-fn rw_write<T>(v: &Rw<T>) -> std::sync::MutexGuard<'_, T> {
-    v.lock().unwrap()
-}
-
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
