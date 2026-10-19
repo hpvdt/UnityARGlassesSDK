@@ -1,17 +1,10 @@
 use nalgebra::{UnitQuaternion, Vector3};
 
 use super::naive_cf::NaiveCF;
-use crate::fusion::{rub_to_frd, AhrsCorrection, ConsistencyStatus, Fusion, MagCalibrator};
-use crate::ARGlasses;
-
-fn frd_to_rub(v: Vector3<f32>) -> Vector3<f32> {
-    Vector3::new(v.y, -v.z, -v.x)
-}
-
-/// Felt gravity of a level device, the exact FRD reading at rest.
-fn felt_gravity_frd() -> Vector3<f32> {
-    Vector3::new(0.0, 0.0, -9.81)
-}
+use super::test_fixture::{
+    assert_level, felt_gravity_frd, frd_to_rub, run_sim_motion_scored, seeded_calibrator,
+};
+use crate::fusion::{AhrsCorrection, ConsistencyStatus, Fusion};
 
 /// Closed form of the velocity recurrence
 /// $v_n = (v_{n-1} + a\,dt_v)\,e^{-dt_v/\tau_v}$ for a constant
@@ -79,19 +72,6 @@ fn update_mag_uses_shared_mag_calibrator() {
 
     assert!(fusion.state.consistency.sources.mag.innovation < 0.001);
     assert!(fusion.state.attitude.angle() < 0.001);
-}
-
-/// Asserts the attitude keeps a level down axis within `tolerance`. A yaw
-/// (heading) component passes by construction — only roll/pitch tilts are
-/// checked, which the learned-dip reference must bound to the calibration
-/// fit residual instead of letting the field's dip leak into the level.
-#[track_caller]
-fn assert_level(attitude: &UnitQuaternion<f32>, tolerance: f32) {
-    let down_body = attitude.inverse() * Vector3::z();
-    assert!(
-        (down_body - Vector3::z()).norm() < tolerance,
-        "attitude not level: {attitude:?}"
-    );
 }
 
 #[test]
@@ -597,58 +577,6 @@ fn construction_and_update_fit_bounded_stack() {
         .expect("fusion thread panicked");
 }
 
-/// Drives the 6-DoF estimator against a lockstep SimMotion reference and
-/// returns (mean |v_est|, mean |v_true|, mean |dv| over the first scored
-/// half, mean |dv| over the second, final consistency). An unpaced
-/// 20.001 ms event period keeps the run fast in wall time while the
-/// virtual timeline advances at ~50 Hz; the reference fixture (identical
-/// seed and config) advances its mirror state once per consumed event, so
-/// its snapshot before each read matches the event the fusion last
-/// processed.
-fn run_sim_motion_scored(
-    config: crate::sim::sim_motion::Config,
-    warmup_events: usize,
-    scored_events: usize,
-) -> (f32, f32, f32, f32, crate::fusion::Consistency) {
-    let config = crate::sim::sim_motion::Config {
-        event_period_us: 20_001, // just above SimMotion's 20 ms pacing bound
-        ..config
-    };
-    let mut fusion =
-        NaiveCF::new(Box::new(crate::sim::SimMotion::with_config(config.clone()))).unwrap();
-    let mut reference = crate::sim::SimMotion::with_config(config);
-
-    let mut estimate_norm_sum = 0.0f32;
-    let mut truth_norm_sum = 0.0f32;
-    let mut error_sum = [0.0f32; 2];
-    let mut scored = [0u32; 2];
-    for event in 0..(warmup_events + scored_events) {
-        // snapshot state produced the event the fusion consumed last
-        let snapshot = reference.snapshot();
-        fusion.update();
-        let _ = reference.read_event().unwrap();
-        if event < warmup_events {
-            continue;
-        }
-
-        let truth = rub_to_frd(&snapshot.velocity);
-        let half = (event - warmup_events) / (scored_events / 2);
-        estimate_norm_sum += fusion.state.linear_velocity.norm();
-        truth_norm_sum += truth.norm();
-        error_sum[half.min(1)] += (fusion.state.linear_velocity - truth).norm();
-        scored[half.min(1)] += 1;
-    }
-
-    let scored_total = (scored[0] + scored[1]) as f32;
-    (
-        estimate_norm_sum / scored_total,
-        truth_norm_sum / scored_total,
-        error_sum[0] / scored[0] as f32,
-        error_sum[1] / scored[1] as f32,
-        fusion.consistency(),
-    )
-}
-
 /// End-to-end SimMotion run on the default continuous-motion profile: the
 /// 20 RPM rotation leaves the gravity correction a ~2 deg lag (the
 /// pre-existing 3-DoF behavior this estimator shares), whose leaked
@@ -671,23 +599,40 @@ fn velocity_stays_bounded_on_continuous_motion() {
     /// (measured 0.76 -> 0.55).
     const HALVES_ERROR_MARGIN: f32 = 0.15;
 
-    let (mean_estimate, _mean_truth, mean_error_first, mean_error_second, consistency) =
-        run_sim_motion_scored(Default::default(), WARMUP_EVENTS, SCORED_EVENTS);
+    let run = run_sim_motion_scored(
+        Default::default(),
+        WARMUP_EVENTS,
+        SCORED_EVENTS,
+        |glasses| Box::new(NaiveCF::new(glasses).unwrap()),
+    );
+
+    /// Bound on the mean attitude angle error over the scored span, in rad
+    /// (measured 0.057: the rotation-lag floor at ~3.2 deg, the baseline
+    /// the EKF benchmark compares against).
+    const MAX_MEAN_ATTITUDE_ERROR: f32 = 0.065;
 
     assert!(
-        mean_estimate < MAX_MEAN_ESTIMATE_NORM,
-        "mean |v_est| = {mean_estimate}"
+        run.mean_estimate_norm < MAX_MEAN_ESTIMATE_NORM,
+        "mean |v_est| = {}",
+        run.mean_estimate_norm
     );
     assert!(
-        mean_error_second < mean_error_first + HALVES_ERROR_MARGIN,
-        "error accumulated: {mean_error_first} -> {mean_error_second}"
+        run.mean_error_second < run.mean_error_first + HALVES_ERROR_MARGIN,
+        "error accumulated: {} -> {}",
+        run.mean_error_first,
+        run.mean_error_second
+    );
+    assert!(
+        run.mean_attitude_error < MAX_MEAN_ATTITUDE_ERROR,
+        "mean attitude error = {}",
+        run.mean_attitude_error
     );
     assert_eq!(
-        consistency.sources.acc.status(),
+        run.consistency.sources.acc.status(),
         ConsistencyStatus::Consistent
     );
     assert_eq!(
-        consistency.sources.gyro.status(),
+        run.consistency.sources.gyro.status(),
         ConsistencyStatus::Consistent
     );
 }
@@ -736,37 +681,36 @@ fn velocity_tracks_gentle_motion() {
         max_linear_velocity: 1.5,
         ..Default::default()
     };
-    let (mean_estimate, mean_truth, error_first, error_second, _) =
-        run_sim_motion_scored(config, WARMUP_EVENTS, SCORED_EVENTS);
+    let run = run_sim_motion_scored(config, WARMUP_EVENTS, SCORED_EVENTS, |glasses| {
+        Box::new(NaiveCF::new(glasses).unwrap())
+    });
+
+    /// Bound on the mean attitude angle error over the scored span, in rad
+    /// (measured 0.097, ~5.6 deg: the calibration-transient attitude error
+    /// dominating this profile's scored span, the baseline the EKF
+    /// benchmark compares against).
+    const MAX_MEAN_ATTITUDE_ERROR: f32 = 0.11;
 
     assert!(
-        error_first < MAX_COLD_START_ABS_ERROR,
-        "cold-start |v_est - v_true| = {error_first}"
+        run.mean_error_first < MAX_COLD_START_ABS_ERROR,
+        "cold-start |v_est - v_true| = {}",
+        run.mean_error_first
     );
     assert!(
-        error_second < MAX_SETTLED_ABS_ERROR,
-        "settled |v_est - v_true| = {error_second}"
+        run.mean_error_second < MAX_SETTLED_ABS_ERROR,
+        "settled |v_est - v_true| = {}",
+        run.mean_error_second
     );
-    let magnitude_ratio = mean_estimate / mean_truth;
+    let magnitude_ratio = run.mean_estimate_norm / run.mean_truth_norm;
     assert!(
         (MAGNITUDE_RATIO_BAND.0..MAGNITUDE_RATIO_BAND.1).contains(&magnitude_ratio),
-        "speed scale drifted: |v_est| {mean_estimate} vs |v_true| {mean_truth}"
+        "speed scale drifted: |v_est| {} vs |v_true| {}",
+        run.mean_estimate_norm,
+        run.mean_truth_norm
     );
-}
-
-fn seeded_calibrator(offset: Vector3<f32>, scale: Vector3<f32>) -> MagCalibrator<1023> {
-    let mut calibrator = MagCalibrator::new();
-    for i in 0..1023 {
-        let direction = sample_direction(i);
-        let _ =
-            calibrator.evaluate_correct(offset + scale.component_mul(&direction), None, i as u64);
-    }
-    calibrator
-}
-
-fn sample_direction(i: usize) -> Vector3<f32> {
-    let azimuth = 0.37 + i as f32 * 1.21;
-    let z = -0.8 + 1.6 * i as f32 / 1022.0;
-    let xy_radius = (1.0 - z * z).sqrt();
-    Vector3::new(xy_radius * azimuth.cos(), xy_radius * azimuth.sin(), z)
+    assert!(
+        run.mean_attitude_error < MAX_MEAN_ATTITUDE_ERROR,
+        "mean attitude error = {}",
+        run.mean_attitude_error
+    );
 }
