@@ -3,7 +3,11 @@
   "rootNamespace": "ArGlassesSDK",
   "references": [
     "ca.hpvdt.ArGlassesSDK.Runtime",
+    "UnityEngine.SpatialTracking",
     "UnityEngine.TestRunner"
+  ],
+  "includePlatforms": [
+    "Editor"
   ],
   "allowUnsafeCode": false,
   "overrideReferences": true,

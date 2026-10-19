@@ -152,6 +152,19 @@ namespace ArGlassesSDK.UI
             }
         }
 
+        // these are invoked by UI events, which can only bind
+        // methods on the provider component itself
+
+        public void ZeroY()
+        {
+            Attitude.ZeroY();
+        }
+
+        public void ZeroXY()
+        {
+            Attitude.ZeroXY();
+        }
+
         private static readonly Quaternion Q_ID = Quaternion.identity.normalized;
 
         public class Rotation
@@ -351,6 +364,14 @@ namespace ArGlassesSDK.UI
             {
                 var fromGlassesY = (Glasses * Mouse).eulerAngles.y;
                 _zeroingEuler.y = -fromGlassesY;
+                Zeroing = Quaternion.Euler(_zeroingEuler);
+            }
+
+            public void ZeroXY()
+            {
+                var fromGlasses = (Glasses * Mouse).eulerAngles;
+                _zeroingEuler.x = -fromGlasses.x;
+                _zeroingEuler.y = -fromGlasses.y;
                 Zeroing = Quaternion.Euler(_zeroingEuler);
             }
         }
