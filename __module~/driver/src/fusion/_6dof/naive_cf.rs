@@ -1,7 +1,10 @@
 /*!
 NaiveCF is the 6-DoF augmentation of the naive complementary filter: it
 estimates the same 3 DoF attitude as `_3dof::NaiveCF` plus the 3 DoF
-linear velocity, from the identical 9-axis IMU.
+linear velocity, from the identical 9-axis IMU. It embeds the 3-DoF
+estimator whole as its attitude channel (`NaiveCF::inner`), so both
+estimators share not just the attitude machinery but the attitude
+estimator itself.
 
 # Accelerometer model
 
@@ -20,8 +23,8 @@ $$a_{world} = S\, f_{body} - G_{\mathrm{ACC}}$$
 
 # Update channels
 
-The attitude pipeline is shared with `_3dof` through
-`naive_cf_core`: gyroscope dead-reckoning prediction,
+The attitude channel is the embedded 3-DoF estimator's per-sample update
+(`update_acc_gyro`, `update_mag`): gyroscope dead-reckoning prediction,
 then the gravity-direction state-sensor correction. That correction keeps
 the `_3dof` gravity-only assumption — one 3-axis reading cannot
 jointly constrain attitude and translational acceleration, so under a
@@ -58,9 +61,9 @@ times the sine of that lag.
 
 # Relation to published filters
 
-The attitude pipeline shared with `_3dof` is a proportional-only
-instance of the explicit complementary filter of Mahony, Hamel and
-Pflimlin, "Nonlinear
+The attitude pipeline shared with `_3dof` is a
+proportional-only instance of the explicit complementary filter of Mahony,
+Hamel and Pflimlin, "Nonlinear
 Complementary Filters on the Special Orthogonal Group" (IEEE Trans.
 Autom. Control 53(5), 2008, DOI 10.1109/TAC.2008.923738): the gyroscope
 propagates the attitude, and each state-sensor reading applies a
@@ -96,8 +99,9 @@ $\tau_v$ whenever the device rests.
 
 use nalgebra::{UnitQuaternion, Vector3};
 
+use crate::fusion::_3dof::naive_cf;
 use crate::fusion::_3dof::naive_cf_core;
-use crate::fusion::{rub_to_frd, Consistency, Fusion, FusionState};
+use crate::fusion::{rub_to_frd, Consistency, Fusion};
 use crate::{any_glasses_or_dummy, ARGlasses, Error, GlassesEvent};
 
 type Result<T> = std::result::Result<T, Error>;
@@ -105,18 +109,18 @@ type Result<T> = std::result::Result<T, Error>;
 /// Naive 6-DoF complementary-filter estimator.
 ///
 /// Estimates the same 3-DoF attitude as the 3-DoF estimator plus the 3-DoF
-/// world-frame linear velocity, from the identical 9-axis IMU.
+/// world-frame linear velocity, from the identical 9-axis IMU: it embeds the
+/// 3-DoF estimator whole and adds the velocity channel on top.
 pub struct NaiveCF {
-    /// Shared fusion state: device, attitude, dip, velocity, and calibration.
-    pub state: FusionState,
-    /// Previous gyroscope reading in FRD with its device timestamp in microseconds.
-    pub prev_gyro: (Vector3<f32>, u64), //FRD
+    /// Embedded 3-DoF attitude estimator: shared fusion state (device,
+    /// attitude, dip, and calibration) and the whole attitude update law.
+    pub inner: naive_cf::NaiveCF,
     /// Previous sample's translational acceleration estimate in the world
     /// FRD frame, m/s^2, and the previous AccGyro device timestamp, in
     /// microseconds. The vector is diagnostic state symmetric with
     /// `prev_gyro`'s; only the timestamp drives the velocity update, kept
-    /// separately from `prev_gyro.1` so the bundled sensors stay
-    /// independently consumable.
+    /// separately from the embedded estimator's `prev_gyro.1` so the bundled
+    /// sensors stay independently consumable.
     pub prev_acc: (Vector3<f32>, u64), //FRD, world frame
 }
 
@@ -134,28 +138,13 @@ impl NaiveCF {
 
     /// Create a fusion instance over `glasses`, waiting for the first gyroscope reading.
     pub fn new(glasses: Box<dyn ARGlasses>) -> Result<Self> {
-        let mut fusion = Self {
-            state: FusionState::new(glasses),
-            prev_gyro: (Vector3::zeros(), 0),
-            prev_acc: (Vector3::zeros(), 0),
-        };
-
-        loop {
-            //wait for the first non-zero gyro reading
-            let next_event = naive_cf_core::next_event(&mut fusion.state);
-            if let GlassesEvent::AccGyro {
-                gyroscope,
-                timestamp,
-                ..
-            } = next_event
-            {
-                //if gyroscope != Vector3::zeros() {
-                fusion.prev_gyro = (rub_to_frd(&gyroscope), timestamp);
-                fusion.prev_acc = (Vector3::zeros(), timestamp);
-                return Ok(fusion);
-                //}
-            }
-        }
+        // shared boot loop of the embedded 3-DoF estimator; the first
+        // AccGyro sample's timestamp seeds the velocity channel's prev_acc
+        let (inner, first_timestamp) = naive_cf::NaiveCF::new_with_first_sample(glasses)?;
+        Ok(Self {
+            inner,
+            prev_acc: (Vector3::zeros(), first_timestamp),
+        })
     }
 
     /// Create a 6-DoF fusion instance (attitude plus world-frame linear
@@ -165,17 +154,6 @@ impl NaiveCF {
     pub fn any() -> Result<Box<dyn Fusion>> {
         let glasses = any_glasses_or_dummy()?;
         Ok(Box::new(Self::new(glasses)?))
-    }
-
-    /// Dead-reckoning prediction step; see [`naive_cf_core::integrate_gyro`].
-    pub(super) fn integrate_gyro(&mut self, gyro_rub: &Vector3<f32>, t: u64) {
-        naive_cf_core::integrate_gyro(&mut self.state, &mut self.prev_gyro, gyro_rub, t);
-    }
-
-    /// Gravity-direction state-sensor correction; see
-    /// [`naive_cf_core::integrate_acc`].
-    pub(super) fn integrate_acc(&mut self, acc_rub: &Vector3<f32>, t: u64) {
-        naive_cf_core::integrate_acc(&mut self.state, acc_rub, t);
     }
 
     /// Linear velocity update: rotates the specific-force reading into the
@@ -191,7 +169,7 @@ impl NaiveCF {
         // World-frame translational acceleration: the specific force
         // rotated through the current (already gravity-corrected) attitude,
         // with felt gravity removed.
-        let a_world = self.state.attitude * acc - naive_cf_core::G_ACC_FRD;
+        let a_world = self.inner.state.attitude * acc - naive_cf_core::G_ACC_FRD;
 
         let d_t = t - self.prev_acc.1;
         let d_t_s = d_t as f32 / naive_cf_core::GYRO_SPEED_IN_TIMESTAMP_FACTOR;
@@ -200,55 +178,46 @@ impl NaiveCF {
             // zero is the complementary state-sensor correction, with the
             // rate-independent ratio $e^{-dt_v/\tau_v}$.
             let regress = (-d_t_s / Self::VELOCITY_REGRESS_TAU_S).exp();
-            self.state.linear_velocity = (self.state.linear_velocity + a_world * d_t_s) * regress;
+            self.inner.state.linear_velocity =
+                (self.inner.state.linear_velocity + a_world * d_t_s) * regress;
         }
 
         self.prev_acc = (a_world, t);
-    }
-
-    /// Magnetometer attitude correction; see
-    /// [`naive_cf_core::integrate_mag`].
-    pub(super) fn integrate_mag(&mut self, mag_rub: &Vector3<f32>, t: u64) {
-        naive_cf_core::integrate_mag(&mut self.state, mag_rub, t);
-    }
-
-    fn renormalize(&mut self) {
-        naive_cf_core::renormalize(&mut self.state);
     }
 }
 
 impl Fusion for NaiveCF {
     fn glasses(&mut self) -> &mut Box<dyn ARGlasses> {
-        &mut self.state.glasses
+        &mut self.inner.state.glasses
     }
 
     fn attitude_quaternion(&self) -> UnitQuaternion<f32> {
-        self.state.attitude
+        self.inner.state.attitude
     }
 
     fn linear_velocity(&self) -> Vector3<f32> {
-        self.state.linear_velocity
+        self.inner.state.linear_velocity
     }
 
     fn consistency(&self) -> Consistency {
-        self.state.consistency
+        self.inner.state.consistency
     }
 
     fn update(&mut self) {
-        let event = naive_cf_core::next_event(&mut self.state);
+        let event = self.inner.state.next_event();
         match event {
             GlassesEvent::AccGyro {
                 accelerometer,
                 gyroscope,
                 timestamp,
             } => {
-                // dead-reckoning prediction, then the state-sensor corrections;
-                // the velocity update runs last so it consumes the reading
-                // through the attitude the gravity correction just fixed
-                self.integrate_gyro(&gyroscope, timestamp);
-                self.integrate_acc(&accelerometer, timestamp);
+                // the attitude channel is the embedded estimator's own
+                // per-sample update; the velocity update runs last so it
+                // consumes the reading through the attitude the gravity
+                // correction just fixed
+                self.inner
+                    .update_acc_gyro(&accelerometer, &gyroscope, timestamp);
                 self.integrate_velocity(&accelerometer, timestamp);
-                self.renormalize();
             }
 
             GlassesEvent::Magnetometer {
@@ -265,8 +234,7 @@ impl Fusion for NaiveCF {
                 // reference built from it, so the magnetometer corrects
                 // the heading and, jointly with the acc filter, the
                 // level.
-                self.integrate_mag(&magnetometer, timestamp);
-                self.renormalize();
+                self.inner.update_mag(&magnetometer, timestamp);
             }
             _ => {
                 // TODO: handle KeyPress signal

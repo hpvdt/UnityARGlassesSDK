@@ -65,7 +65,7 @@ fn update_mag_uses_shared_mag_calibrator() {
     let raw_north = offset + scale.component_mul(&calibrated_north);
     let north_rub = frd_to_rub(raw_north);
 
-    fusion.integrate_mag(&north_rub, 0);
+    fusion.state.integrate_mag(&north_rub, 0);
 
     assert!(fusion.state.consistency.sources.mag.innovation < 0.001);
     assert!(fusion.state.attitude.angle() < 0.001);
@@ -104,7 +104,7 @@ fn update_mag_keeps_level_with_dipped_field() {
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
 
     for t in 0..800 {
-        fusion.integrate_mag(&dipped_rub, t);
+        fusion.state.integrate_mag(&dipped_rub, t);
         assert_level(&fusion.state.attitude, 5.0e-3);
     }
 }
@@ -128,7 +128,7 @@ fn update_mag_gravity_hint_reports_dip() {
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
 
     for t in 0..800 {
-        fusion.integrate_mag(&dipped_rub, t);
+        fusion.state.integrate_mag(&dipped_rub, t);
         assert_level(&fusion.state.attitude, 5.0e-3);
     }
 
@@ -194,7 +194,7 @@ fn update_mag_initializes_dip_from_first_calibrated_reading() {
     // the first usable reading initializes the dip state from the
     // field's vertical projection onto the estimated down axis; the
     // reading itself, not the calibrator's record, supplies the value
-    fusion.integrate_mag(&dipped_rub, 0);
+    fusion.state.integrate_mag(&dipped_rub, 0);
 
     // 1 deg basis: the seeded anisotropic fit leaves a measured ~0.85
     // deg asin gap at this 60 deg-dipped direction (its ~15 mrad
@@ -236,7 +236,7 @@ fn update_mag_refines_dip_to_self_consistent_pair() {
     // down-axis error is scaled down by the same factor to ~3.7e-4
     // (measured 3.9e-4), so a full-replacement or zero-blend update
     // lands far outside the 1e-3 bound
-    fusion.integrate_mag(&dipped_rub, 0);
+    fusion.state.integrate_mag(&dipped_rub, 0);
     let first = fusion.state.mag_dip_sin.expect("dip state present");
     let ratio = crate::fusion::_3dof::naive_cf_core::BASE_DIP_RATIO;
     assert!(
@@ -247,7 +247,7 @@ fn update_mag_refines_dip_to_self_consistent_pair() {
     );
 
     for t in 1..800 {
-        fusion.integrate_mag(&dipped_rub, t);
+        fusion.state.integrate_mag(&dipped_rub, t);
     }
 
     // the refinement keeps running: the dip climbs past half the seed
@@ -305,7 +305,7 @@ fn update_mag_dip_projects_onto_estimated_down_axis() {
     );
 
     for t in 0..800 {
-        fusion.integrate_mag(&dipped_rub, t);
+        fusion.state.integrate_mag(&dipped_rub, t);
     }
 
     // the anisotropic fixture's fit leaves a measured ~0.006 converged
@@ -345,7 +345,7 @@ fn update_mag_correction_tips_level_through_learned_dip() {
     let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
 
-    fusion.integrate_mag(&dipped_rub, 0);
+    fusion.state.integrate_mag(&dipped_rub, 0);
 
     // one step moves the tilt by BASE_MAG_RATIO of the ~0.5 rad
     // reference/reading gap (measured 5.8e-4, ~0.9 of the ratio-scaled
@@ -372,7 +372,7 @@ fn update_mag_keeps_dip_across_unusable_readings() {
     let dip = 60.0f32.to_radians();
     let dipped_north = Vector3::new(dip.cos(), 0.0, dip.sin());
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&dipped_north));
-    fusion.integrate_mag(&dipped_rub, 0);
+    fusion.state.integrate_mag(&dipped_rub, 0);
     let initialized = fusion.state.mag_dip_sin.expect("dip state initialized");
 
     // a later unusable calibration (degenerate fit, no direction) must
@@ -380,7 +380,7 @@ fn update_mag_keeps_dip_across_unusable_readings() {
     // that cannot feed it
     *fusion.state.mag_calibrator = nearly_collinear_calibrator();
     let raw_mag = Vector3::new(10.0005, -4.9990, 3.00025);
-    fusion.integrate_mag(&frd_to_rub(raw_mag), 1);
+    fusion.state.integrate_mag(&frd_to_rub(raw_mag), 1);
 
     assert_eq!(fusion.state.mag_dip_sin, Some(initialized));
 }
@@ -411,7 +411,7 @@ fn update_mag_keeps_level_under_yaw_error() {
     let dipped_rub = frd_to_rub(offset + scale.component_mul(&body_dipped));
 
     for t in 0..800 {
-        fusion.integrate_mag(&dipped_rub, t);
+        fusion.state.integrate_mag(&dipped_rub, t);
         assert_level(&fusion.state.attitude, 5.0e-3);
     }
 
@@ -446,7 +446,7 @@ fn update_mag_locks_yaw_near_the_magnetic_poles() {
 
     let mut max_innovation = 0.0f32;
     for t in 0..800 {
-        fusion.integrate_mag(&near_vertical_rub, t);
+        fusion.state.integrate_mag(&near_vertical_rub, t);
         max_innovation = max_innovation.max(fusion.state.consistency.sources.mag.innovation);
     }
 
@@ -487,7 +487,7 @@ fn update_mag_discards_ill_conditioned_calibration() {
     let raw_mag = Vector3::new(10.0005, -4.9990, 3.00025);
     let mag_rub = frd_to_rub(raw_mag);
 
-    fusion.integrate_mag(&mag_rub, 0);
+    fusion.state.integrate_mag(&mag_rub, 0);
 
     assert_eq!(fusion.state.consistency.sources.mag.innovation, 0.0);
     assert_eq!(fusion.state.attitude.angle(), 0.0);

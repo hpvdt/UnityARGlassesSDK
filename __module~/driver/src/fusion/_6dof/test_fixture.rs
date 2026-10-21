@@ -1,6 +1,6 @@
 /*!
-Shared test fixture for the 6-DoF estimators: the lockstep SimMotion
-scoring harness and the calibration seeding helpers its suites share.
+Shared test fixture of the 6-DoF estimator suites: the lockstep SimMotion
+scoring harness and the frame-conversion helpers its suites share.
 
 `run_sim_motion_scored` pairs an estimator's [`Fusion`] update loop against
 a reference `SimMotion` fixture with an identical seed and configuration:
@@ -15,7 +15,7 @@ identical data.
 
 use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 
-use crate::fusion::{rub_to_frd, Consistency, Fusion, MagCalibrator};
+use crate::fusion::{rub_to_frd, Consistency, Fusion};
 use crate::sim::sim_motion;
 use crate::sim::SimMotion;
 use crate::ARGlasses;
@@ -116,38 +116,4 @@ pub(crate) fn frd_to_rub(v: Vector3<f32>) -> Vector3<f32> {
 /// Felt gravity of a level device, the exact FRD reading at rest.
 pub(crate) fn felt_gravity_frd() -> Vector3<f32> {
     Vector3::new(0.0, 0.0, -9.81)
-}
-
-/// Asserts the attitude keeps a level down axis within `tolerance`. A yaw
-/// (heading) component passes by construction — only roll/pitch tilts are
-/// checked, which the learned-dip reference must bound to the calibration
-/// fit residual instead of letting the field's dip leak into the level.
-#[track_caller]
-pub(crate) fn assert_level(attitude: &UnitQuaternion<f32>, tolerance: f32) {
-    let down_body = attitude.inverse() * Vector3::z();
-    assert!(
-        (down_body - Vector3::z()).norm() < tolerance,
-        "attitude not level: {attitude:?}"
-    );
-}
-
-/// A calibrator seeded with 1023 samples of an exactly known hard-iron
-/// offset and per-axis scale, so readings crafted through the same
-/// transform calibrate to their known directions.
-pub(crate) fn seeded_calibrator(offset: Vector3<f32>, scale: Vector3<f32>) -> MagCalibrator<1023> {
-    let mut calibrator = MagCalibrator::new();
-    for i in 0..1023 {
-        let direction = sample_direction(i);
-        let _ =
-            calibrator.evaluate_correct(offset + scale.component_mul(&direction), None, i as u64);
-    }
-    calibrator
-}
-
-/// One deterministic coverage direction on the unit sphere.
-pub(crate) fn sample_direction(i: usize) -> Vector3<f32> {
-    let azimuth = 0.37 + i as f32 * 1.21;
-    let z = -0.8 + 1.6 * i as f32 / 1022.0;
-    let xy_radius = (1.0 - z * z).sqrt();
-    Vector3::new(xy_radius * azimuth.cos(), xy_radius * azimuth.sin(), z)
 }

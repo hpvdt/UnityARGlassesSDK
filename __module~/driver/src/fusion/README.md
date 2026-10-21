@@ -15,7 +15,9 @@ Raw device events use RUB; fusion state and outputs use FRD. AHRS wrappers may c
 [consistency.rs](consistency.rs) documents the estimator-agnostic report exposed through `Fusion::consistency()` and
 `FusionConsistency`. `SourceConsistency::record_scaled` reconstructs a complementary filter's innovation from its
 applied correction; `record_with_variance` accepts the innovation and live variance from a Kalman filter.
-`NaiveCF` also records gyroscope increments.
+`NaiveCF` also records gyroscope increments. The 6-DoF `NaiveCF` embeds the 3-DoF one whole as its attitude
+channel and adds the velocity channel on top; the shared attitude corrections are `FusionState` methods
+(`integrate_acc`, `integrate_mag`), so both estimators run the identical attitude pipeline.
 
 The [6-DoF estimator's module documentation](_6dof/naive_cf.rs) owns the velocity update law, the limitations of
 continuous zero-velocity regression and gravity-only attitude correction, and the Fourati/Mahony research citations.

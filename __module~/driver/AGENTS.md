@@ -304,7 +304,7 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
   (code field `dip_sin` of `CalibrationQuality`) and absent while gravity hints are unused. The fusion
   state's estimate feeds the magnetometer attitude correction, which compares the full calibrated field
   against the dipped reference $(\cos\delta, 0, \sin\delta)$ built from it (code locals `dip_sin` and
-  `dip_cos` of `naive_cf_core::integrate_mag`), so the correction carries the heading and the level
+  `dip_cos` of `FusionState::integrate_mag`), so the correction carries the heading and the level
   evidence jointly; a level error and a dip error produce the same vertical residual, so the dip refinement
   and the correction converge to a self-consistent (level, dip) pair, with the acc filter keeping the level
   observable in production.
