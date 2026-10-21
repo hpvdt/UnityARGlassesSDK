@@ -1,6 +1,6 @@
 {
-  "name": "ca.hpvdt.ArGlassesSDK.Runtime",
-  "rootNamespace": "ArGlassesSDK",
+  "name": "ca.hpvdt.ARGlassesSDK.Runtime",
+  "rootNamespace": "ARGlassesSDK",
   "references": [
     "UnityEngine.SpatialTracking"
   ],

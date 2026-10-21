@@ -1,14 +1,12 @@
 {
-  "name": "ca.hpvdt.ArGlassesSDK.Tests",
-  "rootNamespace": "ArGlassesSDK",
+  "name": "ca.hpvdt.ARGlassesSDK.Tests",
+  "rootNamespace": "ARGlassesSDK",
   "references": [
-    "ca.hpvdt.ArGlassesSDK.Runtime",
+    "ca.hpvdt.ARGlassesSDK.Runtime",
     "UnityEngine.SpatialTracking",
     "UnityEngine.TestRunner"
   ],
-  "includePlatforms": [
-    "Editor"
-  ],
+  "includePlatforms": [],
   "allowUnsafeCode": false,
   "overrideReferences": true,
   "precompiledReferences": [
