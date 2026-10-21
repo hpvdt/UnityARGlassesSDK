@@ -1,15 +1,18 @@
 /*!
-Shared attitude pipeline of the naive complementary filters.
+Complementary-filter-specific attitude corrections of the naive estimators.
 
-The estimators built on [`FusionState`] run the same attitude machinery:
-the gravity-direction correction, the magnetometer attitude correction, the
-dip-state refinement, attitude renormalization, and the blocking device
-event loop. This module holds that machinery once, as methods of the shared
-[`FusionState`], together with the shared blend-ratio and frame constants
-the corrections consume; the 6-DoF estimator embeds the 3-DoF one, so the
-machinery runs exactly once per event stream. The gyroscope dead-reckoning
-prediction lives on the 3-DoF estimator instead, as the one piece of the
-pipeline that needs estimator-owned previous-sample bookkeeping
+The estimators built on [`FusionState`] run the same attitude machinery,
+split along the same line as the state itself: the algorithm-agnostic
+services — construction, the blocking device event read, and attitude
+renormalization — live on [`FusionState`] in the fusion module. This
+module holds the naive complementary filter's own half, as a second
+`impl FusionState` block: the gravity-direction and magnetometer
+state-sensor corrections with the dip-state refinement, together with the
+blend-ratio and frame constants the corrections consume and the
+scaled-rotation helpers they share. The 6-DoF estimator embeds the 3-DoF
+one, so the corrections run exactly once per event stream; the gyroscope
+dead-reckoning prediction lives on the 3-DoF estimator instead, as the one
+pipeline piece that needs estimator-owned previous-sample bookkeeping
 (`prev_gyro`).
 
 All estimated state follows the FRD world-frame conventions of the fusion
@@ -19,8 +22,7 @@ converted at the boundary.
 
 use nalgebra::{UnitQuaternion, Vector3};
 
-use crate::fusion::{rub_to_frd, FusionState};
-use crate::GlassesEvent;
+use crate::fusion::{rub_to_frd, FusionState, SourceConsistency};
 
 //CAUTION: right-multiplication means rotation, unconventionally
 //(scaled_rotation_between(pred, meas) paired with attitude = attitude * correction
@@ -63,8 +65,8 @@ pub(super) const BASE_MAG_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.00125;
 /// pre-re-tune 0.02: measured gentle-motion cold-start mean velocity
 /// error 0.42 -> 0.38 m/s alongside the `BASE_MAG_RATIO` re-tune).
 ///
-/// `pub(in crate::fusion)` rather than `pub(super)`: both estimators' test
-/// suites pin the blend rate against this constant.
+/// `pub(in crate::fusion)`: the estimators' test suites pin the blend
+/// rate against this constant.
 pub(in crate::fusion) const BASE_DIP_RATIO /*$1 - \mathrm{ratio}$*/: f32 = 0.05;
 
 pub(in crate::fusion) const GYRO_SPEED_IN_TIMESTAMP_FACTOR: f32 = 1000.0 * 1000.0; // microseconds
@@ -75,18 +77,6 @@ pub(in crate::fusion) const G_ACC_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, -9.
 pub(super) const DOWN_FRD: Vector3<f32> = Vector3::new(0.0, 0.0, 1.0);
 
 impl FusionState {
-    /// Reads until the next valid event. Blocks.
-    pub(in crate::fusion) fn next_event(&mut self) -> GlassesEvent {
-        loop {
-            match self.glasses.read_event() {
-                Ok(event) => return event,
-                Err(e) => {
-                    println!("Error reading event: {}", e);
-                }
-            }
-        }
-    }
-
     /// Gravity-direction state-sensor correction: treats the accelerometer
     /// reading as pure felt gravity, the assumption both naive estimators'
     /// attitude channels share. Readings weaker than 1 m/s^2 (free fall, or the
@@ -100,24 +90,14 @@ impl FusionState {
             return; //almost in free fall, or acc disabled, do not correct
         }
 
-        let attitude = &self.attitude;
-        let correction_opt = get_correction(&acc, &attitude.inverse(), BASE_GRAV_RATIO);
-
-        match correction_opt {
-            Some(correction_inv) => {
-                let correction = correction_inv.inverse();
-                let _ = self
-                    .consistency
-                    .sources
-                    .acc
-                    .record_scaled(correction.angle(), BASE_GRAV_RATIO);
-
-                self.attitude = attitude * correction;
-            }
-            None => {
-                // opposite direction, don't know how to correct
-            }
-        }
+        let correction =
+            get_correction(&G_ACC_FRD, &acc, &self.attitude.inverse(), BASE_GRAV_RATIO);
+        apply_correction(
+            correction,
+            &mut self.attitude,
+            &mut self.consistency.sources.acc,
+            BASE_GRAV_RATIO,
+        );
     }
 
     /// Magnetometer update, with the magnetic dip $\delta$ wired into the
@@ -142,17 +122,15 @@ impl FusionState {
 
         // gravity direction is already estimated by the acc complementary filter
         let gravity_hint: Option<Vector3<f32>> = Some(self.attitude.inverse() * G_ACC_FRD);
-        let result = match self
+        let Ok(result) = self
             .mag_calibrator
             .evaluate_correct(mag_raw, gravity_hint, t)
-        {
-            Ok(result) => result,
-            Err(_) => return,
+        else {
+            return;
         };
         // `direction` is already the normalized calibrated unit vector.
-        let mag_normalised: Vector3<f32> = match result.direction {
-            Some(direction) => direction,
-            None => return,
+        let Some(mag_normalised) = result.direction else {
+            return;
         };
 
         // Dip step: the vertical component of the calibrated field, measured
@@ -166,8 +144,7 @@ impl FusionState {
         // estimated down axis — so it exists even while the calibrator's
         // gravity surrogate is unseeded and its `dip_sin` record absent, and
         // it never returns to `None` afterwards.
-        let attitude = &self.attitude;
-        let down_body = attitude.inverse() * DOWN_FRD;
+        let down_body = self.attitude.inverse() * DOWN_FRD;
         let vertical = mag_normalised.dot(&down_body);
         let dip_sin = match self.mag_dip_sin {
             Some(previous) => previous + BASE_DIP_RATIO * (vertical - previous),
@@ -177,9 +154,10 @@ impl FusionState {
         self.mag_dip_sin = Some(dip_sin);
 
         // Attitude step: the full calibrated field `mag_normalised` is
-        // compared against the estimated dipped reference field
-        // `estimated_field` = the world reference $(\cos\delta, 0, \sin\delta)$
-        // of the just-refined `dip_sin`, rotated into the body frame, so the
+        // compared against the estimated dipped reference field — the
+        // world reference $(\cos\delta, 0, \sin\delta)$ of the
+        // just-refined `dip_sin`, rotated into the body frame by the
+        // attitude inverse — so the
         // correction carries both the heading and the level evidence the
         // reading holds. CAUTION: a level (roll/pitch) error and a dip error
         // produce the same vertical residual, so this correction and the dip
@@ -195,47 +173,55 @@ impl FusionState {
         // horizontal component, while its (now usable) dip evidence still
         // levels.
         let dip_cos = (1.0 - dip_sin * dip_sin).sqrt();
-        let estimated_field = attitude.inverse() * Vector3::new(dip_cos, 0.0, dip_sin);
-        let correction_opt = UnitQuaternion::scaled_rotation_between(
-            &estimated_field,
+        let correction = get_correction(
+            &Vector3::new(dip_cos, 0.0, dip_sin),
             &mag_normalised,
+            &self.attitude.inverse(),
             BASE_MAG_RATIO,
         );
-
-        match correction_opt {
-            Some(correction_inv) => {
-                let correction = correction_inv.inverse();
-                let _ = self
-                    .consistency
-                    .sources
-                    .mag
-                    .record_scaled(correction.angle(), BASE_MAG_RATIO);
-                self.attitude = attitude * correction;
-            }
-            None => {
-                // opposite direction, don't know how to correct
-            }
-        }
-    }
-
-    /// Renormalizes the attitude quaternion to counter numerical drift.
-    pub(in crate::fusion) fn renormalize(&mut self) {
-        // self.attitude.renormalize_fast(); // TODO: switch to it after rigorous testing
-        self.attitude.renormalize();
+        apply_correction(
+            correction,
+            &mut self.attitude,
+            &mut self.consistency.sources.mag,
+            BASE_MAG_RATIO,
+        );
     }
 }
 
-/// Scaled rotation correcting the estimated felt-gravity direction
-/// (`rotation * G_ACC_FRD`) towards the measured direction `acc`, applying a
-/// `scale` fraction ($1 - \mathrm{ratio}$) of the full residual angle.
-/// Returns `None` when the two directions are opposite, in which case the
-/// caller has no correction to apply.
-pub(in crate::fusion) fn get_correction(
-    acc: &Vector3<f32>,
+/// Scaled rotation correcting the estimated body-frame `reference`
+/// direction — the world-frame reference rotated through the attitude
+/// inverse (`rotation * reference`) — towards the measured body-frame
+/// direction `measured`, applying a `scale` fraction
+/// ($1 - \mathrm{ratio}$) of the full residual angle. Returns `None` when
+/// the two directions are opposite, in which case the caller has no
+/// correction to apply.
+fn get_correction(
+    reference: &Vector3<f32>,
+    measured: &Vector3<f32>,
     rotation: &UnitQuaternion<f32>,
     scale /*$1 - \mathrm{ratio}$*/: f32,
 ) -> Option<UnitQuaternion<f32>> {
-    let uncorrected = rotation * G_ACC_FRD.normalize();
+    let uncorrected = rotation * reference.normalize();
 
-    UnitQuaternion::scaled_rotation_between(&uncorrected, &acc.normalize(), scale)
+    UnitQuaternion::scaled_rotation_between(&uncorrected, &measured.normalize(), scale)
+}
+
+/// Applies the optional state-sensor attitude correction returned by
+/// [`get_correction`] in its inverted convention: right-multiplies the
+/// inverse of `correction_inv` onto `attitude` (the CAUTION
+/// right-multiplication convention above) and records the correction's
+/// angle into `source`, reconstructed through the blend `ratio` that
+/// scaled it. A `None` (opposite directions) leaves the attitude
+/// untouched. The inverse shares the original's rotation angle, so the
+/// record reconstructs the full pre-blend innovation.
+fn apply_correction(
+    correction_inv: Option<UnitQuaternion<f32>>,
+    attitude: &mut UnitQuaternion<f32>,
+    source: &mut SourceConsistency,
+    ratio /*$1 - \mathrm{ratio}$*/: f32,
+) {
+    if let Some(correction_inv) = correction_inv {
+        let _ = source.record_scaled(correction_inv.angle(), ratio);
+        *attitude *= correction_inv.inverse();
+    }
 }

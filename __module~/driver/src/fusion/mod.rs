@@ -18,8 +18,18 @@ High-level interface of glasses & state estimation, with the following built-in 
   - TODO: add EKF/ESKF (error-state/multiplicative KF, <https://arxiv.org/abs/1711.02508>)
 - linear velocity <= acc (specific force minus gravity, world frame) + zero-velocity regression (`_6dof`)
 
+The shared attitude machinery of the naive complementary-filter estimators is split along the same
+line as the state itself: the algorithm-agnostic `FusionState` services — construction, the blocking
+device event read, and attitude renormalization — live in this module, while the filter-specific
+state-sensor corrections with their blend-ratio and frame constants live in `_3dof::naive_cf_core`
+as a second `impl FusionState` block. The 6-DoF estimator embeds the 3-DoF one, so the machinery
+runs exactly once per event stream; the gyroscope dead-reckoning prediction lives on the 3-DoF
+estimator instead, as the one pipeline piece that needs estimator-owned previous-sample
+bookkeeping (`prev_gyro`). Raw sensor arguments stay in the device's RUB frame and are converted at
+the boundary.
+
 CAUTION: unlike [[GlassesEvent]], all states & outputs should use FRD reference frame
- (forward, right, down, corresponding to roll, pitch, yaw in Euler angles-represented rotation)
+  (forward, right, down, corresponding to roll, pitch, yaw in Euler angles-represented rotation)
 
 FRD is the standard frame for aerospace.
 */
@@ -27,7 +37,7 @@ use std::fmt;
 
 use nalgebra::{UnitQuaternion, Vector3};
 
-use crate::ARGlasses;
+use crate::{ARGlasses, GlassesEvent};
 
 /// 3-DoF attitude fusion: complementary-filter estimators with reference-frame correction.
 pub mod _3dof;
@@ -166,5 +176,21 @@ impl FusionState {
             consistency: Consistency::attitude_defaults(),
             mag_calibrator: Box::new(MagCalibrator::new()),
         }
+    }
+
+    /// Reads until the next valid event. Blocks.
+    fn next_event(&mut self) -> GlassesEvent {
+        loop {
+            match self.glasses.read_event() {
+                Ok(event) => return event,
+                Err(e) => println!("Error reading event: {}", e),
+            }
+        }
+    }
+
+    /// Renormalizes the attitude quaternion to counter numerical drift.
+    fn renormalize(&mut self) {
+        // self.attitude.renormalize_fast(); // TODO: switch to it after rigorous testing
+        self.attitude.renormalize();
     }
 }

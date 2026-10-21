@@ -21,9 +21,11 @@ Most glasses have acc & grav/acc readings in 1 bundle, but I prefer not using th
 update them independently.
 
 The state-sensor half of the attitude pipeline shared with the other naive
-complementary-filter estimators (the magnetometer attitude correction, the
-gravity-direction correction, and the device event loop) lives in
-`naive_cf_core` as methods of the shared `FusionState`. This estimator owns
+complementary-filter estimators (the magnetometer attitude correction and
+the gravity-direction correction) lives in `naive_cf_core` as methods of the
+shared `FusionState`; the algorithm-agnostic state services (the device
+event loop and renormalization) live on the fusion module's own
+`FusionState` impl. This estimator owns
 the rate-sensor half — the gyroscope dead-reckoning prediction, which
 consumes its `prev_gyro` bookkeeping — and the per-sample update law
 (`update_acc_gyro`, `update_mag`) the 6-DoF estimator embeds whole as its

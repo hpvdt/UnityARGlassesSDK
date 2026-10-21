@@ -224,16 +224,10 @@ impl Fusion for NaiveCF {
                 magnetometer,
                 timestamp,
             } => {
-                // The ACC-derived gravity hint keeps the calibrator's
-                // preconditioned gravity surrogate anchored to the exact
-                // magnetic dip, whose learned projection
-                // $\kappa / (\gamma r)$ the result reports as `dip_sin`.
-                // The field's vertical component refines the fusion
-                // state's own `mag_dip_sin` estimate, and the attitude
-                // update compares the full field against the dipped
-                // reference built from it, so the magnetometer corrects
-                // the heading and, jointly with the acc filter, the
-                // level.
+                // the embedded estimator's own mag update: the gravity-hint
+                // and dip wiring it runs is documented on the identical
+                // `_3dof` update arm and in `FusionState::integrate_mag`'s
+                // doc comment
                 self.inner.update_mag(&magnetometer, timestamp);
             }
             _ => {
