@@ -57,6 +57,7 @@ be in a LaTeX math block (enclosed in a pair of `$` or `$$`).
 
 ## Git (Version Control)
 
+- all task should have at least one commit.
 - Commit messages always have the following format:
 
 ```
@@ -66,9 +67,9 @@ be in a LaTeX math block (enclosed in a pair of `$` or `$$`).
 - If a task contains multiple subtasks:
     - each subtask should have its own commit.
     - after each commit:
-        - launch a subagent to review it for guardrail compliance
-- If HEAD is DETACHED, create a temporary branch and commit into it
-- If the commit can't compile cleanly, it should have [WIP] in its commit message
+        - launch a subagent to review it for guardrail compliance.
+- If HEAD is detached, create a temporary branch and commit into it.
+- If the commit can't compile cleanly, include `[WIP]` in its message.
 
 ## Planning
 
