@@ -21,9 +21,7 @@
       "path": "Scenes"
     }
   ],
-  "dependencies": {
-    "com.unity.xr.management": "4.5.1"
-  },
+  "dependencies": {},
   "testables": [
     "ca.hpvdt.ARGlassesSDK.Tests"
   ]

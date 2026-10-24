@@ -2,7 +2,7 @@
   "name": "ca.hpvdt.ARGlassesSDK.Runtime",
   "rootNamespace": "ARGlassesSDK",
   "references": [
-    "UnityEngine.SpatialTracking"
+    "Unity.InputSystem"
   ],
   "allowUnsafeCode": false
 }

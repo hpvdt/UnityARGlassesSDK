@@ -52,8 +52,8 @@ be in a LaTeX math block (enclosed in a pair of `$` or `$$`).
         - detailed explanation.
         - recommended fix (if applicable).
     - **Unit test:** Path of the failing unit test(s) that reveals the issue, e.g. `src/path/to/file.rs (issue_summary)`.
-        - issue should always come with one or more unit tests
-- Check (`[x]`) the item only when committing the fixed code; don't remove any of them.
+        - issue should always come with one or more unit tests.
+- Delete the issue only when committing the fixed code.
 
 ## Git (Version Control)
 

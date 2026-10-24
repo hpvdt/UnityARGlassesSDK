@@ -1,14 +1,17 @@
 using System;
 using System.Runtime.InteropServices;
 using UnityEngine;
-using UnityEngine.Experimental.XR.Interaction;
-using UnityEngine.SpatialTracking;
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.LowLevel;
+using UnityEngine.InputSystem.XR;
+using UnityEngine.XR;
+using ArGlassesSDK.UI;
 using Quaternion = UnityEngine.Quaternion;
 using Vector3 = UnityEngine.Vector3;
 
 namespace ArGlassesSDK.UI
 {
-    public class ARPoseProvider : BasePoseProvider
+    public class ARPoseProvider : MonoBehaviour
     {
         public enum ReadMethods
         {
@@ -349,8 +352,18 @@ namespace ArGlassesSDK.UI
 
             public void UpdateFromMouse()
             {
-                var deltaY = Input.GetAxis("Mouse X") * Outer.mouseSensitivity * Time.deltaTime;
-                var deltaX = -Input.GetAxis("Mouse Y") * Outer.mouseSensitivity * Time.deltaTime;
+                // the nested class has a field named Mouse, so the device type
+                // must be fully qualified here
+                var mouse = UnityEngine.InputSystem.Mouse.current;
+                if (mouse == null) return;
+
+                // the legacy Input Manager "Mouse X"/"Mouse Y" axes applied a 0.1
+                // sensitivity to the raw delta; the Input System reports raw pixel
+                // deltas, so the same factor keeps the old feel
+                var delta = mouse.delta.ReadValue() * 0.1f;
+
+                var deltaY = delta.x * Outer.mouseSensitivity * Time.deltaTime;
+                var deltaX = -delta.y * Outer.mouseSensitivity * Time.deltaTime;
                 // Mouse & Unity XY axis are opposite
 
                 _mouseEuler += new Vector3(deltaX, deltaY, 0.0f);
@@ -428,19 +441,68 @@ namespace ArGlassesSDK.UI
             }
         }
 
+        private ARGlassesHMD _device;
+
+        private static bool _layoutRegistered;
+
         // Start is called before the first frame update
         private void Start()
         {
             TryConnect();
+
+            if (!_layoutRegistered)
+            {
+                InputSystem.RegisterLayout<ARGlassesHMD>();
+                _layoutRegistered = true;
+            }
+
+            _device = InputSystem.AddDevice<ARGlassesHMD>();
+
+            // bind the TrackedPoseDriver on this GameObject to our virtual
+            // device; trackingStateInput is left empty so the driver infers
+            // tracking validity from whether the device controls resolve
+            var driver = GetComponent<TrackedPoseDriver>();
+            if (driver != null)
+            {
+                driver.positionInput = new InputActionProperty(new InputAction(
+                    "Position", binding: "<ARGlassesHMD>/devicePosition",
+                    expectedControlType: "Vector3"));
+                driver.rotationInput = new InputActionProperty(new InputAction(
+                    "Rotation", binding: "<ARGlassesHMD>/deviceRotation",
+                    expectedControlType: "Quaternion"));
+            }
+
+            Application.onBeforeRender += PushPoseToInputSystem;
+        }
+
+        private void Update()
+        {
+            PushPoseToInputSystem();
+        }
+
+        // push a fresh pose right before the driver samples it for rendering;
+        // the negative order mirrors the deprecated TrackedPoseDriver
+        [BeforeRenderOrder(-30000)]
+        private void PushPoseToInputSystem()
+        {
+            if (_device == null) return;
+
+            var flags = GetPoseFromProvider(out var pose);
+            if ((flags & InputTrackingState.Rotation) != 0)
+                InputState.Change(_device.deviceRotation, pose.rotation);
+            if ((flags & InputTrackingState.Position) != 0)
+                InputState.Change(_device.devicePosition, pose.position);
         }
 
         private void OnDestroy()
         {
+            Application.onBeforeRender -= PushPoseToInputSystem;
             TryDisconnect();
+            if (_device != null && _device.added) InputSystem.RemoveDevice(_device);
         }
 
         // Update Pose
-        public override PoseDataFlags GetPoseFromProvider(out Pose output)
+        public InputTrackingState GetPoseFromProvider(out Pose output)
         {
             if (IsConnecting())
             {
@@ -448,12 +510,13 @@ namespace ArGlassesSDK.UI
                 Position.UpdateFromGlasses();
             }
 
-            if (Input.GetMouseButton(1)) Attitude.UpdateFromMouse();
+            var mouse = UnityEngine.InputSystem.Mouse.current;
+            if (mouse != null && mouse.rightButton.isPressed) Attitude.UpdateFromMouse();
 
             var compound = Attitude.Mouse * Attitude.Zeroing * Attitude.Glasses;
 
             output = new Pose(Position.Offset, compound);
-            return PoseDataFlags.Rotation | PoseDataFlags.Position;
+            return InputTrackingState.Rotation | InputTrackingState.Position;
         }
     }
 }
