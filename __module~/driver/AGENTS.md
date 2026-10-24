@@ -1,5 +1,8 @@
 # AGENTS.md - Project Guide
 
+Shared repository conventions — documentation guardrails, acronyms, formulas, symbols, `TODO.md` format, Git, and
+planning — live in the [SDK guide](../../AGENTS.md). This guide covers what is specific to the Rust driver.
+
 ## Project Information
 
 Refer to [README.md](README.md) for the project overview, supported devices, Linux dependencies and udev setup,
@@ -162,12 +165,7 @@ run against it.
 ### Validation
 
 Run Cargo commands from the driver crate root (`__module~/driver` relative to the SDK root).
-For documentation-only changes, run these checks from the SDK root:
-
-```bash
-git ls-files -z --cached --others --exclude-standard -- '*.md' | xargs -0 markdownlint-cli2
-git diff --check
-```
+For documentation-only changes, run the Markdown checks in the [SDK guide](../../AGENTS.md#validation).
 
 When Rustdoc comments change, also run `cargo doc --all-features --no-deps` from the crate root.
 For Rust behavior or API changes, run the narrowest relevant checks first, then broaden them:
@@ -184,39 +182,9 @@ combination together. Run narrower package, module, or test checks first for fas
 feedback, but complete the broad checks applicable to the repository before
 submitting a change.
 
-## Git (Version Control)
+## Documentation Registries
 
-- Commit messages always have the following format:
-
-```
-[{{LLM MODEL}}] {{Task Info}} {{Optional Subtask Info}}
-```
-
-- If a task contains multiple subtasks:
-    - each subtask should have its own commit.
-    - after each commit:
-        - launch a subagent to review it for guardrail compliance
-- If HEAD is DETACHED, create a temporary branch and commit into it
-- If the commit can't compile cleanly, it should have [WIP] in its commit message
-
-## Planning
-
-- Any inconsistency or contradiction discovered during the planning stage must be immediately raised and
-  highlighted in the plan
-- no plan shall be executed until the inconsistency or contradiction is full addressed
-
-## Documentation (including Markdown & Comments)
-
-Update documentation relevant to the current change, using the following guardrails:
-
-- Markdown format is defined by the [package configuration](../../.markdownlint.jsonc).
-  [dev/make-all.sh](../../dev/make-all.sh) rewrites Markdown and Rust formatting, builds a release library,
-  and copies it into the SDK's `Plugins/` directory; use the validation commands above for checks without rewriting files.
-- Duplicated or contradicting information should be merged or deleted.
-- Inconsistent or dangling references should be fixed.
-- Spelling and syntax errors should be fixed.
-- References to current behavior must point to existing code or artefacts. Retain research citations, attribution,
-  and versioned evidence relevant to the current design.
+These registries extend the shared documentation guardrails in the [SDK guide](../../AGENTS.md).
 
 ### Acronyms
 
@@ -255,11 +223,6 @@ appear in this list. Add a new acronym here in the same change that introduces i
 - **SPD:** Symmetric Positive-Definite.
 - **SVD:** Singular Value Decomposition.
 - **ZVU:** Zero-Velocity Update.
-
-### Formulas
-
-Every math formula (e.g. equation, pseudo-algorithm) in the documentation (e.g. this guide, a `TODO.md`) should
-be in a LaTeX math block (enclosed in a pair of `$` or `$$`).
 
 ### Symbols
 
@@ -420,21 +383,3 @@ Add a new symbol here in the same change that introduces it; otherwise use the f
 
 You should avoid abusing one symbol to refer to different concepts. This includes symbols written in different
 alphabets (e.g. `\mu` in LaTeX math and `mu` in code should always refer to the same concept).
-
-### TODO.md Format
-
-- Contains only a flat checklist of issues, grouped under severity headings (e.g. `## High severity`).
-
-#### Issue Format
-
-- Each issue is a `- [ ]` or `- [x]` checkbox followed by a short name and indented fields:
-    - **Summary:** Short description.
-    - **Position:** Path of the block comment in code that explains the issue, e.g. `src/path/to/file.rs (issue_summary)`.
-    The block comment must be consistent with both code and documentation; every symbol should be annotated with a
-    variable name in the code. The block comment should have the following sections:
-        - always start with `TODO: issue_summary`.
-        - detailed explanation.
-        - recommended fix (if applicable).
-    - **Unit test:** Path of the failing unit test(s) that reveals the issue, e.g. `src/path/to/file.rs (issue_summary)`.
-        - issue should always come with one or more unit tests
-- Check (`[x]`) the item only when commiting the fixed code; don't remove any of them.
