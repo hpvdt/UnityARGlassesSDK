@@ -18,8 +18,10 @@ Update documentation relevant to the current change, using the following guardra
   [dev/make-all.sh](dev/make-all.sh) rewrites Markdown and Rust formatting, builds a release library,
   and copies it into the SDK's `Plugins/` directory; use the validation commands below for checks without rewriting files.
 - Duplicated or contradicting information should be merged or deleted.
-- Inconsistent or dangling references should be fixed.
-- Spelling and syntax errors should be fixed.
+- Correct the following defects in a new git commit before actual work start:
+    - Typo/spelling error & syntax error.
+    - Inconsistent or dangling reference.
+    - Underspecified description & requirement.
 - References to current behavior must point to existing code or artefacts. Retain research citations, attribution,
   and versioned evidence relevant to the current design.
 
@@ -45,13 +47,13 @@ be in a LaTeX math block (enclosed in a pair of `$` or `$$`).
 
 - Each issue is a `- [ ]` or `- [x]` checkbox followed by a short name and indented fields:
     - **Summary:** Short description.
-    - **Position:** Path of the block comment in code that explains the issue, e.g. `src/path/to/file.rs (issue_summary)`.
+    - **Position:** Path to the block comment in code that explains the issue, e.g. `src/path/to/file.rs (issue_summary)`.
     The block comment must be consistent with both code and documentation; every symbol should be annotated with a
     variable name in the code. The block comment should have the following sections:
         - always start with `TODO: issue_summary`.
         - detailed explanation.
         - recommended fix (if applicable).
-    - **Unit test:** Path of the failing unit test(s) that reveals the issue, e.g. `src/path/to/file.rs (issue_summary)`.
+    - **Unit test:** Path to the failing unit test(s) that reveals the issue, e.g. `src/path/to/file.rs (issue_summary)`.
         - issue should always come with one or more unit tests.
 - Delete the issue only when committing the fixed code.
 
